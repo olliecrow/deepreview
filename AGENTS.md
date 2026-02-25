@@ -1,0 +1,71 @@
+# Repository Guidelines
+
+## Project Overview (deepreview)
+- `deepreview` is a local CLI tool that performs deep code review runs against a remote Git branch.
+- Canonical project/tool spelling is always `deepreview` (all lowercase, one word).
+- User input may contain variants/typos; normalize intent to `deepreview` in code/docs/output.
+- The tool runs Codex-powered review workflows in isolated worktrees and produces actionable review artifacts.
+
+## Open-Source Transition Posture
+- Treat this repository as open-source-ready now, even while private.
+- Never commit secrets, credentials, tokens, private keys, sensitive data, or confidential internal details.
+- Keep auth material in local environment/secret stores only.
+- Assume docs, logs, and generated artifacts may become public; redact sensitive details by default.
+
+## Product Constraints
+- deepreview may adopt compatible patterns from prior internal experience, but committed deepreview artifacts must remain project-local and must not reference external inspiration project names.
+- Managed workspace root is `~/deepreview`.
+- Never operate in or mutate the user's own working checkout of a target repo.
+- v1 orchestration should stay simple and fail-fast; do not add automatic retry/backoff loops by default.
+- Review execution is iterative by rounds (`--max-rounds`, default `3`) with codex early-stop support.
+- Do not push during intermediate rounds; perform exactly one final push at delivery.
+- Cleanup should be aggressive for stale worktrees/transient artifacts once no longer needed.
+- Detailed behavior/runtime constraints are canonical in `docs/spec.md`.
+- End-to-end stage flow and isolation model are canonical in `docs/architecture.md`.
+
+## Docs, Plans, and Decisions (agent usage)
+- `docs/` is long-lived, agent-focused, committed, and evergreen.
+- `plan/` is short-lived scratch space and is not committed.
+- Decision capture policy lives in `docs/decisions.md`.
+- Workflow conventions live in `docs/workflows.md`.
+- Canonical behavior/runtime contract lives in `docs/spec.md`.
+- Pipeline architecture details live in `docs/architecture.md`.
+- Requirement traceability baseline lives in `docs/alignment.md`.
+
+## README and Instructions Maintenance
+- Keep `README.md` as the user/operator entrypoint.
+- Keep `docs/spec.md` aligned with actual behavior and CLI contracts.
+- Keep `docs/alignment.md` aligned with user-level requirement IDs and mappings.
+- Keep `docs/workflows.md` aligned with execution and note-routing conventions.
+- Keep non-obvious durable rationale in `docs/decisions.md`.
+
+## Note Routing (agent usage)
+- Active notes: `plan/current/notes.md`
+- Workstream index: `plan/current/notes-index.md`
+- Orchestration status: `plan/current/orchestrator-status.md`
+- Sequential handoffs: `plan/handoffs/`
+
+## Plan Directory Structure (agent usage)
+- `plan/current/`
+- `plan/backlog/`
+- `plan/complete/`
+- `plan/experiments/`
+- `plan/artifacts/`
+- `plan/scratch/`
+- `plan/handoffs/`
+
+## Operating Principles
+- Prioritize correctness, clarity, pragmatism, and rigor.
+- Think before coding: state assumptions, identify risks, and clarify ambiguity early.
+- Keep solutions simple and surgical; avoid overengineering and hacky workarounds.
+- Stay tightly in scope: change only what is required for the task.
+- Be proactive and autonomous when confidence is high.
+- Verify behavior with tests/checks, not assumptions.
+- Capture durable rationale in the most local durable place.
+- Commit in small logical increments when checks are green and repo policy permits.
+
+## Git and Safety
+- Never use destructive git operations unless explicitly requested.
+- Do not rewrite history unless explicitly requested.
+- Do not revert unrelated user changes.
+- Keep worktree isolation strict when running review fanout.
