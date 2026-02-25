@@ -93,9 +93,9 @@ var (
 )
 
 const (
-	passiveDisplayLine = "display: passive live stream (auto-refresh 100ms)"
-	stageLegendLine    = "legend: > active, + done, x failed, ~ running"
-	ansiReset          = "\x1b[0m"
+	passiveDisplayLine  = "display: passive live stream (auto-refresh 100ms)"
+	stageLegendLine     = "legend: > active, + done, x failed, ~ running"
+	ansiReset           = "\x1b[0m"
 	viewportRightGutter = 1
 	defaultContentWidth = 72
 )
@@ -259,6 +259,9 @@ func statusMarker(status string, isActive bool) string {
 }
 
 func (m tuiModel) View() string {
+	if m.width > 0 && m.width <= 1 {
+		return ""
+	}
 	snapshot := m.state.Snapshot()
 	spinner := spinnerFrames[m.tick%len(spinnerFrames)]
 	now := time.Now()
@@ -287,7 +290,7 @@ func (m tuiModel) View() string {
 	if m.width > 0 && contentWidth < 28 {
 		compactTitle := fit(fmt.Sprintf("deepreview %s %s", spinner, fmtDuration(elapsed)), contentWidth)
 		latest := fit("latest: "+latestStageLine(snapshot), contentWidth)
-		return strings.Join([]string{compactTitle, latest}, "\n")
+		return clampViewHeight(strings.Join([]string{compactTitle, latest}, "\n"), m.width, m.height)
 	}
 
 	lines := make([]string, 0, 12)
@@ -366,7 +369,7 @@ func (m tuiModel) View() string {
 	}
 
 	if m.width < 60 || m.height < 12 {
-		compactRows := stageRowsLimit(lines, m.height)
+		compactRows := stageRowsLimit(lines, m.width, m.height)
 		rows, hiddenOlder := compactWindow(snapshot.Stages, compactRows)
 		compactLines := make([]string, 0, len(rows)+2)
 		compactInner := panelInnerWidth(tableBorderStyle, contentWidth)
@@ -381,7 +384,7 @@ func (m tuiModel) View() string {
 		}
 		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("stage timeline (compact %d/%d)", len(rows), len(snapshot.Stages)), compactLines, contentWidth))
 		lines = append(lines, renderStatusPanel(snapshot, contentWidth))
-		return strings.Join(lines, "\n\n")
+		return clampViewHeight(strings.Join(lines, "\n\n"), m.width, m.height)
 	}
 
 	tablePanelWidth := contentWidth
@@ -391,7 +394,7 @@ func (m tuiModel) View() string {
 	head := fmt.Sprintf("%5s  %-*s  %-*s %-*s  %s", "rnd", stageCol, "stage", statusCol, "status", timeCol, "time", "details")
 	sep := fmt.Sprintf("%s  %s  %s %s  %s", strings.Repeat("-", 5), strings.Repeat("-", stageCol), strings.Repeat("-", statusCol), strings.Repeat("-", timeCol), strings.Repeat("-", detailsCol))
 
-	availableRows := stageRowsLimit(lines, m.height)
+	availableRows := stageRowsLimit(lines, m.width, m.height)
 	rows, hiddenOlder := compactWindow(snapshot.Stages, availableRows)
 	tableLines := []string{
 		tableHeaderStyle.Render(fit(head, tableInner)),
@@ -429,7 +432,7 @@ func (m tuiModel) View() string {
 
 	lines = append(lines, renderStatusPanel(snapshot, contentWidth))
 
-	return strings.Join(lines, "\n\n")
+	return clampViewHeight(strings.Join(lines, "\n\n"), m.width, m.height)
 }
 
 func RunTUIWithWorker(state *SharedProgressState, initialWidth, initialHeight int, worker func() error) error {
@@ -476,6 +479,58 @@ func effectiveContentWidth(viewportWidth int) int {
 		content = 1
 	}
 	return content
+}
+
+func renderedRowsForLine(line string, viewportWidth int) int {
+	if viewportWidth <= 0 {
+		return 1
+	}
+	lineWidth := lipgloss.Width(line)
+	return 1 + (lineWidth / viewportWidth)
+}
+
+func renderedRowsForView(view string, viewportWidth int) int {
+	if strings.TrimSpace(view) == "" {
+		return 0
+	}
+	rows := 0
+	for _, line := range strings.Split(view, "\n") {
+		rows += renderedRowsForLine(line, viewportWidth)
+	}
+	return rows
+}
+
+func clampViewHeight(view string, viewportWidth, viewportHeight int) string {
+	if viewportWidth > 0 && viewportWidth <= 1 {
+		return ""
+	}
+	if viewportHeight <= 0 || strings.TrimSpace(view) == "" {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	out := make([]string, 0, len(lines))
+	usedRows := 0
+	for _, line := range lines {
+		lineRows := renderedRowsForLine(line, viewportWidth)
+		if usedRows+lineRows > viewportHeight {
+			break
+		}
+		out = append(out, line)
+		usedRows += lineRows
+	}
+	if len(out) == len(lines) {
+		return view
+	}
+	if len(out) == 0 {
+		return subtleStyle.Render(fit("deepreview", effectiveContentWidth(viewportWidth)))
+	}
+	marker := subtleStyle.Render(fit("... output clipped to terminal height ...", effectiveContentWidth(viewportWidth)))
+	if usedRows >= viewportHeight {
+		out[len(out)-1] = marker
+	} else {
+		out = append(out, marker)
+	}
+	return strings.Join(out, "\n")
 }
 
 func fit(text string, width int) string {
@@ -618,8 +673,9 @@ func renderFooter(snapshot ProgressSnapshot) (string, lipgloss.Style) {
 	return footer, footerStyle
 }
 
-func stageRowsLimit(lines []string, height int) int {
-	rows := height - (lineCount(strings.Join(lines, "\n\n")) + 8)
+func stageRowsLimit(lines []string, viewportWidth, viewportHeight int) int {
+	frameRows := renderedRowsForView(strings.Join(lines, "\n\n"), viewportWidth)
+	rows := viewportHeight - (frameRows + 8)
 	if rows < 1 {
 		return 1
 	}
