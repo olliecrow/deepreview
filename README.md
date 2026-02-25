@@ -1,5 +1,8 @@
 # deepreview
 
+<img width="1254" height="572" alt="image" src="https://github.com/user-attachments/assets/73cd6bf0-fbc3-4c55-9216-349da53c3911" />
+
+
 deepreview is a local CLI that performs deep branch reviews using parallel Codex independent reviews and iterative execute rounds, then delivers one final result to GitHub.
 
 ## What deepreview does
