@@ -595,3 +595,16 @@ Enforcement:
 Round loop checks candidate branch HEAD before/after execute stage; when changed, it forces another round regardless of status decision. If that would exceed `--max-rounds`, run exits with a clear error and no delivery.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `README.md`
+
+Decision:
+TUI rendering must reserve a right-edge gutter and initialize model viewport size from CLI terminal dimensions.
+Context:
+Repeated terminal scrolling was observed during live runs when TUI frame lines hit terminal width exactly or when first paints occurred before Bubble Tea window-size messages arrived.
+Rationale:
+Terminals can auto-wrap exact-width lines into an extra row before newline, which causes logical-line cursor rewinds to drift and append frames. Seeding initial viewport dimensions and keeping one free column avoids this class of renderer drift.
+Trade-offs:
+Rendered content uses one fewer visible column; some layouts switch to compact mode slightly earlier on narrow terminals.
+Enforcement:
+`RunCLI` passes measured terminal width/height into TUI model initialization, and `effectiveContentWidth` subtracts a right-edge gutter. Regression tests validate no rendered line reaches terminal width and include a standalone wrap-drift model.
+References:
+`internal/deepreview/cli.go`, `internal/deepreview/tui.go`, `internal/deepreview/tui_test.go`
