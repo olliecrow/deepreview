@@ -124,7 +124,7 @@ func TestRenderFooterShowsDegradedDuringRunningFailures(t *testing.T) {
 
 func TestStageRowsLimitMinimumOne(t *testing.T) {
 	lines := []string{"a", "b", "c"}
-	if got := stageRowsLimit(lines, 2); got != 1 {
+	if got := stageRowsLimit(lines, 80, 2); got != 1 {
 		t.Fatalf("stageRowsLimit should clamp to 1, got %d", got)
 	}
 }
@@ -238,8 +238,8 @@ func TestTUIViewUltraNarrowFallbackFitsViewport(t *testing.T) {
 }
 
 func TestTUIViewRespectsWidthAcrossRange(t *testing.T) {
-	for width := 8; width <= 140; width++ {
-		for _, height := range []int{8, 14, 40} {
+	for width := 1; width <= 200; width++ {
+		for _, height := range []int{1, 2, 4, 8, 14, 40, 60} {
 			model := seededTUIModelForViewTests(width, height)
 			view := model.View()
 			for i, line := range strings.Split(view, "\n") {
@@ -252,8 +252,8 @@ func TestTUIViewRespectsWidthAcrossRange(t *testing.T) {
 }
 
 func TestTUIViewLeavesRightEdgeGutterAcrossRange(t *testing.T) {
-	for width := 8; width <= 140; width++ {
-		for _, height := range []int{8, 14, 40} {
+	for width := 2; width <= 200; width++ {
+		for _, height := range []int{1, 2, 4, 8, 14, 40, 60} {
 			model := seededTUIModelForViewTests(width, height)
 			view := model.View()
 			for i, line := range strings.Split(view, "\n") {
@@ -280,8 +280,8 @@ func TestEffectiveContentWidth(t *testing.T) {
 func TestTUIViewLeavesRightEdgeUnderRandomizedInputs(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	for iter := 0; iter < 250; iter++ {
-		width := 8 + rng.Intn(140)
-		height := 8 + rng.Intn(36)
+		width := 2 + rng.Intn(199)
+		height := 1 + rng.Intn(60)
 		state := NewSharedProgressState()
 		reporter := NewTUIProgressReporter(state)
 		reporter.RunStarted(
@@ -350,14 +350,81 @@ func TestStandaloneTerminalWrapDriftModel(t *testing.T) {
 }
 
 func TestRenderedTUIViewHasNoWrapDriftAcrossRange(t *testing.T) {
-	for width := 8; width <= 140; width++ {
-		for _, height := range []int{8, 14, 40} {
+	for width := 1; width <= 200; width++ {
+		for _, height := range []int{1, 2, 4, 8, 14, 40, 60} {
 			model := seededTUIModelForViewTests(width, height)
 			view := model.View()
 			lines := strings.Split(view, "\n")
 			if drift := rendererDriftRows(lines, model.width); drift != 0 {
 				t.Fatalf("width=%d height=%d expected zero wrap drift, got %d", width, height, drift)
 			}
+		}
+	}
+}
+
+func TestRenderedRowsForView(t *testing.T) {
+	view := strings.Join([]string{
+		strings.Repeat("x", 79),
+		strings.Repeat("y", 80),
+	}, "\n")
+	if got := renderedRowsForView(view, 80); got != 3 {
+		t.Fatalf("expected 3 rendered rows, got %d", got)
+	}
+}
+
+func TestTUIViewRespectsHeightAcrossRange(t *testing.T) {
+	for width := 1; width <= 200; width++ {
+		for _, height := range []int{1, 2, 4, 8, 10, 12, 14, 16, 18, 20, 24, 30, 40, 60} {
+			model := seededTUIModelForViewTests(width, height)
+			view := model.View()
+			if got := renderedViewRows(view, width); got > height {
+				t.Fatalf("width=%d height=%d rows=%d exceeds viewport", width, height, got)
+			}
+		}
+	}
+}
+
+func TestTUIViewRespectsHeightUnderRandomizedInputs(t *testing.T) {
+	rng := rand.New(rand.NewSource(7))
+	for iter := 0; iter < 250; iter++ {
+		width := 1 + rng.Intn(200)
+		height := 1 + rng.Intn(60)
+		state := NewSharedProgressState()
+		reporter := NewTUIProgressReporter(state)
+		reporter.RunStarted(
+			fmt.Sprintf("run-height-%03d", iter),
+			randomDisplayText(rng, 24),
+			randomDisplayText(rng, 18),
+			"pr",
+			"/tmp/deepreview/runs/random",
+		)
+
+		stageCount := 1 + rng.Intn(24)
+		for i := 0; i < stageCount; i++ {
+			stageName := randomDisplayText(rng, 48)
+			msg := randomDisplayText(rng, 72)
+			var round *int
+			if rng.Intn(10) != 0 {
+				r := 1 + rng.Intn(4)
+				round = &r
+			}
+			reporter.StageStarted(stageName, round, msg)
+			if rng.Intn(3) != 0 {
+				reporter.StageProgress(stageName, randomDisplayText(rng, 80), round)
+			}
+			if rng.Intn(4) != 0 {
+				reporter.StageFinished(stageName, round, rng.Intn(5) != 0, randomDisplayText(rng, 84))
+			}
+		}
+		if rng.Intn(2) == 0 {
+			reporter.RunFinished(rng.Intn(4) != 0, randomDisplayText(rng, 64))
+		}
+
+		model := newTUIModel(state, make(chan error), width, height)
+		model.tick = iter
+		view := model.View()
+		if got := renderedViewRows(view, width); got > height {
+			t.Fatalf("iter=%d width=%d height=%d rows=%d exceeds viewport", iter, width, height, got)
 		}
 	}
 }
@@ -411,6 +478,17 @@ func rendererDriftRows(lines []string, termWidth int) int {
 		consumed += terminalRowsForLine(line, termWidth)
 	}
 	return consumed - len(lines)
+}
+
+func renderedViewRows(view string, termWidth int) int {
+	if strings.TrimSpace(view) == "" {
+		return 0
+	}
+	rows := 0
+	for _, line := range strings.Split(view, "\n") {
+		rows += terminalRowsForLine(line, termWidth)
+	}
+	return rows
 }
 
 func terminalRowsForLine(line string, termWidth int) int {
