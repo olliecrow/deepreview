@@ -1,6 +1,8 @@
 package deepreview
 
 import (
+	"fmt"
+	"math/rand"
 	"strings"
 	"testing"
 	"time"
@@ -171,7 +173,7 @@ func TestTUIViewRespectsWidthInCompactLayout(t *testing.T) {
 }
 
 func TestTUIWindowResizeRequestsClearScreen(t *testing.T) {
-	model := newTUIModel(NewSharedProgressState(), make(chan error))
+	model := newTUIModel(NewSharedProgressState(), make(chan error), 0, 0)
 	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 88, Height: 25})
 	if cmd == nil {
 		t.Fatalf("expected clear-screen command on resize")
@@ -179,6 +181,13 @@ func TestTUIWindowResizeRequestsClearScreen(t *testing.T) {
 	next := updated.(tuiModel)
 	if next.width != 88 || next.height != 25 {
 		t.Fatalf("unexpected model size after resize: width=%d height=%d", next.width, next.height)
+	}
+}
+
+func TestNewTUIModelUsesInitialViewport(t *testing.T) {
+	model := newTUIModel(NewSharedProgressState(), make(chan error), 91, 27)
+	if model.width != 91 || model.height != 27 {
+		t.Fatalf("expected initial viewport 91x27, got %dx%d", model.width, model.height)
 	}
 }
 
@@ -207,7 +216,7 @@ func TestTUIViewNoisyStageTextStillFitsViewport(t *testing.T) {
 	reporter.StageProgress("independent review stage", "completed\nworkers:\t1/4", &r1)
 	reporter.RunFinished(false, "failed:\nline-1\tline-2")
 
-	model := newTUIModel(state, make(chan error))
+	model := newTUIModel(state, make(chan error), 0, 0)
 	model.width = 72
 	model.height = 18
 	view := model.View()
@@ -242,6 +251,117 @@ func TestTUIViewRespectsWidthAcrossRange(t *testing.T) {
 	}
 }
 
+func TestTUIViewLeavesRightEdgeGutterAcrossRange(t *testing.T) {
+	for width := 8; width <= 140; width++ {
+		for _, height := range []int{8, 14, 40} {
+			model := seededTUIModelForViewTests(width, height)
+			view := model.View()
+			for i, line := range strings.Split(view, "\n") {
+				if got := lipgloss.Width(line); got >= model.width {
+					t.Fatalf("width=%d height=%d line=%d should leave right edge free: got=%d want<%d line=%q", width, height, i+1, got, model.width, line)
+				}
+			}
+		}
+	}
+}
+
+func TestEffectiveContentWidth(t *testing.T) {
+	if got := effectiveContentWidth(120); got != 119 {
+		t.Fatalf("expected 119 content width for viewport 120, got %d", got)
+	}
+	if got := effectiveContentWidth(1); got != 1 {
+		t.Fatalf("expected minimum width 1, got %d", got)
+	}
+	if got := effectiveContentWidth(0); got != defaultContentWidth {
+		t.Fatalf("expected default width %d for unknown viewport, got %d", defaultContentWidth, got)
+	}
+}
+
+func TestTUIViewLeavesRightEdgeUnderRandomizedInputs(t *testing.T) {
+	rng := rand.New(rand.NewSource(42))
+	for iter := 0; iter < 250; iter++ {
+		width := 8 + rng.Intn(140)
+		height := 8 + rng.Intn(36)
+		state := NewSharedProgressState()
+		reporter := NewTUIProgressReporter(state)
+		reporter.RunStarted(
+			fmt.Sprintf("run-%03d", iter),
+			randomDisplayText(rng, 24),
+			randomDisplayText(rng, 18),
+			"pr",
+			"/tmp/deepreview/runs/random",
+		)
+
+		stageCount := 1 + rng.Intn(24)
+		for i := 0; i < stageCount; i++ {
+			stageName := randomDisplayText(rng, 48)
+			msg := randomDisplayText(rng, 72)
+			var round *int
+			if rng.Intn(10) != 0 {
+				r := 1 + rng.Intn(4)
+				round = &r
+			}
+			reporter.StageStarted(stageName, round, msg)
+			if rng.Intn(3) != 0 {
+				reporter.StageProgress(stageName, randomDisplayText(rng, 80), round)
+			}
+			if rng.Intn(4) != 0 {
+				reporter.StageFinished(stageName, round, rng.Intn(5) != 0, randomDisplayText(rng, 84))
+			}
+		}
+		if rng.Intn(2) == 0 {
+			reporter.RunFinished(rng.Intn(4) != 0, randomDisplayText(rng, 64))
+		}
+
+		model := newTUIModel(state, make(chan error), width, height)
+		model.tick = iter
+		view := model.View()
+		for i, line := range strings.Split(view, "\n") {
+			if got := lipgloss.Width(line); got >= model.width {
+				t.Fatalf(
+					"iter=%d width=%d height=%d line=%d should leave right edge free: got=%d want<%d line=%q",
+					iter, width, height, i+1, got, model.width, line,
+				)
+			}
+		}
+	}
+}
+
+func TestStandaloneTerminalWrapDriftModel(t *testing.T) {
+	termWidth := 80
+	// Exact-width writes trigger terminal auto-wrap before newline,
+	// so each logical line consumes an extra terminal row.
+	exactLines := []string{
+		strings.Repeat("x", termWidth),
+		strings.Repeat("y", termWidth),
+	}
+	if drift := rendererDriftRows(exactLines, termWidth); drift <= 0 {
+		t.Fatalf("expected positive drift for exact-width lines, got %d", drift)
+	}
+
+	// Staying one column below terminal width avoids auto-wrap drift.
+	safeLines := []string{
+		strings.Repeat("x", termWidth-1),
+		strings.Repeat("y", termWidth-1),
+	}
+	if drift := rendererDriftRows(safeLines, termWidth); drift != 0 {
+		t.Fatalf("expected zero drift for sub-width lines, got %d", drift)
+	}
+}
+
+func TestRenderedTUIViewHasNoWrapDriftAcrossRange(t *testing.T) {
+	for width := 8; width <= 140; width++ {
+		for _, height := range []int{8, 14, 40} {
+			model := seededTUIModelForViewTests(width, height)
+			view := model.View()
+			lines := strings.Split(view, "\n")
+			if drift := rendererDriftRows(lines, model.width); drift != 0 {
+				t.Fatalf("width=%d height=%d expected zero wrap drift, got %d", width, height, drift)
+			}
+		}
+	}
+}
+
 func seededTUIModelForViewTests(width, height int) tuiModel {
 	state := NewSharedProgressState()
 	reporter := NewTUIProgressReporter(state)
@@ -259,9 +379,44 @@ func seededTUIModelForViewTests(width, height int) tuiModel {
 	reporter.StageStarted("independent review stage", &r2, "spawning independent reviewers")
 	reporter.StageProgress("independent review stage", "completed workers: 2/4", &r2)
 
-	model := newTUIModel(state, make(chan error))
+	model := newTUIModel(state, make(chan error), 0, 0)
 	model.width = width
 	model.height = height
 	model.tick = 7
 	return model
+}
+
+func randomDisplayText(rng *rand.Rand, maxLen int) string {
+	if maxLen < 1 {
+		maxLen = 1
+	}
+	length := 1 + rng.Intn(maxLen)
+	var b strings.Builder
+	tokens := []string{
+		"a", "b", "c", "1", "2", "-", "_", " ", ".", ":", "/", "界",
+		"\n", "\t", "\r", "\x07", "\x1b[31m", "\x1b[0m",
+	}
+	for i := 0; i < length; i++ {
+		b.WriteString(tokens[rng.Intn(len(tokens))])
+	}
+	return b.String()
+}
+
+func rendererDriftRows(lines []string, termWidth int) int {
+	if termWidth <= 0 {
+		return 0
+	}
+	consumed := 0
+	for _, line := range lines {
+		consumed += terminalRowsForLine(line, termWidth)
+	}
+	return consumed - len(lines)
+}
+
+func terminalRowsForLine(line string, termWidth int) int {
+	if termWidth <= 0 {
+		return 1
+	}
+	width := lipgloss.Width(line)
+	return 1 + (width / termWidth)
 }

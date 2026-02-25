@@ -313,7 +313,7 @@ func RunCLI(argv []string) int {
 	}
 
 	if enableTUI {
-		err = RunTUIWithWorker(state, func() error { return orchestrator.Run() })
+		err = RunTUIWithWorker(state, termWidth, termHeight, func() error { return orchestrator.Run() })
 	} else {
 		err = orchestrator.Run()
 	}

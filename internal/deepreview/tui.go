@@ -40,8 +40,8 @@ type tuiModel struct {
 	tick         int
 }
 
-func newTUIModel(state *SharedProgressState, doneCh <-chan error) tuiModel {
-	return tuiModel{state: state, doneCh: doneCh}
+func newTUIModel(state *SharedProgressState, doneCh <-chan error, width, height int) tuiModel {
+	return tuiModel{state: state, doneCh: doneCh, width: width, height: height}
 }
 
 func (m tuiModel) Init() tea.Cmd {
@@ -96,6 +96,8 @@ const (
 	passiveDisplayLine = "display: passive live stream (auto-refresh 100ms)"
 	stageLegendLine    = "legend: > active, + done, x failed, ~ running"
 	ansiReset          = "\x1b[0m"
+	viewportRightGutter = 1
+	defaultContentWidth = 72
 )
 
 func chip(style lipgloss.Style, text string) string {
@@ -281,10 +283,7 @@ func (m tuiModel) View() string {
 	}
 	completedCount := doneCount + failedCount
 
-	contentWidth := m.width
-	if contentWidth <= 0 {
-		contentWidth = 100
-	}
+	contentWidth := effectiveContentWidth(m.width)
 	if m.width > 0 && contentWidth < 28 {
 		compactTitle := fit(fmt.Sprintf("deepreview %s %s", spinner, fmtDuration(elapsed)), contentWidth)
 		latest := fit("latest: "+latestStageLine(snapshot), contentWidth)
@@ -433,13 +432,13 @@ func (m tuiModel) View() string {
 	return strings.Join(lines, "\n\n")
 }
 
-func RunTUIWithWorker(state *SharedProgressState, worker func() error) error {
+func RunTUIWithWorker(state *SharedProgressState, initialWidth, initialHeight int, worker func() error) error {
 	doneCh := make(chan error, 1)
 	go func() {
 		doneCh <- worker()
 	}()
 
-	p := tea.NewProgram(newTUIModel(state, doneCh), tea.WithAltScreen())
+	p := tea.NewProgram(newTUIModel(state, doneCh, initialWidth, initialHeight), tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
 		return err
@@ -464,6 +463,19 @@ func fmtDuration(d time.Duration) string {
 		return fmt.Sprintf("%02d:%02d:%02d", hours, minutes, sec)
 	}
 	return fmt.Sprintf("%02d:%02d", minutes, sec)
+}
+
+func effectiveContentWidth(viewportWidth int) int {
+	if viewportWidth <= 0 {
+		return defaultContentWidth
+	}
+	// Avoid writing into the terminal's last column; exact-width lines can
+	// auto-wrap and cause renderers that rewind by logical lines to drift/scroll.
+	content := viewportWidth - viewportRightGutter
+	if content < 1 {
+		content = 1
+	}
+	return content
 }
 
 func fit(text string, width int) string {
