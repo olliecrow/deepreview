@@ -1,0 +1,184 @@
+package main
+
+import (
+	"crypto/rand"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"regexp"
+	"strings"
+)
+
+func randomID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return "thread-fallback"
+	}
+	return hex.EncodeToString(buf)
+}
+
+func emitThread(threadID, message string) error {
+	events := []map[string]any{
+		{"type": "thread.started", "thread_id": threadID},
+		{"type": "turn.started"},
+		{
+			"type": "item.completed",
+			"item": map[string]any{
+				"id":   "item_0",
+				"type": "agent_message",
+				"text": message,
+			},
+		},
+		{"type": "turn.completed", "usage": map[string]any{"input_tokens": 1, "output_tokens": 1}},
+	}
+	enc := json.NewEncoder(os.Stdout)
+	for _, e := range events {
+		if err := enc.Encode(e); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func writeText(path, text string) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(path, []byte(text), 0o644)
+}
+
+func regexGet(pattern, prompt string) string {
+	re := regexp.MustCompile(pattern)
+	m := re.FindStringSubmatch(prompt)
+	if len(m) < 2 {
+		return ""
+	}
+	return m[1]
+}
+
+func runGit(args ...string) (string, error) {
+	cmd := exec.Command("git", args...)
+	out, err := cmd.CombinedOutput()
+	return string(out), err
+}
+
+func gitCommitIfPossible(message string) error {
+	if _, err := runGit("add", "-A"); err != nil {
+		return err
+	}
+	statusOut, err := runGit("status", "--porcelain")
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(statusOut) == "" {
+		return nil
+	}
+	if _, err := runGit("commit", "-m", message); err != nil {
+		return err
+	}
+	return nil
+}
+
+func handlePrompt(prompt string) (string, error) {
+	if strings.Contains(prompt, "independent deepreview reviewer in the independent review stage") {
+		outPath := regexGet("Output report path: `([^`]+)`", prompt)
+		if outPath != "" {
+			if err := writeText(outPath, "# Independent Review\n\n## Findings\n- no actionable findings\n"); err != nil {
+				return "", err
+			}
+		}
+		return "review complete", nil
+	}
+
+	if strings.Contains(prompt, "prompt 1 of 4") {
+		triage := regexGet("Write triage decisions to `([^`]+)`", prompt)
+		if triage != "" {
+			if err := writeText(triage, "# Triage\n\n- accept: sample change\n"); err != nil {
+				return "", err
+			}
+		}
+		return "triage complete", nil
+	}
+
+	if strings.Contains(prompt, "prompt 2 of 4") {
+		plan := regexGet("Write the plan to `([^`]+)`", prompt)
+		if plan != "" {
+			if err := writeText(plan, "# Plan\n\n- apply sample change\n"); err != nil {
+				return "", err
+			}
+		}
+		return "plan complete", nil
+	}
+
+	if strings.Contains(prompt, "prompt 3 of 4") {
+		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
+		if verification != "" {
+			if err := writeText(verification, "# Verification\n\n- fake checks passed\n"); err != nil {
+				return "", err
+			}
+		}
+		if os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE") == "" {
+			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
+				return "", err
+			}
+			if err := gitCommitIfPossible("deepreview: fake execute change"); err != nil {
+				return "", err
+			}
+		}
+		return "execute complete", nil
+	}
+
+	if strings.Contains(prompt, "prompt 4 of 4") {
+		summary := regexGet("Write round summary to `([^`]+)`", prompt)
+		if summary != "" {
+			if err := writeText(summary, "# Round Summary\n\n- complete\n"); err != nil {
+				return "", err
+			}
+		}
+
+		statusPath := regexGet("Write `([^`]+)` JSON", prompt)
+		if statusPath != "" {
+			decision := os.Getenv("FAKE_CODEX_DECISION")
+			if decision == "" {
+				decision = "stop"
+			}
+			payload := map[string]any{"decision": decision, "reason": "ready"}
+			b, _ := json.MarshalIndent(payload, "", "  ")
+			if err := writeText(statusPath, string(b)+"\n"); err != nil {
+				return "", err
+			}
+		}
+		return "finalize complete", nil
+	}
+
+	return "ok", nil
+}
+
+func main() {
+	promptBytes, err := io.ReadAll(os.Stdin)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	prompt := string(promptBytes)
+
+	threadID := randomID()
+	args := os.Args[1:]
+	if len(args) >= 3 && args[0] == "exec" && args[1] == "resume" {
+		threadID = args[2]
+	}
+
+	message, err := handlePrompt(prompt)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := emitThread(threadID, message); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
