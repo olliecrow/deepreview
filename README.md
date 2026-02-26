@@ -124,6 +124,18 @@ Then run:
 dr review
 ```
 
+If your launcher changes directories before invoking deepreview (for example, wrapping `go run` in the deepreview source repo), pass the original caller directory so repo inference stays correct:
+
+```bash
+deepreview() {
+  local caller_cwd="$PWD"
+  (
+    cd /Users/oc/repos/me/deepreview || return 1
+    DEEPREVIEW_CALLER_CWD="$caller_cwd" go run ./cmd/deepreview review "$@"
+  )
+}
+```
+
 If you are actively editing deepreview source, rebuild after changes:
 
 ```bash
