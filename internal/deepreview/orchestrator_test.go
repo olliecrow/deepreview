@@ -196,7 +196,7 @@ func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {
 	if utf8.RuneCountInString(out) > githubPRBodyTargetChars {
 		t.Fatalf("expected capped pr body <= %d chars, got %d", githubPRBodyTargetChars, utf8.RuneCountInString(out))
 	}
-	if !strings.Contains(out, "compact body because the full body exceeded GitHub PR size limits") {
+	if !strings.Contains(out, "compact body to stay within GitHub PR body limits") {
 		t.Fatalf("expected compact-body fallback marker, got:\n%s", out)
 	}
 }
