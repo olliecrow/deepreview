@@ -603,8 +603,8 @@ Repeated terminal scrolling was observed during live runs when TUI frame lines h
 Rationale:
 Terminals can auto-wrap exact-width lines into an extra row before newline, which causes logical-line cursor rewinds to drift and append frames. Seeding initial viewport dimensions and keeping one free column avoids this class of renderer drift.
 Trade-offs:
-Rendered content uses one fewer visible column; some layouts switch to compact mode slightly earlier on narrow terminals.
+Rendered content uses a small right gutter (a few fewer visible columns); some layouts switch to compact mode slightly earlier on narrow terminals.
 Enforcement:
-`RunCLI` passes measured terminal width/height into TUI model initialization, `effectiveContentWidth` subtracts a right-edge gutter, row budgeting uses wrap-aware rendered-row accounting, and final frames are clamped to viewport height as a hard safety net. Ultra-narrow pathological viewports (`width<=1`) use a blank-frame fallback to avoid unavoidable auto-wrap drift. Regression tests validate both width safety (no rendered line reaches terminal width) and height safety (rendered rows never exceed viewport capacity), including a standalone wrap-drift model.
+`RunCLI` passes measured terminal width/height into TUI model initialization, `effectiveContentWidth` subtracts a conservative right-edge gutter, timeline rendering applies an additional width safety gutter, row budgeting uses wrap-aware rendered-row accounting, and final frames pass through ANSI-safe width truncation plus viewport-height clamping as hard safety nets. Ultra-narrow pathological viewports (`width<=1`) use a blank-frame fallback to avoid unavoidable auto-wrap drift. Regression tests validate width safety, height safety, top-panel border alignment, and absence of direct border-collision artifacts.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/tui.go`, `internal/deepreview/tui_test.go`
