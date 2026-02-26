@@ -19,8 +19,8 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 6. If execute changed code, deepreview runs another review round.
 7. If execute made no code changes, deepreview stops the loop.
 8. In default mode, it opens one pull request back into your source branch.
-9. In default mode, it then runs one short post-delivery Codex pass to prepend a human summary at the top of the PR description.
-10. The PR body includes concise round-level reporting (including per-round summaries) and excludes raw worker/artifact dumps to stay readable and size-safe.
+9. In default mode, it then runs one post-delivery Codex pass to generate the final PR description.
+10. The final PR body is a detailed Codex-generated summary with round outcomes and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 11. In yolo mode, it pushes directly to your source branch.
 
 ## Safety and isolation

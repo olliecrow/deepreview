@@ -44,7 +44,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
 - final delivery push is allowed only after round execution completes and no blocking verification failures are reported.
 - default delivery mode is `pr` and must not push source branch directly.
-- in `pr` mode, deepreview creates the PR with deterministic artifact-backed body content, then runs one fresh codex prompt to generate a top summary and updates the PR description by prepending that summary.
+- in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a detailed final PR description body and updates the PR description with that generated body.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
@@ -117,16 +117,15 @@ Cleanup policy:
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)
-PR bodies should include these sections:
-- codex-generated top summary (high-level narrative of what happened, why it mattered, and final status)
-- at-a-glance report
-- changed files
-- round decisions
-- per-round summaries (`round-summary.md` content)
-- key fixes
-- verification evidence
-- residual risks
+PR bodies should include these sections in the final Codex-generated output:
+- `## summary`
+- `## what changed and why`
+- `## round outcomes`
+- `## verification`
+- `## risks and follow-ups`
+- `## final status`
 - do not embed individual independent-review reports or full execute artifact dumps in PR description
+- final PR body text must pass privacy checks (no personal information, secrets, or private local machine paths)
 - if generated PR text exceeds GitHub PR body limits, deepreview must fall back to a compact body automatically
 
 ## Prompt-template contract

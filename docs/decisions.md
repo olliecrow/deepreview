@@ -311,28 +311,28 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Default PR bodies must include sections: round summary, key fixes, verification evidence, and residual risks.
+Final PR descriptions must follow one structured Codex-generated format: summary, what changed and why, round outcomes, verification, risks/follow-ups, and final status.
 Context:
-Final PR output should consistently communicate what changed and confidence/limitations.
+Final PR output should consistently communicate what changed, what was verified, and what risks remain without requiring readers to parse raw artifact dumps.
 Rationale:
-A fixed section set improves readability and makes review expectations consistent.
+A fixed section set improves readability and keeps reporting quality stable across runs.
 Trade-offs:
-Slightly more verbose PR body generation.
+Relies on Codex quality and may require prompt tuning if structure drifts.
 Enforcement:
-PR creation logic renders these required sections in default PR mode.
+The delivery prompt template defines the required section structure and integration tests assert key section presence.
 References:
-`docs/spec.md`
+`docs/spec.md`, `prompts/delivery/pr-description-summary.md`, `internal/deepreview/integration_test.go`
 
 Decision:
-In PR mode, run one fresh post-delivery Codex call to generate a comprehensive top summary and prepend it to the PR description, while preserving the deterministic detailed artifact body below.
+In PR mode, run one fresh post-delivery Codex call to generate the final PR description body and replace the PR body with that generated output.
 Context:
-The deterministic PR body already captures full per-round evidence, but users also want a clearer human narrative at the top that explains what happened and why.
+Large deterministic artifact-heavy PR bodies can exceed GitHub limits and cause `gh pr create` failures; users also want a cleaner narrative-first final PR.
 Rationale:
-Creating PRs first with deterministic body content preserves reliability; a dedicated post-creation summary pass improves readability without changing delivery commits or execution outcomes.
+Using one detailed Codex-generated final body keeps PRs readable, reduces size pressure, and avoids exposing unnecessary internal artifact detail.
 Trade-offs:
-Adds one extra Codex call and one PR edit operation in PR mode; summary quality can vary with model performance.
+Raw artifact detail is not embedded in final PR body and must be read from run artifacts when needed.
 Enforcement:
-Delivery flow creates PR using deterministic body, runs dedicated delivery summary template in a fresh Codex context, prepends generated summary to `pr-body.md`, and updates PR description via `gh pr edit`.
+Delivery flow creates PR with a compact base body, runs dedicated delivery summary template in a fresh Codex context, writes final `pr-body.md` from generated output only, and updates PR description via `gh pr edit`.
 References:
 `internal/deepreview/orchestrator.go`, `prompts/delivery/pr-description-summary.md`, `docs/spec.md`, `docs/architecture.md`
 
@@ -688,14 +688,14 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/progress.go`, `internal/deepreview/text_reporter.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`
 
 Decision:
-Keep PR descriptions concise and size-safe: include codex top summary plus round-level summaries, but do not embed raw per-worker review reports or full execute artifact dumps.
+Keep PR descriptions size-safe and privacy-safe by using a detailed Codex-generated final body and excluding raw per-worker review reports/full execute artifact dumps.
 Context:
 Large multi-round runs can produce PR descriptions that exceed GitHub's body limit (`65536` chars), causing delivery failures at `gh pr create`.
 Rationale:
-Round-level summaries preserve meaningful context while preventing PR creation failures due to oversized bodies.
+A structured narrative final body preserves actionable signal while avoiding oversized payloads and reducing accidental leakage risk.
 Trade-offs:
-Raw deep artifact detail is no longer directly embedded in PR body and must be read from run artifacts when needed.
+Some deep artifact detail is no longer directly embedded in PR body and must be read from run artifacts when needed.
 Enforcement:
-PR body generation excludes individual review/execute dump sections, keeps round decisions + round summaries, and applies automatic compact-body fallback when body size approaches GitHub limits.
+Final PR body is generated in post-delivery Codex stage, validated with privacy checks, and capped with compact fallback when body size approaches GitHub limits.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
