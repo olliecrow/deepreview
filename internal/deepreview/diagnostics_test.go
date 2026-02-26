@@ -28,3 +28,19 @@ func TestProgressMessageFallsBackToErrorText(t *testing.T) {
 		t.Fatalf("unexpected message: %s", msg)
 	}
 }
+
+func TestProgressMessageRedactsLocalPathInCommandFailure(t *testing.T) {
+	err := &CommandExecutionError{
+		Message: "command failed: gh pr create --body-file /Users/oc/deepreview/runs/run-123/pr-body.md",
+		Command: []string{"gh", "pr", "create"},
+		Code:    1,
+		Stderr:  "exit status 1",
+	}
+	msg := progressMessage(err)
+	if strings.Contains(msg, "/Users/oc/deepreview/runs/run-123/pr-body.md") {
+		t.Fatalf("expected local path redaction in progress message: %s", msg)
+	}
+	if !strings.Contains(msg, "[redacted-path]") {
+		t.Fatalf("expected redacted path marker in progress message: %s", msg)
+	}
+}

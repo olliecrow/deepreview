@@ -31,6 +31,17 @@ func TestSanitizePublicTextRedactsSensitivePatterns(t *testing.T) {
 	}
 }
 
+func TestSanitizePublicTextRedactsGhBodyFilePath(t *testing.T) {
+	input := "command failed: gh pr create --repo owner/repo --body-file /Users/oc/deepreview/runs/run-123/pr-body.md"
+	out := sanitizePublicText(input)
+	if strings.Contains(out, "/Users/oc/deepreview/runs/run-123/pr-body.md") {
+		t.Fatalf("expected gh --body-file local path to be redacted, got: %s", out)
+	}
+	if !strings.Contains(out, "--body-file [redacted-path]") {
+		t.Fatalf("expected redacted body-file path marker, got: %s", out)
+	}
+}
+
 func TestAssertPublicTextSafeRejectsDisallowedSensitiveContent(t *testing.T) {
 	if err := assertPublicTextSafe("contact alice@corp.com", "test surface"); err == nil {
 		t.Fatalf("expected disallowed email to be rejected")
