@@ -24,7 +24,7 @@ This document defines how work is tracked so progress compounds without context 
 - Execute deepreview as bounded rounds (`max_rounds`, default `5`) with codex early-stop signaling.
 - Use fresh review/execute worktrees each round; do not reuse stale round worktrees.
 - Use one shared independent-review prompt template and an ordered execute prompt queue in one Codex context per round.
-- Keep orchestration simple in v1: no automatic retry/backoff loops.
+- Keep orchestration simple: no automatic retry/backoff loops.
 - Encourage local commits throughout rounds; never push during intermediate rounds.
 - Push only once at final delivery; do not push intermediate-round commits.
 - Aggressively clean stale worktrees/transient artifacts after each round.

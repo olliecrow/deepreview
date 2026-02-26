@@ -16,7 +16,7 @@
 - deepreview may adopt compatible patterns from prior internal experience, but committed deepreview artifacts must remain project-local and must not reference external inspiration project names.
 - Managed workspace root is `~/deepreview`.
 - Never operate in or mutate the user's own working checkout of a target repo.
-- v1 orchestration should stay simple and fail-fast; do not add automatic retry/backoff loops by default.
+- Orchestration should stay simple and fail-fast; do not add automatic retry/backoff loops by default.
 - Review execution is iterative by rounds (`--max-rounds`, default `3`) with codex early-stop support.
 - Do not push during intermediate rounds; perform exactly one final push at delivery.
 - Cleanup should be aggressive for stale worktrees/transient artifacts once no longer needed.

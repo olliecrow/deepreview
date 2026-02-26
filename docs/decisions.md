@@ -168,7 +168,7 @@ References:
 `docs/alignment.md`, `docs/workflows.md`, `plan/current/alignment-status.md`
 
 Decision:
-Keep v1 orchestration simple and fail-fast: no automatic retry/backoff/self-healing loops.
+Keep orchestration simple and fail-fast: no automatic retry/backoff/self-healing loops.
 Context:
 The initial user/operator model is small-scale and prioritizes clarity over production hardening.
 Rationale:
@@ -376,7 +376,7 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Use file-based unversioned prompt templates in v1.
+Use file-based unversioned prompt templates.
 Context:
 Prompt iteration is expected to be fast during early project development.
 Rationale:
@@ -402,7 +402,7 @@ References:
 `docs/spec.md`, `prompts/README.md`
 
 Decision:
-Use one shared independent-review prompt template for all independent reviewers in v1.
+Use one shared independent-review prompt template for all independent reviewers.
 Context:
 The independent review stage should stay simple while still running concurrent independent review passes.
 Rationale:
