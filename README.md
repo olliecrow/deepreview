@@ -70,7 +70,6 @@ go build -o ./bin/deepreview ./cmd/deepreview
 ```bash
 ./bin/deepreview review <repo> --source-branch <branch> --concurrency 4 --max-rounds 5
 ./bin/deepreview review <repo> --source-branch <branch> --mode yolo
-./bin/deepreview review <repo> --source-branch <branch> --tui
 ./bin/deepreview review <repo> --source-branch <branch> --no-tui
 ./bin/deepreview doctor <repo> --source-branch <branch> --mode pr
 ./bin/deepreview dry-run <repo> --source-branch <branch> --mode yolo
@@ -147,7 +146,6 @@ Common options.
 - `--max-rounds <n>`
 - `--mode <pr|yolo>`
 - `--yolo`
-- `--tui`
 - `--no-tui`
 
 ## Delivery conventions
