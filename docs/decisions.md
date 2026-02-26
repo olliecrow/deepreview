@@ -501,7 +501,7 @@ Graceful cancellation preserves operator control while maintaining workspace hyg
 Trade-offs:
 Adds interrupt orchestration and cancellation-aware command execution plumbing.
 Enforcement:
-Review command now captures interrupts, cancels in-flight commands, shows a TUI cancel hint, and returns exit code `130`; unix integration tests verify interrupt-triggered cleanup of locks/worktrees and source-branch non-mutation, while cross-platform unit tests cover cancellation classification and command teardown behavior.
+Review command now captures interrupts, cancels in-flight commands, shows a TUI cancel hint, and returns exit code `130`; unix integration tests verify interrupt-triggered cleanup of locks/worktrees and source-branch non-mutation, cross-platform unit tests cover cancellation classification, and unix-only unit tests cover command teardown behavior.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/tui.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/gitops.go`
 
