@@ -277,6 +277,21 @@ func TestEffectiveContentWidth(t *testing.T) {
 	}
 }
 
+func TestEffectiveFrameHeight(t *testing.T) {
+	if got := effectiveFrameHeight(0); got != 0 {
+		t.Fatalf("expected 0 frame height for unknown viewport, got %d", got)
+	}
+	if got := effectiveFrameHeight(1); got != 1 {
+		t.Fatalf("expected no gutter collapse for height 1, got %d", got)
+	}
+	if got := effectiveFrameHeight(2); got != 2 {
+		t.Fatalf("expected no gutter collapse for height 2, got %d", got)
+	}
+	if got := effectiveFrameHeight(20); got != 19 {
+		t.Fatalf("expected one-row vertical gutter for height 20, got %d", got)
+	}
+}
+
 func TestNoBorderCollisionArtifactAcrossRange(t *testing.T) {
 	for width := 2; width <= 200; width++ {
 		for _, height := range []int{1, 2, 4, 8, 14, 40, 60} {
@@ -429,14 +444,27 @@ func TestTUIViewRespectsHeightAcrossRange(t *testing.T) {
 	}
 }
 
+func TestTUIViewLeavesBottomEdgeGutterAcrossRange(t *testing.T) {
+	for width := 2; width <= 200; width++ {
+		for _, height := range []int{3, 4, 8, 10, 12, 14, 16, 18, 20, 24, 30, 40, 60} {
+			model := seededTUIModelForViewTests(width, height)
+			view := model.View()
+			if got := renderedViewRows(view, width); got >= height {
+				t.Fatalf("width=%d height=%d rows=%d should leave a bottom gutter row", width, height, got)
+			}
+		}
+	}
+}
+
 func TestTUIViewUsesFixedFrameShapeAcrossRange(t *testing.T) {
 	for width := 2; width <= 200; width++ {
 		for _, height := range []int{1, 2, 4, 8, 10, 12, 14, 16, 18, 20, 24, 30, 40, 60} {
 			model := seededTUIModelForViewTests(width, height)
 			view := model.View()
 			lines := strings.Split(view, "\n")
-			if len(lines) != height {
-				t.Fatalf("width=%d height=%d expected %d lines, got %d", width, height, height, len(lines))
+			wantLines := effectiveFrameHeight(height)
+			if len(lines) != wantLines {
+				t.Fatalf("width=%d height=%d expected %d lines, got %d", width, height, wantLines, len(lines))
 			}
 			for i, line := range lines {
 				if got := lipgloss.Width(line); got != width-1 {

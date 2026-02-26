@@ -97,6 +97,7 @@ const (
 	stageLegendLine      = "legend: > active, + done, x failed, ~ running"
 	ansiReset            = "\x1b[0m"
 	viewportRightGutter  = 6
+	viewportBottomGutter = 1
 	timelineSafetyGutter = 2
 	sideBySidePanelGap   = 2
 	defaultContentWidth  = 72
@@ -513,6 +514,20 @@ func effectiveContentWidth(viewportWidth int) int {
 	return content
 }
 
+func effectiveFrameHeight(viewportHeight int) int {
+	if viewportHeight <= 0 {
+		return 0
+	}
+	if viewportHeight <= viewportBottomGutter+1 {
+		return viewportHeight
+	}
+	content := viewportHeight - viewportBottomGutter
+	if content < 1 {
+		content = 1
+	}
+	return content
+}
+
 func renderedRowsForLine(line string, viewportWidth int) int {
 	if viewportWidth <= 0 {
 		return 1
@@ -562,6 +577,7 @@ func stabilizeFrame(view string, viewportWidth, viewportHeight int) string {
 	if viewportWidth <= 0 {
 		return view
 	}
+	frameHeight := effectiveFrameHeight(viewportHeight)
 	// Keep one column free to avoid terminal auto-wrap drift.
 	safeFrameWidth := viewportWidth - 1
 	if safeFrameWidth < 1 {
@@ -571,20 +587,20 @@ func stabilizeFrame(view string, viewportWidth, viewportHeight int) string {
 	if view != "" {
 		lines = strings.Split(view, "\n")
 	}
-	if viewportHeight > 0 && len(lines) > viewportHeight {
-		lines = lines[:viewportHeight]
+	if frameHeight > 0 && len(lines) > frameHeight {
+		lines = lines[:frameHeight]
 	}
 	capHint := len(lines)
-	if viewportHeight > capHint {
-		capHint = viewportHeight
+	if frameHeight > capHint {
+		capHint = frameHeight
 	}
 	out := make([]string, 0, capHint)
 	for _, line := range lines {
 		out = append(out, padDisplayWidth(ansi.Truncate(line, safeFrameWidth, ""), safeFrameWidth))
 	}
-	if viewportHeight > 0 {
+	if frameHeight > 0 {
 		blank := strings.Repeat(" ", safeFrameWidth)
-		for len(out) < viewportHeight {
+		for len(out) < frameHeight {
 			out = append(out, blank)
 		}
 	}
@@ -609,7 +625,8 @@ func clampViewHeight(view string, viewportWidth, viewportHeight int) string {
 	if viewportWidth > 0 && viewportWidth <= 1 {
 		return ""
 	}
-	if viewportHeight <= 0 || strings.TrimSpace(view) == "" {
+	frameHeight := effectiveFrameHeight(viewportHeight)
+	if frameHeight <= 0 || strings.TrimSpace(view) == "" {
 		return view
 	}
 	lines := strings.Split(view, "\n")
@@ -617,7 +634,7 @@ func clampViewHeight(view string, viewportWidth, viewportHeight int) string {
 	usedRows := 0
 	for _, line := range lines {
 		lineRows := renderedRowsForLine(line, viewportWidth)
-		if usedRows+lineRows > viewportHeight {
+		if usedRows+lineRows > frameHeight {
 			break
 		}
 		out = append(out, line)
@@ -630,7 +647,7 @@ func clampViewHeight(view string, viewportWidth, viewportHeight int) string {
 		return subtleStyle.Render(fit("deepreview", effectiveContentWidth(viewportWidth)))
 	}
 	marker := subtleStyle.Render(fit("... output clipped to terminal height ...", effectiveContentWidth(viewportWidth)))
-	if usedRows >= viewportHeight {
+	if usedRows >= frameHeight {
 		out[len(out)-1] = marker
 	} else {
 		out = append(out, marker)
@@ -780,7 +797,8 @@ func renderFooter(snapshot ProgressSnapshot) (string, lipgloss.Style) {
 
 func stageRowsLimit(lines []string, viewportWidth, viewportHeight int) int {
 	frameRows := renderedRowsForView(strings.Join(lines, "\n\n"), viewportWidth)
-	rows := viewportHeight - (frameRows + 8)
+	frameHeight := effectiveFrameHeight(viewportHeight)
+	rows := frameHeight - (frameRows + 8)
 	if rows < 1 {
 		return 1
 	}
