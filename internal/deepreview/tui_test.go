@@ -191,7 +191,7 @@ func TestTUIViewRespectsWidthInCompactLayout(t *testing.T) {
 }
 
 func TestTUIWindowResizeRequestsClearScreen(t *testing.T) {
-	model := newTUIModel(NewSharedProgressState(), make(chan error), 0, 0)
+	model := newTUIModel(NewSharedProgressState(), make(chan error), nil, 0, 0)
 	updated, cmd := model.Update(tea.WindowSizeMsg{Width: 88, Height: 25})
 	if cmd == nil {
 		t.Fatalf("expected clear-screen command on resize")
@@ -203,7 +203,7 @@ func TestTUIWindowResizeRequestsClearScreen(t *testing.T) {
 }
 
 func TestNewTUIModelUsesInitialViewport(t *testing.T) {
-	model := newTUIModel(NewSharedProgressState(), make(chan error), 91, 27)
+	model := newTUIModel(NewSharedProgressState(), make(chan error), nil, 91, 27)
 	if model.width != 91 || model.height != 27 {
 		t.Fatalf("expected initial viewport 91x27, got %dx%d", model.width, model.height)
 	}
@@ -235,7 +235,7 @@ func TestTUIViewNoisyStageTextStillFitsViewport(t *testing.T) {
 	reporter.StageProgress("independent review stage", "completed\nworkers:\t1/4", &r1)
 	reporter.RunFinished(false, "failed:\nline-1\tline-2")
 
-	model := newTUIModel(state, make(chan error), 0, 0)
+	model := newTUIModel(state, make(chan error), nil, 0, 0)
 	model.width = 72
 	model.height = 18
 	view := model.View()
@@ -251,7 +251,7 @@ func TestTUIViewShowsPlannedTimelineWhenMaxRoundsConfigured(t *testing.T) {
 	reporter := NewTUIProgressReporter(state)
 	reporter.SetMaxRounds(4)
 	reporter.RunStarted("run-123", "owner/repo", "feature/resize", "pr", "/tmp/deepreview/runs/run-123")
-	model := newTUIModel(state, make(chan error), 120, 40)
+	model := newTUIModel(state, make(chan error), nil, 120, 40)
 
 	view := model.View()
 	if !strings.Contains(view, "PLANNED STAGE TIMELINE") {
@@ -357,8 +357,45 @@ func TestTUIViewUsesSingleContextPanelLayout(t *testing.T) {
 	if !strings.Contains(view, "3/4 (75%)") {
 		t.Fatalf("expected inline progress summary in header")
 	}
+	if !strings.Contains(view, "ctrl+c to cancel") {
+		t.Fatalf("expected ctrl+c cancellation hint in header")
+	}
 	if strings.Contains(view, "... output clipped to terminal height ...") {
 		t.Fatalf("did not expect clipped marker at 140x40 viewport")
+	}
+}
+
+func TestTUICtrlCRequestsCancelWithoutImmediateQuit(t *testing.T) {
+	cancelCalls := 0
+	model := newTUIModel(NewSharedProgressState(), make(chan error), func() {
+		cancelCalls++
+	}, 100, 30)
+
+	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	if cmd != nil {
+		t.Fatalf("expected no immediate quit command while worker is still running")
+	}
+	next, ok := updated.(tuiModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("expected exactly one cancel callback, got %d", cancelCalls)
+	}
+	if !next.cancelRequested {
+		t.Fatalf("expected cancelRequested to be set")
+	}
+
+	updated, _ = next.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	next, ok = updated.(tuiModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if cancelCalls != 1 {
+		t.Fatalf("expected cancel callback to remain idempotent, got %d", cancelCalls)
+	}
+	if !next.cancelRequested {
+		t.Fatalf("expected cancelRequested to remain true")
 	}
 }
 
@@ -398,7 +435,7 @@ func TestTUIViewLeavesRightEdgeUnderRandomizedInputs(t *testing.T) {
 			reporter.RunFinished(rng.Intn(4) != 0, randomDisplayText(rng, 64))
 		}
 
-		model := newTUIModel(state, make(chan error), width, height)
+		model := newTUIModel(state, make(chan error), nil, width, height)
 		model.tick = iter
 		view := model.View()
 		for i, line := range strings.Split(view, "\n") {
@@ -549,7 +586,7 @@ func TestTUIViewRespectsHeightUnderRandomizedInputs(t *testing.T) {
 			reporter.RunFinished(rng.Intn(4) != 0, randomDisplayText(rng, 64))
 		}
 
-		model := newTUIModel(state, make(chan error), width, height)
+		model := newTUIModel(state, make(chan error), nil, width, height)
 		model.tick = iter
 		view := model.View()
 		if got := renderedViewRows(view, width); got > height {
@@ -575,7 +612,7 @@ func seededTUIModelForViewTests(width, height int) tuiModel {
 	reporter.StageStarted("independent review stage", &r2, "spawning independent reviewers")
 	reporter.StageProgress("independent review stage", "completed workers: 2/4", &r2)
 
-	model := newTUIModel(state, make(chan error), 0, 0)
+	model := newTUIModel(state, make(chan error), nil, 0, 0)
 	model.width = width
 	model.height = height
 	model.tick = 7

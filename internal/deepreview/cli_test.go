@@ -1,6 +1,7 @@
 package deepreview
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"os"
@@ -102,6 +103,7 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"DEEPREVIEW_CALLER_CWD",
 		"If <repo> is omitted:",
 		"Troubleshooting:",
+		"press Ctrl+C once",
 		"Codex model: gpt-5.3-codex",
 		"Codex reasoning effort: xhigh",
 		"Codex prompt timeout per prompt: 3600s",
@@ -208,6 +210,18 @@ func TestParseReviewArgsInfersRepoAndBranchFromCurrentRepo(t *testing.T) {
 			t.Fatalf("expected inferred source branch feature/test, got %s", parsed.Config.SourceBranch)
 		}
 	})
+}
+
+func TestIsInterruptError(t *testing.T) {
+	if !isInterruptError(context.Canceled) {
+		t.Fatalf("expected context.Canceled to be treated as interrupt")
+	}
+	if !isInterruptError(&CommandExecutionError{Canceled: true}) {
+		t.Fatalf("expected canceled command error to be treated as interrupt")
+	}
+	if isInterruptError(errors.New("boom")) {
+		t.Fatalf("unexpected interrupt classification for generic error")
+	}
 }
 
 func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {

@@ -1,6 +1,7 @@
 package deepreview
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -113,7 +114,7 @@ func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 		}
 		return err
 	}
-	_, err := RunCommand([]string{gitBin, "-C", repoPath, "worktree", "remove", "--force", worktreePath}, "", "", true, 0)
+	_, err := RunCommandContext(context.Background(), []string{gitBin, "-C", repoPath, "worktree", "remove", "--force", worktreePath}, "", "", true, 0)
 	return err
 }
 
