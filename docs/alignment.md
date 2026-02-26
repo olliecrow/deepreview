@@ -58,6 +58,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-45 | In `yolo` mode targeting default branch, deepreview must preflight push permission using dry-run and fail fast if disallowed. | `docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go` |
 | R-46 | YOLO mode ergonomics should accept `--mode YOLO` and legacy `--YOLO` while preserving default PR mode behavior. | `docs/spec.md`, `README.md`, `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go` |
 | R-47 | Execute prompt wiring should use review-stage terminology (`REVIEW_*` placeholders) while retaining compatibility for legacy placeholder names. | `prompts/execute/01-consolidate-reviews.md`, `internal/deepreview/orchestrator.go`, `docs/decisions.md` |
+| R-48 | Independent review outputs must remain severity-first (critical/high merge blockers), but may optionally include only obvious non-blocking no-brainer improvements that are high-confidence, low-risk, and non-behavior-changing. | `prompts/review/independent-review.md`, `docs/spec.md`, `docs/decisions.md`, `prompts/README.md` |
 
 ## Alignment gate
 For each requirement touched by a change, evidence must be captured for:

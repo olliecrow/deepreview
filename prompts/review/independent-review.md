@@ -23,9 +23,9 @@ Rules:
 12. Do not claim a finding unless you can explain evidence and impact clearly.
 13. Use a high bar for recommending change: high confidence, high conviction, no-regret only.
 14. Do not be trigger-happy with changes; investigate repeatedly until confidence is strong.
-15. Prefer simplification opportunities: reduced code size, reduced redundancy, clearer structure, and lower resource usage.
-16. If you find meaningful tech-debt/duplication/refactor opportunities with strong evidence and clear payoff, include them.
-17. Avoid recommending speculative hardening or rare-edge-case complexity unless impact is demonstrably material.
+15. Keep primary focus on critical red flags and serious merge-blocking issues.
+16. As a strictly secondary pass, note only obvious no-brainer improvements when they are high-confidence, low-risk, and non-behavior-changing.
+17. Avoid speculative hardening, rare-edge-case complexity, or broad refactors unless impact is demonstrably material and urgent.
 
 ## Task
 Review the source-branch changes against the default-branch context very deeply, but keep the final report concise.
@@ -37,10 +37,10 @@ Minimum process:
 4. Investigate correctness, severe regressions, security, safety, data integrity, and maintainability.
 5. Look for missing validation, hidden assumptions, and test coverage gaps.
 6. Confirm or dismiss each candidate issue with evidence (commands, code references, repro reasoning).
-7. Keep only critical red flags and serious issues with high confidence in the final report.
+7. Keep critical red flags and serious issues as the primary output with high confidence.
 8. If you detect a serious issue outside direct branch diffs but tightly related to changed behavior, include it.
 9. If confidence is low, investigate further or drop the item; do not keep speculative findings.
-10. Also examine whether accepted changes can simplify the system (remove code, remove duplication, improve maintainability/perf/memory).
+10. Secondarily, capture only obvious non-blocking improvements (simplicity, robustness, performance, memory) that are no-regret and low-risk.
 
 ## Report requirements
 Write a markdown file to `{{OUTPUT_REVIEW_PATH}}` using this structure:
@@ -51,6 +51,8 @@ Write a markdown file to `{{OUTPUT_REVIEW_PATH}}` using this structure:
 ## Verdict
 - `critical_flags_found: yes|no`
 - `merge_readiness: ready|needs_fixes`
+- `obvious_improvements_noted: yes|no`
+- `merge_readiness` must be based on critical/high findings only (not minor improvements).
 - If `no`, explicitly say the branch appears ready/mergeable based on this review.
 
 ## Critical Red Flags / Serious Issues
@@ -63,6 +65,20 @@ Write a markdown file to `{{OUTPUT_REVIEW_PATH}}` using this structure:
 
 (repeat for each finding)
 
+## Obvious Low-Hanging Improvements (Optional, Non-Blocking)
+- Include only clear no-brainer items with high confidence and low implementation risk.
+- Do not include anything that would alter intended functionality.
+- Keep this section concise (prefer up to 3 items).
+
+### [impact: low|medium] <short title>
+- Location: <file path + line(s) when possible>
+- Why this is a no-brainer: <clear rationale, non-speculative>
+- Expected benefit: <simplicity|robustness|performance|memory>
+- Recommendation: <specific, low-risk direction>
+- Confidence: <high|medium|low>
+
+(repeat for each optional item)
+
 ## Verification ideas
 - Concrete checks/tests that should be run if fixes are applied.
 ```
@@ -71,3 +87,4 @@ If no critical red flags or serious issues exist, still create the report and cl
 - `critical_flags_found: no`
 - `merge_readiness: ready`
 - `No critical red flags or serious issues were found.`
+- You may still include non-blocking obvious improvements in the optional section when applicable.

@@ -26,6 +26,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - independent reviews run in independent worktrees.
 - independent review concurrency defaults to `4` and is configurable.
 - each independent-review worker must emit one markdown review report.
+- independent-review reports prioritize critical/high issues first; they may include a small optional section of obvious non-blocking improvements only when high-confidence, low-risk, and non-behavior-changing.
 - independent review completion waits for all workers in that round.
 - each execute pass runs in a fresh worktree.
 - independent-review workers use one shared independent-review prompt template in v1.
