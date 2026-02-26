@@ -119,11 +119,15 @@ Cleanup policy:
 ## PR body contract (default PR mode)
 PR bodies should include these sections:
 - codex-generated top summary (high-level narrative of what happened, why it mattered, and final status)
-- round summary
+- at-a-glance report
+- changed files
+- round decisions
+- per-round summaries (`round-summary.md` content)
 - key fixes
 - verification evidence
 - residual risks
-- detailed per-round review and execute artifacts
+- do not embed individual independent-review reports or full execute artifact dumps in PR description
+- if generated PR text exceeds GitHub PR body limits, deepreview must fall back to a compact body automatically
 
 ## Prompt-template contract
 - Prompt templates are file-based and unversioned.
