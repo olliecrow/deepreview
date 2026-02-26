@@ -10,7 +10,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
+	"time"
 )
 
 func randomID() string {
@@ -170,6 +172,12 @@ func handlePrompt(prompt string) (string, error) {
 }
 
 func main() {
+	if sleepRaw := strings.TrimSpace(os.Getenv("FAKE_CODEX_SLEEP_MS")); sleepRaw != "" {
+		if ms, err := strconv.Atoi(sleepRaw); err == nil && ms > 0 {
+			time.Sleep(time.Duration(ms) * time.Millisecond)
+		}
+	}
+
 	promptBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

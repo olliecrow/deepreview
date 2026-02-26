@@ -2,6 +2,7 @@ package deepreview
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"testing"
+	"time"
 )
 
 func repoRoot(t *testing.T) string {
@@ -52,6 +54,37 @@ func runCmdExpectFailure(t *testing.T, cwd string, env []string, cmd ...string) 
 		t.Fatalf("expected command failure but succeeded\ncmd=%v\nstdout=\n%s\nstderr=\n%s", cmd, stdout.String(), stderr.String())
 	}
 	return strings.TrimSpace(stdout.String() + "\n" + stderr.String())
+}
+
+func runCmdWithInterrupt(t *testing.T, cwd string, env []string, interruptAfter time.Duration, cmd ...string) (stdout string, stderr string, exitCode int) {
+	t.Helper()
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Dir = cwd
+	if env != nil {
+		c.Env = env
+	}
+	var stdoutBuf bytes.Buffer
+	var stderrBuf bytes.Buffer
+	c.Stdout = &stdoutBuf
+	c.Stderr = &stderrBuf
+
+	if err := c.Start(); err != nil {
+		t.Fatalf("command start failed: %v\ncmd=%v", err, cmd)
+	}
+	time.Sleep(interruptAfter)
+	if err := c.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("failed to send interrupt: %v", err)
+	}
+	err := c.Wait()
+	if err == nil {
+		return strings.TrimSpace(stdoutBuf.String()), strings.TrimSpace(stderrBuf.String()), 0
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return strings.TrimSpace(stdoutBuf.String()), strings.TrimSpace(stderrBuf.String()), exitErr.ExitCode()
+	}
+	t.Fatalf("command wait failed unexpectedly: %v\ncmd=%v\nstdout=\n%s\nstderr=\n%s", err, cmd, stdoutBuf.String(), stderrBuf.String())
+	return "", "", -1
 }
 
 func buildBinary(t *testing.T, root string) string {
@@ -354,6 +387,102 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-01.md")); err != nil {
 		t.Fatalf("review-01.md missing: %v", err)
+	}
+}
+
+func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_SLEEP_MS=2000")
+	stdout, stderr, exitCode := runCmdWithInterrupt(
+		t,
+		root,
+		env,
+		350*time.Millisecond,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "yolo",
+		"--no-tui",
+	)
+	if exitCode != 130 {
+		t.Fatalf("expected interrupt exit code 130, got %d\nstdout=\n%s\nstderr=\n%s", exitCode, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "run canceled by user; cleanup completed") {
+		t.Fatalf("expected cancellation completion message, stderr:\n%s", stderr)
+	}
+	if strings.Contains(stdout, "deepreview completed:") {
+		t.Fatalf("run should not report successful completion after interrupt")
+	}
+
+	lockFiles, err := filepath.Glob(filepath.Join(workspace, "locks", "*", "*.lock"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(lockFiles) != 0 {
+		t.Fatalf("expected lock cleanup, found: %v", lockFiles)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected one run directory, got %d", len(runsGlob))
+	}
+	err = filepath.WalkDir(runsGlob[0], func(path string, d os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if d.IsDir() && filepath.Base(path) == "worktree" {
+			return NewDeepReviewError("unexpected leftover worktree: %s", path)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected worktree cleanup after interrupt: %v", err)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+	if before != after {
+		t.Fatalf("source branch should remain unchanged after interrupt")
 	}
 }
 

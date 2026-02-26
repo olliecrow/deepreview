@@ -30,6 +30,7 @@ type CommandExecutionError struct {
 	Stdout   string
 	Stderr   string
 	TimedOut bool
+	Canceled bool
 }
 
 func (e *CommandExecutionError) Error() string {

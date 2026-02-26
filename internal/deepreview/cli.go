@@ -1,15 +1,19 @@
 package deepreview
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/term"
@@ -257,6 +261,7 @@ Troubleshooting:
   - Missing tools: ensure git/codex/(gh for pr mode) are on PATH or set env overrides.
   - Auth failures: run local auth flows for codex and gh.
   - Terminal rendering issues: pass --no-tui for stable text logs.
+  - To stop a run safely at any time, press Ctrl+C once (deepreview cancels and runs cleanup).
   - Invalid mode: allowed values are only pr or yolo (case-insensitive).
 `, defaultConcurrency, defaultMaxRounds, ModePR, forcedCodexModel, forcedCodexReasoningEffort, defaultCodexTimeoutSeconds)
 }
@@ -359,10 +364,43 @@ func runReviewCommand(args []string) int {
 		return 0
 	}
 
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	defer cancelRun()
+	restoreCommandContext := setRunCommandContext(runCtx)
+	defer restoreCommandContext()
+
+	var interruptCount atomic.Int32
+	interrupts := make(chan os.Signal, 2)
+	interruptWatcherDone := make(chan struct{})
+	signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(interrupts)
+	defer close(interruptWatcherDone)
+	go func() {
+		for {
+			select {
+			case sig := <-interrupts:
+				count := interruptCount.Add(1)
+				if count == 1 {
+					_, _ = fmt.Fprintf(os.Stderr, "deepreview: received %s, canceling run and cleaning up...\n", sig.String())
+					cancelRun()
+					continue
+				}
+				_, _ = fmt.Fprintln(os.Stderr, "deepreview: forcing immediate exit")
+				os.Exit(130)
+			case <-interruptWatcherDone:
+				return
+			}
+		}
+	}()
+
 	parsed, err := ParseReviewArgs(args, time.Now())
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
+		}
+		if isInterruptError(err) || interruptCount.Load() > 0 {
+			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+			return 130
 		}
 		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
 		return 1
@@ -395,13 +433,21 @@ func runReviewCommand(args []string) int {
 	}
 
 	if enableTUI {
-		err = RunTUIWithWorker(state, termWidth, termHeight, func() error { return orchestrator.Run() })
+		err = RunTUIWithWorker(state, termWidth, termHeight, cancelRun, func() error { return orchestrator.Run() })
 	} else {
 		err = orchestrator.Run()
 	}
 	if err != nil {
+		if isInterruptError(err) || interruptCount.Load() > 0 {
+			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+			return 130
+		}
 		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
 		return 1
+	}
+	if interruptCount.Load() > 0 {
+		fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+		return 130
 	}
 	printCompletionSummary(orchestrator, parsed.Config)
 	return 0
@@ -687,6 +733,20 @@ func shouldEnableTUI(noTUI, stdinIsTerminal, stdoutIsTerminal bool, termName str
 		return false
 	}
 	return width > 0 && height > 0
+}
+
+func isInterruptError(err error) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return true
+	}
+	var commandErr *CommandExecutionError
+	if errors.As(err, &commandErr) && commandErr.Canceled {
+		return true
+	}
+	return false
 }
 
 func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {

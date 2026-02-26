@@ -3,8 +3,10 @@ package deepreview
 import (
 	"bytes"
 	"context"
+	"errors"
 	"os/exec"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,12 +16,46 @@ type CompletedProcess struct {
 	ReturnCode int
 }
 
+var (
+	runCommandContextMu sync.RWMutex
+	runCommandContext   context.Context
+)
+
+func setRunCommandContext(ctx context.Context) func() {
+	runCommandContextMu.Lock()
+	previous := runCommandContext
+	runCommandContext = ctx
+	runCommandContextMu.Unlock()
+	return func() {
+		runCommandContextMu.Lock()
+		runCommandContext = previous
+		runCommandContextMu.Unlock()
+	}
+}
+
+func currentRunCommandContext() context.Context {
+	runCommandContextMu.RLock()
+	ctx := runCommandContext
+	runCommandContextMu.RUnlock()
+	if ctx == nil {
+		return context.Background()
+	}
+	return ctx
+}
+
 func RunCommand(command []string, cwd string, input string, check bool, timeout time.Duration) (CompletedProcess, error) {
+	return RunCommandContext(currentRunCommandContext(), command, cwd, input, check, timeout)
+}
+
+func RunCommandContext(parent context.Context, command []string, cwd string, input string, check bool, timeout time.Duration) (CompletedProcess, error) {
 	if len(command) == 0 {
 		return CompletedProcess{}, NewDeepReviewError("empty command")
 	}
 
-	ctx := context.Background()
+	ctx := parent
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	var cancel context.CancelFunc
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
@@ -56,6 +92,7 @@ func RunCommand(command []string, cwd string, input string, check bool, timeout 
 	}
 
 	timedOut := timeout > 0 && ctx.Err() == context.DeadlineExceeded
+	cancelled := errors.Is(ctx.Err(), context.Canceled)
 	if timedOut {
 		return completed, &CommandExecutionError{
 			Message:  "command timed out after " + timeout.String() + ": " + strings.Join(command, " "),
@@ -64,6 +101,18 @@ func RunCommand(command []string, cwd string, input string, check bool, timeout 
 			Stdout:   completed.Stdout,
 			Stderr:   completed.Stderr,
 			TimedOut: true,
+			Canceled: false,
+		}
+	}
+	if cancelled {
+		return completed, &CommandExecutionError{
+			Message:  "command canceled: " + strings.Join(command, " "),
+			Command:  command,
+			Code:     130,
+			Stdout:   completed.Stdout,
+			Stderr:   completed.Stderr,
+			TimedOut: false,
+			Canceled: true,
 		}
 	}
 
@@ -75,6 +124,7 @@ func RunCommand(command []string, cwd string, input string, check bool, timeout 
 			Stdout:   completed.Stdout,
 			Stderr:   completed.Stderr,
 			TimedOut: false,
+			Canceled: false,
 		}
 	}
 

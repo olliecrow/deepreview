@@ -1577,6 +1577,9 @@ func progressMessage(err error) string {
 
 	var commandErr *CommandExecutionError
 	if errors.As(err, &commandErr) {
+		if commandErr.Canceled {
+			return "canceled by user interrupt"
+		}
 		message := commandErr.Message
 		snippet := firstNonEmptyLine(commandErr.Stderr)
 		if snippet == "" {

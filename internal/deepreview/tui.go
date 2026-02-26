@@ -30,18 +30,26 @@ func waitWorkerCmd(doneCh <-chan error) tea.Cmd {
 }
 
 type tuiModel struct {
-	state        *SharedProgressState
-	doneCh       <-chan error
-	workerErr    error
-	done         bool
-	finalShownAt *time.Time
-	width        int
-	height       int
-	tick         int
+	state           *SharedProgressState
+	doneCh          <-chan error
+	requestCancel   func()
+	cancelRequested bool
+	workerErr       error
+	done            bool
+	finalShownAt    *time.Time
+	width           int
+	height          int
+	tick            int
 }
 
-func newTUIModel(state *SharedProgressState, doneCh <-chan error, width, height int) tuiModel {
-	return tuiModel{state: state, doneCh: doneCh, width: width, height: height}
+func newTUIModel(state *SharedProgressState, doneCh <-chan error, requestCancel func(), width, height int) tuiModel {
+	return tuiModel{
+		state:         state,
+		doneCh:        doneCh,
+		requestCancel: requestCancel,
+		width:         width,
+		height:        height,
+	}
 }
 
 func (m tuiModel) Init() tea.Cmd {
@@ -54,6 +62,19 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		return m, tea.ClearScreen
+	case tea.KeyMsg:
+		if msg.String() == "ctrl+c" {
+			if m.done {
+				return m, tea.Quit
+			}
+			if !m.cancelRequested {
+				m.cancelRequested = true
+				if m.requestCancel != nil {
+					m.requestCancel()
+				}
+			}
+			return m, nil
+		}
 	case workerResultMsg:
 		now := time.Now()
 		m.done = true
@@ -100,6 +121,31 @@ const (
 
 func chip(style lipgloss.Style, text string) string {
 	return style.Render(text)
+}
+
+func joinHeaderWithRightHint(left, right string, width int) string {
+	if width <= 0 {
+		return left
+	}
+	left = fit(left, width)
+	right = fit(right, width)
+	if right == "" {
+		return left
+	}
+	leftWidth := lipgloss.Width(left)
+	rightWidth := lipgloss.Width(right)
+	if rightWidth >= width {
+		return right
+	}
+	if leftWidth+1+rightWidth > width {
+		left = fit(left, width-rightWidth-1)
+		leftWidth = lipgloss.Width(left)
+	}
+	spaces := width - leftWidth - rightWidth
+	if spaces < 1 {
+		spaces = 1
+	}
+	return left + strings.Repeat(" ", spaces) + right
 }
 
 func joinChipsWithinWidth(chips []string, width int) string {
@@ -355,7 +401,10 @@ func (m tuiModel) View() string {
 	progressBar := renderProgressBar(completedCount, totalStages, progressBarWidth)
 	progressSummary := fmt.Sprintf("%s %d/%d (%d%%)", progressBar, completedCount, totalStages, progressPercent)
 	topPlain := fmt.Sprintf("deepreview %s  elapsed %s  %s", spinner, fmtDuration(elapsed), progressSummary)
-	lines = append(lines, headerStyle.Render(fit(topPlain, panelInnerWidth(headerStyle, contentWidth))))
+	headerInnerWidth := panelInnerWidth(headerStyle, contentWidth)
+	rightHint := subtleStyle.Render("ctrl+c to cancel (cleanup runs)")
+	headerLine := joinHeaderWithRightHint(topPlain, rightHint, headerInnerWidth)
+	lines = append(lines, headerStyle.Render(headerLine))
 
 	runChipStyle := chipBaseStyle.Foreground(lipgloss.Color("231")).Background(lipgloss.Color("24"))
 	runState := "RUNNING"
@@ -482,13 +531,13 @@ func (m tuiModel) View() string {
 	return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
 }
 
-func RunTUIWithWorker(state *SharedProgressState, initialWidth, initialHeight int, worker func() error) error {
+func RunTUIWithWorker(state *SharedProgressState, initialWidth, initialHeight int, requestCancel func(), worker func() error) error {
 	doneCh := make(chan error, 1)
 	go func() {
 		doneCh <- worker()
 	}()
 
-	p := tea.NewProgram(newTUIModel(state, doneCh, initialWidth, initialHeight), tea.WithAltScreen())
+	p := tea.NewProgram(newTUIModel(state, doneCh, requestCancel, initialWidth, initialHeight), tea.WithAltScreen())
 	finalModel, err := p.Run()
 	if err != nil {
 		return err
