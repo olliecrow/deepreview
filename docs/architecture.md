@@ -5,6 +5,11 @@ This document captures the stable architecture of deepreview.
 ## Primary objective
 Run deepreview workflows against a remote source branch using isolated worktrees, iterative round-based execute passes, and one final delivery push.
 
+## CLI command surface
+- `deepreview review` runs the full multi-round orchestration workflow.
+- `deepreview doctor` runs non-mutating preflight checks and exits with pass/fail status.
+- `deepreview dry-run` prints resolved run context and planned stage order without running Codex or mutating git state.
+
 ## Core pipeline
 1. Resolve input and source context:
 - target repo (explicit or inferred from current local GitHub repo context)

@@ -23,6 +23,7 @@ These preferences define how `deepreview` should be maintained as an open-source
 ## Verification Expectations
 
 - Validate touched stages with focused checks before merge.
+- Run `deepreview doctor` and `deepreview dry-run` as first-line checks before full review runs.
 - Include clear verification evidence in PRs/issues when practical.
 
 ## Collaboration Preferences

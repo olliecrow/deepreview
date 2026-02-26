@@ -52,6 +52,8 @@ This document defines the canonical runtime and product contract for `deepreview
 ## Runtime contract
 - command entrypoint: `deepreview`
 - primary command: `deepreview review`
+- helper command: `deepreview doctor`
+- helper command: `deepreview dry-run`
 - minimum inputs:
   - none when running inside a valid local GitHub repo context
   - otherwise provide enough explicit context (`<repo>` and/or `--source-branch`) to resolve target repo + source branch
@@ -62,6 +64,10 @@ This document defines the canonical runtime and product contract for `deepreview
   - `--yolo` alias for `--mode yolo` (legacy `--YOLO` accepted)
   - `--tui` enable full-screen terminal UI (opt-in)
   - `--no-tui` force structured text progress logs
+
+Helper command behavior:
+- `doctor` runs non-mutating preflight checks for local tools, auth state, prompt assets, and remote source-branch reachability.
+- `dry-run` prints resolved run context and stage order without running Codex or mutating git state.
 
 ## Round status artifact contract
 - Status file path: `~/deepreview/runs/<run-id>/round-<round>/round-status.json`

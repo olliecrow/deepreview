@@ -634,3 +634,16 @@ Enforcement:
 `RunCLI` enables full-screen TUI only when explicitly requested (`--tui`) and terminal checks pass; default output remains structured text logs for reliability across mixed terminal/rendering paths. When active, `RunCLI` passes measured terminal width/height into TUI model initialization, `effectiveContentWidth` subtracts a conservative right-edge gutter, timeline rendering applies an additional width safety gutter, and side-by-side top panels use a fixed inter-panel gap. Row budgeting uses wrap-aware rendered-row accounting. Final rendering is stabilized into a fixed viewport frame: each line is ANSI-safe truncated and padded to one column below terminal width, and output is padded/clamped to viewport height. Ultra-narrow pathological viewports (`width<=1`) use a blank-frame fallback to avoid unavoidable auto-wrap drift. TUI heartbeat refresh runs at 1s cadence to reduce repaint churn. Regression tests validate width safety, height safety, fixed-frame shape invariants, top-panel border alignment, and absence of direct border-collision artifacts.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/tui.go`, `internal/deepreview/tui_test.go`
+
+Decision:
+Expose explicit `doctor` and `dry-run` commands alongside `review`.
+Context:
+Operators need quick non-mutating checks and a deterministic preview before launching full multi-round runs.
+Rationale:
+Dedicated helper commands improve onboarding and troubleshooting without changing review execution semantics.
+Trade-offs:
+CLI help and spec docs require additional maintenance as command behavior evolves.
+Enforcement:
+CLI dispatch supports `doctor` and `dry-run`; help text documents both commands; tests cover help/dispatch paths and output expectations.
+References:
+`internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `README.md`, `docs/spec.md`
