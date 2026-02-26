@@ -1285,10 +1285,6 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 	}); err != nil {
 		return NewDeepReviewError("enhanced pr summary output missing: %s", summaryOutputPath)
 	}
-	baseBodyRaw, err := os.ReadFile(baseBodyPath)
-	if err != nil {
-		return err
-	}
 	generatedSummaryRaw, err := os.ReadFile(summaryOutputPath)
 	if err != nil {
 		return err
@@ -1301,16 +1297,12 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 	if err := assertPublicTextSafe(generatedSummary, "enhanced pr summary"); err != nil {
 		return err
 	}
-	baseBody := strings.TrimSpace(sanitizePublicText(string(baseBodyRaw)))
-	if err := assertPublicTextSafe(baseBody, "base pr body"); err != nil {
+	finalBody := sanitizePublicText(generatedSummary + "\n")
+	finalBody = o.capPRBodyForGitHub(finalBody, summaries, changedFiles)
+	if err := assertPublicTextSafe(finalBody, "final pr body"); err != nil {
 		return err
 	}
-	combined := sanitizePublicText(strings.TrimSpace(generatedSummary + "\n\n---\n\n" + baseBody + "\n"))
-	combined = o.capPRBodyForGitHub(combined, summaries, changedFiles)
-	if err := assertPublicTextSafe(combined, "combined pr body"); err != nil {
-		return err
-	}
-	if err := os.WriteFile(finalBodyPath, []byte(combined), 0o644); err != nil {
+	if err := os.WriteFile(finalBodyPath, []byte(finalBody), 0o644); err != nil {
 		return err
 	}
 
@@ -1418,7 +1410,7 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string) stri
 
 	lines := []string{
 		"## summary",
-		"- deepreview generated this compact body because the full body exceeded GitHub PR size limits.",
+		"- deepreview generated this compact body to stay within GitHub PR body limits.",
 		fmt.Sprintf("- run id: `%s`", o.config.RunID),
 		fmt.Sprintf("- rounds executed: `%d`", len(summaries)),
 		"",
@@ -1459,78 +1451,7 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string) stri
 }
 
 func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles []string) string {
-	var b strings.Builder
-	write := func(format string, args ...any) {
-		_, _ = fmt.Fprintf(&b, format, args...)
-	}
-
-	write("## at a glance\n")
-	write("- reviewed requested source changes across `%d` round(s).\n", len(summaries))
-	if len(changedFiles) == 0 {
-		write("- no repository file changes were delivered.\n")
-	} else {
-		areaSummary := summarizeChangedAreas(changedFiles, 6)
-		filePreview, omitted := summarizeChangedFilePreview(changedFiles, 8)
-		write("- delivered `%d` changed file(s).\n", len(changedFiles))
-		write("- main change areas: %s.\n", sanitizePublicText(areaSummary))
-		write("- key changed files: %s", sanitizePublicText(filePreview))
-		if omitted > 0 {
-			write(" (+%d more)", omitted)
-		}
-		write(".\n")
-	}
-	write("- round-level decision evidence is included below.\n\n")
-
-	write("## deepreview report\n")
-	write("- run id: `%s`\n", o.config.RunID)
-	write("- source/default/candidate branch metadata omitted for privacy\n")
-	write("- rounds executed: `%d`\n\n", len(summaries))
-
-	write("## changed files\n")
-	if len(changedFiles) == 0 {
-		write("- no repository file changes in delivery diff.\n\n")
-	} else {
-		sort.Strings(changedFiles)
-		for _, file := range changedFiles {
-			write("- `%s`\n", sanitizePublicText(file))
-		}
-		write("\n")
-	}
-
-	write("## round decisions\n")
-	for _, summaryPath := range summaries {
-		roundDir := filepath.Dir(summaryPath)
-		roundLabel := filepath.Base(roundDir)
-		statusPath := filepath.Join(roundDir, "round-status.json")
-		if status, err := readRoundStatus(statusPath); err == nil {
-			confidence := "n/a"
-			if status.Confidence != nil {
-				confidence = fmt.Sprintf("%.2f", *status.Confidence)
-			}
-			reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(status.Reason, "\n", " ")), 220)
-			write("- `%s`: decision=`%s`, confidence=`%s`, reason=%s\n", roundLabel, status.Decision, confidence, sanitizePublicText(reason))
-		} else {
-			write("- `%s`: status unavailable\n", roundLabel)
-		}
-	}
-	write("\n")
-
-	write("## round summaries\n")
-	for _, summaryPath := range summaries {
-		roundLabel := filepath.Base(filepath.Dir(summaryPath))
-		content, err := os.ReadFile(summaryPath)
-		if err != nil {
-			write("- `%s`: summary unavailable\n", roundLabel)
-			continue
-		}
-		write("### %s\n\n", roundLabel)
-		write("%s\n\n", sanitizePublicText(strings.TrimSpace(string(content))))
-	}
-
-	write("## note\n")
-	write("- Raw individual review reports and execute artifacts are kept in managed run artifacts and are not embedded in this PR body.\n")
-
-	return sanitizePublicText(strings.TrimSpace(b.String()) + "\n")
+	return o.buildCompactPRBody(summaries, changedFiles)
 }
 
 func summarizeChangedAreas(changedFiles []string, limit int) string {

@@ -335,46 +335,38 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 		t.Fatalf("missing pr-body.md: %v", err)
 	}
 	prBody := string(prBodyBytes)
-	if !strings.HasPrefix(strings.TrimSpace(prBody), "# summary") {
-		t.Fatalf("pr body should be prepended with codex summary section, got:\n%s", prBody)
+	if !strings.HasPrefix(strings.TrimSpace(prBody), "## summary") {
+		t.Fatalf("pr body should be codex-generated detailed summary, got:\n%s", prBody)
 	}
-	if !strings.Contains(prBody, "\n\n---\n\n## at a glance\n") {
-		t.Fatalf("pr body should preserve deterministic detail section under separator")
+	if strings.Contains(prBody, "\n\n---\n\n") {
+		t.Fatalf("pr body must not append deterministic base body below a separator")
 	}
 	if strings.Contains(prBody, "/Users/") {
 		t.Fatalf("pr body must not contain local absolute user paths")
 	}
-	atAGlanceIdx := strings.Index(prBody, "## at a glance")
-	if atAGlanceIdx == -1 {
-		t.Fatalf("pr body missing top-level at a glance summary section")
+	if !strings.Contains(prBody, "## what changed and why") {
+		t.Fatalf("pr body missing what changed and why section")
 	}
-	deepreviewReportIdx := strings.Index(prBody, "## deepreview report")
-	if deepreviewReportIdx == -1 {
-		t.Fatalf("pr body missing deepreview report section")
+	if !strings.Contains(prBody, "## round outcomes") {
+		t.Fatalf("pr body missing round outcomes section")
 	}
-	if atAGlanceIdx > deepreviewReportIdx {
-		t.Fatalf("at a glance section must appear before deepreview report details")
+	if !strings.Contains(prBody, "## verification") {
+		t.Fatalf("pr body missing verification section")
 	}
-	if !strings.Contains(prBody, "- main change areas:") {
-		t.Fatalf("pr body missing main change areas bullet")
+	if !strings.Contains(prBody, "## risks and follow-ups") {
+		t.Fatalf("pr body missing risks and follow-ups section")
 	}
-	if !strings.Contains(prBody, "- key changed files:") {
-		t.Fatalf("pr body missing key changed files bullet")
-	}
-	if !strings.Contains(prBody, "## round decisions") {
-		t.Fatalf("pr body missing round decisions section")
-	}
-	if !strings.Contains(prBody, "## round summaries") {
-		t.Fatalf("pr body missing round summaries section")
-	}
-	if !strings.Contains(prBody, "## note") {
-		t.Fatalf("pr body missing note section")
+	if !strings.Contains(prBody, "## final status") {
+		t.Fatalf("pr body missing final status section")
 	}
 	if strings.Contains(prBody, "### independent reviews") {
 		t.Fatalf("pr body should not include embedded independent review details")
 	}
 	if strings.Contains(prBody, "### execute artifacts") {
 		t.Fatalf("pr body should not include embedded execute artifact dumps")
+	}
+	if strings.Contains(prBody, "## deepreview report") {
+		t.Fatalf("pr body must not include old deterministic deepreview report sections")
 	}
 	if strings.Contains(string(finalSummaryBytes), "/Users/") {
 		t.Fatalf("final summary must not contain local absolute user paths")
