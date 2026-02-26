@@ -19,6 +19,8 @@ type CompletedProcess struct {
 var (
 	runCommandContextMu sync.RWMutex
 	runCommandContext   context.Context
+	activeCommandMu     sync.Mutex
+	activeCommandPIDs   = map[int]struct{}{}
 )
 
 func setRunCommandContext(ctx context.Context) func() {
@@ -61,8 +63,12 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
 	}
+	if err := ctx.Err(); err != nil {
+		return CompletedProcess{}, commandContextError(err, command, timeout, CompletedProcess{})
+	}
 
-	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
+	cmd := exec.Command(command[0], command[1:]...)
+	configureCommandForManagedCancellation(cmd)
 	if cwd != "" {
 		cmd.Dir = cwd
 	}
@@ -75,7 +81,24 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 	cmd.Stdout = &stdout
 	cmd.Stderr = &stderr
 
-	err := cmd.Run()
+	if err := cmd.Start(); err != nil {
+		return CompletedProcess{}, err
+	}
+	registerActiveCommand(cmd)
+	defer unregisterActiveCommand(cmd)
+
+	waitCh := make(chan error, 1)
+	go func() {
+		waitCh <- cmd.Wait()
+	}()
+
+	var err error
+	select {
+	case err = <-waitCh:
+	case <-ctx.Done():
+		terminateCommandProcessTree(cmd)
+		err = <-waitCh
+	}
 	code := 0
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
@@ -94,26 +117,10 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 	timedOut := timeout > 0 && ctx.Err() == context.DeadlineExceeded
 	cancelled := errors.Is(ctx.Err(), context.Canceled)
 	if timedOut {
-		return completed, &CommandExecutionError{
-			Message:  "command timed out after " + timeout.String() + ": " + strings.Join(command, " "),
-			Command:  command,
-			Code:     124,
-			Stdout:   completed.Stdout,
-			Stderr:   completed.Stderr,
-			TimedOut: true,
-			Canceled: false,
-		}
+		return completed, commandContextError(context.DeadlineExceeded, command, timeout, completed)
 	}
 	if cancelled {
-		return completed, &CommandExecutionError{
-			Message:  "command canceled: " + strings.Join(command, " "),
-			Command:  command,
-			Code:     130,
-			Stdout:   completed.Stdout,
-			Stderr:   completed.Stderr,
-			TimedOut: false,
-			Canceled: true,
-		}
+		return completed, commandContextError(context.Canceled, command, timeout, completed)
 	}
 
 	if check {
@@ -129,4 +136,58 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 	}
 
 	return completed, nil
+}
+
+func registerActiveCommand(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return
+	}
+	activeCommandMu.Lock()
+	activeCommandPIDs[cmd.Process.Pid] = struct{}{}
+	activeCommandMu.Unlock()
+}
+
+func unregisterActiveCommand(cmd *exec.Cmd) {
+	if cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return
+	}
+	activeCommandMu.Lock()
+	delete(activeCommandPIDs, cmd.Process.Pid)
+	activeCommandMu.Unlock()
+}
+
+func terminateActiveCommands() {
+	activeCommandMu.Lock()
+	pids := make([]int, 0, len(activeCommandPIDs))
+	for pid := range activeCommandPIDs {
+		pids = append(pids, pid)
+	}
+	activeCommandMu.Unlock()
+
+	for _, pid := range pids {
+		terminateActiveProcessByPID(pid)
+	}
+}
+
+func commandContextError(ctxErr error, command []string, timeout time.Duration, completed CompletedProcess) error {
+	if errors.Is(ctxErr, context.DeadlineExceeded) {
+		return &CommandExecutionError{
+			Message:  "command timed out after " + timeout.String() + ": " + strings.Join(command, " "),
+			Command:  command,
+			Code:     124,
+			Stdout:   completed.Stdout,
+			Stderr:   completed.Stderr,
+			TimedOut: true,
+			Canceled: false,
+		}
+	}
+	return &CommandExecutionError{
+		Message:  "command canceled: " + strings.Join(command, " "),
+		Command:  command,
+		Code:     130,
+		Stdout:   completed.Stdout,
+		Stderr:   completed.Stderr,
+		TimedOut: false,
+		Canceled: true,
+	}
 }

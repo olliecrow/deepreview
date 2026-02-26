@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -370,6 +371,13 @@ func runReviewCommand(args []string) int {
 	defer restoreCommandContext()
 
 	var interruptCount atomic.Int32
+	var cancelOnce sync.Once
+	requestCancel := func() {
+		cancelOnce.Do(func() {
+			cancelRun()
+			terminateActiveCommands()
+		})
+	}
 	interrupts := make(chan os.Signal, 2)
 	interruptWatcherDone := make(chan struct{})
 	signal.Notify(interrupts, os.Interrupt, syscall.SIGTERM)
@@ -382,7 +390,7 @@ func runReviewCommand(args []string) int {
 				count := interruptCount.Add(1)
 				if count == 1 {
 					_, _ = fmt.Fprintf(os.Stderr, "deepreview: received %s, canceling run and cleaning up...\n", sig.String())
-					cancelRun()
+					requestCancel()
 					continue
 				}
 				_, _ = fmt.Fprintln(os.Stderr, "deepreview: forcing immediate exit")
@@ -433,7 +441,7 @@ func runReviewCommand(args []string) int {
 	}
 
 	if enableTUI {
-		err = RunTUIWithWorker(state, termWidth, termHeight, cancelRun, func() error { return orchestrator.Run() })
+		err = RunTUIWithWorker(state, termWidth, termHeight, requestCancel, func() error { return orchestrator.Run() })
 	} else {
 		err = orchestrator.Run()
 	}
