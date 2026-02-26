@@ -673,3 +673,16 @@ Enforcement:
 CLI dispatch supports `doctor` and `dry-run`; help text documents both commands; tests cover help/dispatch paths and output expectations.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `README.md`, `docs/spec.md`
+
+Decision:
+Apply strict privacy guardrails across all outward-facing deepreview surfaces and fail closed when disallowed sensitive content is detected.
+Context:
+Runs can generate or relay text into PR titles/descriptions, summaries, logs, and commit messages across both public and private repositories; these surfaces must never leak personal information or secrets.
+Rationale:
+Centralized sanitization plus pre-delivery scans provide consistent protection while preserving normal execution flow when content is safe.
+Trade-offs:
+Conservative pattern-based blocking can reject some edge-case content that resembles sensitive data.
+Enforcement:
+Runtime sanitizes CLI/TUI/text reporter output and PR/summary content, validates generated public text before delivery writes, scans changed files for secret/personal/path patterns, and scans delivery commit messages before push/PR creation.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/progress.go`, `internal/deepreview/text_reporter.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`

@@ -15,7 +15,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview documentation and code must not reference external inspiration project names; patterns may be reused without cross-project coupling in artifacts.
 - project/tool naming is always `deepreview` (lowercase, one word).
 - repository posture is open-source-ready even while private.
-- no secrets or confidential data may be committed.
+- no secrets, confidential data, or personal information may be committed.
 - deepreview operates only in managed workspace paths under `~/deepreview`.
 - deepreview must not operate in the user's own active checkout.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
@@ -104,8 +104,9 @@ Cleanup policy:
 
 ## Safety contract
 - never commit tokens, credentials, or private keys.
+- never emit personal information in delivery surfaces (PR title/body, commit messages, summaries, logs, comments, or committed code/docs).
 - treat committed docs/artifacts as potentially public.
-- run secret-hygiene checks before final delivery actions.
+- run privacy-hygiene checks before final delivery actions, including changed-file scans and delivery commit-message scans.
 - fail fast on verification failures.
 
 ## Failure-handling contract
