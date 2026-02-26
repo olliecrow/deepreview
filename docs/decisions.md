@@ -686,3 +686,16 @@ Enforcement:
 Runtime sanitizes CLI/TUI/text reporter output and PR/summary content, validates generated public text before delivery writes, scans changed files for secret/personal/path patterns, and scans delivery commit messages before push/PR creation.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/progress.go`, `internal/deepreview/text_reporter.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`
+
+Decision:
+Keep PR descriptions concise and size-safe: include codex top summary plus round-level summaries, but do not embed raw per-worker review reports or full execute artifact dumps.
+Context:
+Large multi-round runs can produce PR descriptions that exceed GitHub's body limit (`65536` chars), causing delivery failures at `gh pr create`.
+Rationale:
+Round-level summaries preserve meaningful context while preventing PR creation failures due to oversized bodies.
+Trade-offs:
+Raw deep artifact detail is no longer directly embedded in PR body and must be read from run artifacts when needed.
+Enforcement:
+PR body generation excludes individual review/execute dump sections, keeps round decisions + round summaries, and applies automatic compact-body fallback when body size approaches GitHub limits.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
