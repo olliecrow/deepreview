@@ -3,7 +3,7 @@
 deepreview is a local CLI for deep branch reviews.
 It runs parallel Codex reviews, consolidates them, executes fixes, verifies outcomes, and keeps looping until the execute phase makes no code changes.
 
-<img width="1258" height="622" alt="Screenshot 2026-02-25 at 23 07 17" src="https://github.com/user-attachments/assets/f8441f56-159f-410f-a3fc-0b0bd9c30504" />
+<img width="1209" height="596" alt="image" src="https://github.com/user-attachments/assets/00d5f994-1500-4a30-98d0-9bb892852639" />
 
 ## What this project is trying to achieve
 
