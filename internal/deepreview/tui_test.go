@@ -77,6 +77,37 @@ func TestLatestActivityPrefersRunningStage(t *testing.T) {
 	}
 }
 
+func TestPlannedTimelineRowsPrelistsStagesFromMaxRounds(t *testing.T) {
+	r1 := 1
+	snapshot := ProgressSnapshot{
+		MaxRounds: 3,
+		Stages: []StageSnapshot{
+			{Name: "prepare", Status: "done", Message: "ready"},
+			{RoundNumber: &r1, Name: "independent review stage", Status: "running", Message: "1/4"},
+		},
+	}
+
+	rows, ok := plannedTimelineRows(snapshot)
+	if !ok {
+		t.Fatalf("expected planned timeline to be enabled")
+	}
+	if len(rows) != 8 { // prepare + (independent+execute)*3 + delivery
+		t.Fatalf("expected 8 planned rows, got %d", len(rows))
+	}
+	if rows[0].Name != "prepare" || rows[0].Status != "done" {
+		t.Fatalf("unexpected prepare row: %+v", rows[0])
+	}
+	if rows[1].Name != "independent review stage" || rows[1].Status != "running" {
+		t.Fatalf("unexpected round 1 independent row: %+v", rows[1])
+	}
+	if rows[2].Name != "execute stage" || rows[2].Status != "pending" {
+		t.Fatalf("expected pending round 1 execute row, got %+v", rows[2])
+	}
+	if rows[len(rows)-1].Name != "delivery" || rows[len(rows)-1].Status != "pending" {
+		t.Fatalf("expected pending delivery row, got %+v", rows[len(rows)-1])
+	}
+}
+
 func TestStatusMarker(t *testing.T) {
 	if statusMarker("running", true) != ">" {
 		t.Fatalf("expected active running marker")
@@ -210,6 +241,7 @@ func TestFitUsesDisplayWidth(t *testing.T) {
 func TestTUIViewNoisyStageTextStillFitsViewport(t *testing.T) {
 	state := NewSharedProgressState()
 	reporter := NewTUIProgressReporter(state)
+	reporter.SetMaxRounds(3)
 	reporter.RunStarted("run-123", "owner/repo", "feature/resize", "pr", "/tmp/deepreview/runs/run-123")
 	r1 := 1
 	reporter.StageStarted("independent review stage", &r1, "\x1b[32mspawning\nindependent\treviewers\x1b[0m")
@@ -224,6 +256,22 @@ func TestTUIViewNoisyStageTextStillFitsViewport(t *testing.T) {
 		if got := lipgloss.Width(line); got > model.width {
 			t.Fatalf("line %d width exceeds viewport: got=%d want<=%d line=%q", i+1, got, model.width, line)
 		}
+	}
+}
+
+func TestTUIViewShowsPlannedTimelineWhenMaxRoundsConfigured(t *testing.T) {
+	state := NewSharedProgressState()
+	reporter := NewTUIProgressReporter(state)
+	reporter.SetMaxRounds(4)
+	reporter.RunStarted("run-123", "owner/repo", "feature/resize", "pr", "/tmp/deepreview/runs/run-123")
+	model := newTUIModel(state, make(chan error), 120, 40)
+
+	view := model.View()
+	if !strings.Contains(view, "PLANNED STAGE TIMELINE") {
+		t.Fatalf("expected planned stage timeline panel title, got:\n%s", view)
+	}
+	if !strings.Contains(view, "pending") {
+		t.Fatalf("expected pending planned rows in timeline, got:\n%s", view)
 	}
 }
 

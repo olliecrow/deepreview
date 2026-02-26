@@ -29,6 +29,10 @@ type ProgressReporter interface {
 	RunFinished(success bool, message string)
 }
 
+type MaxRoundsAwareProgressReporter interface {
+	SetMaxRounds(maxRounds int)
+}
+
 type NullProgressReporter struct{}
 
 func (n *NullProgressReporter) RunStarted(string, string, string, string, string) {}
@@ -42,6 +46,7 @@ type ProgressSnapshot struct {
 	Repo          string
 	SourceBranch  string
 	Mode          string
+	MaxRounds     int
 	RunRoot       string
 	RunStartedAt  time.Time
 	RunFinishedAt *time.Time
@@ -64,6 +69,7 @@ type SharedProgressState struct {
 	repo          string
 	sourceBranch  string
 	mode          string
+	maxRounds     int
 	runRoot       string
 	runStartedAt  time.Time
 	runFinishedAt *time.Time
@@ -113,6 +119,7 @@ func (s *SharedProgressState) Snapshot() ProgressSnapshot {
 		Repo:          s.repo,
 		SourceBranch:  s.sourceBranch,
 		Mode:          s.mode,
+		MaxRounds:     s.maxRounds,
 		RunRoot:       s.runRoot,
 		RunStartedAt:  s.runStartedAt,
 		RunFinishedAt: finished,
@@ -128,6 +135,15 @@ type TUIProgressReporter struct {
 
 func NewTUIProgressReporter(state *SharedProgressState) *TUIProgressReporter {
 	return &TUIProgressReporter{state: state}
+}
+
+func (r *TUIProgressReporter) SetMaxRounds(maxRounds int) {
+	r.state.mu.Lock()
+	defer r.state.mu.Unlock()
+	if maxRounds < 0 {
+		maxRounds = 0
+	}
+	r.state.maxRounds = maxRounds
 }
 
 func (r *TUIProgressReporter) RunStarted(runID, repo, sourceBranch, mode, runRoot string) {
