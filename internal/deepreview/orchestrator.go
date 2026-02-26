@@ -14,6 +14,7 @@ import (
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 )
 
 type Orchestrator struct {
@@ -194,6 +195,11 @@ var allowedPlaceholderEmailDomains = map[string]struct{}{
 	"local":       {},
 	"invalid":     {},
 }
+
+const (
+	githubPRBodyMaxChars    = 65536
+	githubPRBodyTargetChars = 64000
+)
 
 func parseOwnerRepo(text string) (string, string, bool) {
 	if m := ownerRepoRemoteRe.FindStringSubmatch(text); m != nil {
@@ -1187,6 +1193,7 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 		return DeliveryResult{}, err
 	}
 	prBody := o.buildPRBody(defaultBranch, candidateBranch, summaries, changedFiles)
+	prBody = o.capPRBodyForGitHub(prBody, summaries, changedFiles)
 	if err := assertPublicTextSafe(prBody, "pr body"); err != nil {
 		return DeliveryResult{}, err
 	}
@@ -1299,6 +1306,7 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 		return err
 	}
 	combined := sanitizePublicText(strings.TrimSpace(generatedSummary + "\n\n---\n\n" + baseBody + "\n"))
+	combined = o.capPRBodyForGitHub(combined, summaries, changedFiles)
 	if err := assertPublicTextSafe(combined, "combined pr body"); err != nil {
 		return err
 	}
@@ -1389,6 +1397,67 @@ func buildRoundArtifactIndex(runRoot string, summaries []string) string {
 	return strings.Join(sections, "\n\n")
 }
 
+func (o *Orchestrator) capPRBodyForGitHub(body string, summaries, changedFiles []string) string {
+	if withinPRBodyTarget(body) {
+		return body
+	}
+	compact := o.buildCompactPRBody(summaries, changedFiles)
+	if withinPRBodyTarget(compact) {
+		return compact
+	}
+	return trimForDisplay(compact, githubPRBodyTargetChars)
+}
+
+func withinPRBodyTarget(body string) bool {
+	return utf8.RuneCountInString(body) <= githubPRBodyTargetChars
+}
+
+func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string) string {
+	areaSummary := summarizeChangedAreas(changedFiles, 6)
+	filePreview, omitted := summarizeChangedFilePreview(changedFiles, 12)
+
+	lines := []string{
+		"## summary",
+		"- deepreview generated this compact body because the full body exceeded GitHub PR size limits.",
+		fmt.Sprintf("- run id: `%s`", o.config.RunID),
+		fmt.Sprintf("- rounds executed: `%d`", len(summaries)),
+		"",
+		"## changed files",
+		fmt.Sprintf("- count: `%d`", len(changedFiles)),
+		fmt.Sprintf("- main change areas: %s", sanitizePublicText(areaSummary)),
+	}
+	previewLine := "- key changed files: " + sanitizePublicText(filePreview)
+	if omitted > 0 {
+		previewLine += fmt.Sprintf(" (+%d more)", omitted)
+	}
+	lines = append(lines, previewLine)
+
+	lines = append(lines, "", "## round decisions")
+	if len(summaries) == 0 {
+		lines = append(lines, "- no round artifacts available")
+	} else {
+		for _, path := range summaries {
+			roundLabel := filepath.Base(filepath.Dir(path))
+			statusPath := filepath.Join(filepath.Dir(path), "round-status.json")
+			status, err := readRoundStatus(statusPath)
+			if err != nil {
+				lines = append(lines, fmt.Sprintf("- %s: status unavailable", roundLabel))
+				continue
+			}
+			reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(status.Reason, "\n", " ")), 220)
+			lines = append(lines, fmt.Sprintf("- %s: decision=`%s`, reason=%s", roundLabel, status.Decision, sanitizePublicText(reason)))
+		}
+	}
+
+	lines = append(lines,
+		"",
+		"## note",
+		"- Full per-round artifacts are available in the managed deepreview run directory.",
+	)
+
+	return sanitizePublicText(strings.Join(lines, "\n") + "\n")
+}
+
 func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles []string) string {
 	var b strings.Builder
 	write := func(format string, args ...any) {
@@ -1410,7 +1479,7 @@ func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles [
 		}
 		write(".\n")
 	}
-	write("- detailed round-by-round evidence is included below.\n\n")
+	write("- round-level decision evidence is included below.\n\n")
 
 	write("## deepreview report\n")
 	write("- run id: `%s`\n", o.config.RunID)
@@ -1428,53 +1497,38 @@ func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles [
 		write("\n")
 	}
 
+	write("## round decisions\n")
 	for _, summaryPath := range summaries {
 		roundDir := filepath.Dir(summaryPath)
 		roundLabel := filepath.Base(roundDir)
-		write("## %s\n\n", roundLabel)
-
 		statusPath := filepath.Join(roundDir, "round-status.json")
 		if status, err := readRoundStatus(statusPath); err == nil {
 			confidence := "n/a"
 			if status.Confidence != nil {
 				confidence = fmt.Sprintf("%.2f", *status.Confidence)
 			}
-			write("- decision: `%s`\n", status.Decision)
-			write("- confidence: `%s`\n", confidence)
-			write("- reason: %s\n\n", sanitizePublicText(strings.TrimSpace(status.Reason)))
-		}
-
-		reviewPaths, _ := filepath.Glob(filepath.Join(roundDir, "review-*.md"))
-		sort.Strings(reviewPaths)
-		if len(reviewPaths) > 0 {
-			write("### independent reviews\n")
-			for _, reviewPath := range reviewPaths {
-				if content, err := os.ReadFile(reviewPath); err == nil {
-					write("%s\n", detailsBlock(filepath.Base(reviewPath), "markdown", sanitizePublicText(string(content))))
-				}
-			}
-		}
-
-		write("### execute artifacts\n")
-		for _, name := range []string{
-			"round-triage.md",
-			"round-plan.md",
-			"round-verification.md",
-			"round-summary.md",
-			"round-status.json",
-		} {
-			path := filepath.Join(roundDir, name)
-			content, err := os.ReadFile(path)
-			if err != nil {
-				continue
-			}
-			lang := "markdown"
-			if strings.HasSuffix(name, ".json") {
-				lang = "json"
-			}
-			write("%s\n", detailsBlock(name, lang, sanitizePublicText(string(content))))
+			reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(status.Reason, "\n", " ")), 220)
+			write("- `%s`: decision=`%s`, confidence=`%s`, reason=%s\n", roundLabel, status.Decision, confidence, sanitizePublicText(reason))
+		} else {
+			write("- `%s`: status unavailable\n", roundLabel)
 		}
 	}
+	write("\n")
+
+	write("## round summaries\n")
+	for _, summaryPath := range summaries {
+		roundLabel := filepath.Base(filepath.Dir(summaryPath))
+		content, err := os.ReadFile(summaryPath)
+		if err != nil {
+			write("- `%s`: summary unavailable\n", roundLabel)
+			continue
+		}
+		write("### %s\n\n", roundLabel)
+		write("%s\n\n", sanitizePublicText(strings.TrimSpace(string(content))))
+	}
+
+	write("## note\n")
+	write("- Raw individual review reports and execute artifacts are kept in managed run artifacts and are not embedded in this PR body.\n")
 
 	return sanitizePublicText(strings.TrimSpace(b.String()) + "\n")
 }
