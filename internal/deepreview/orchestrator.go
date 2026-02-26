@@ -175,10 +175,24 @@ var secretRiskyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
 }
+var emailPattern = regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@(?:[A-Z0-9\-]+\.)+[A-Z]{2,}\b`)
+var personalRiskyPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?m)\b\d{3}-\d{2}-\d{4}\b`),
+	regexp.MustCompile(`(?m)\b(?:\+?1[-.\s]?)?(?:\(\d{3}\)|\d{3})[-.\s]\d{3}[-.\s]\d{4}\b`),
+}
 var privatePathPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`(?m)\b/Users/\S+`),
-	regexp.MustCompile(`(?m)\b/home/\S+`),
-	regexp.MustCompile(`(?m)\b[A-Za-z]:\\\S+`),
+	regexp.MustCompile(`(?m)/Users/\S+`),
+	regexp.MustCompile(`(?m)/home/\S+`),
+	regexp.MustCompile(`(?m)[A-Za-z]:\\\S+`),
+}
+var allowedPlaceholderEmailDomains = map[string]struct{}{
+	"example.com": {},
+	"example.org": {},
+	"example.net": {},
+	"test.com":    {},
+	"localhost":   {},
+	"local":       {},
+	"invalid":     {},
 }
 
 func parseOwnerRepo(text string) (string, string, bool) {
@@ -358,6 +372,11 @@ func (o *Orchestrator) Run() error {
 		o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
 		o.reporter.RunFinished(true, "run completed successfully (no deliverable repository changes)")
 		return nil
+	}
+	if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
+		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+		finalErr = err
+		return err
 	}
 	if err := o.secretHygieneScan(candidateBranch); err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
@@ -613,14 +632,15 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 
 			workerID := i + 1
 			worktreePath := worktrees[i]
+			workerReviewRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID)))
 			variables := map[string]string{
 				"REPO_SLUG":          o.repoIdentity.Slug(),
 				"SOURCE_BRANCH":      o.config.SourceBranch,
 				"DEFAULT_BRANCH":     defaultBranch,
 				"WORKER_ID":          fmt.Sprintf("%d", workerID),
 				"CONCURRENCY":        fmt.Sprintf("%d", o.config.Concurrency),
-				"WORKTREE_PATH":      worktreePath,
-				"OUTPUT_REVIEW_PATH": workerReviewPaths[i],
+				"WORKTREE_PATH":      ".",
+				"OUTPUT_REVIEW_PATH": workerReviewRelPath,
 			}
 			prompt, err := RenderTemplate(templateText, variables)
 			if err != nil {
@@ -738,6 +758,11 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 	roundPlanPath := filepath.Join(roundDir, "round-plan.md")
 	roundVerificationPath := filepath.Join(roundDir, "round-verification.md")
 	executeArtifactsDir := filepath.Join(executeWorktree, ".deepreview", "artifacts")
+	roundStatusRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-status.json"))
+	roundSummaryRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-summary.md"))
+	roundTriageRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-triage.md"))
+	roundPlanRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-plan.md"))
+	roundVerificationRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-verification.md"))
 	roundStatusWorktreePath := filepath.Join(executeArtifactsDir, "round-status.json")
 	roundSummaryWorktreePath := filepath.Join(executeArtifactsDir, "round-summary.md")
 	roundTriageWorktreePath := filepath.Join(executeArtifactsDir, "round-triage.md")
@@ -777,7 +802,11 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
 		}
-		localReviewReports = append(localReviewReports, dst)
+		rel, err := filepath.Rel(executeWorktree, dst)
+		if err != nil {
+			rel = filepath.Base(dst)
+		}
+		localReviewReports = append(localReviewReports, filepath.ToSlash(rel))
 	}
 
 	reviewReportPathsBullet := ""
@@ -792,17 +821,17 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 		"DEFAULT_BRANCH":          defaultBranch,
 		"ROUND_NUMBER":            fmt.Sprintf("%d", round),
 		"MAX_ROUNDS":              fmt.Sprintf("%d", o.config.MaxRounds),
-		"WORKTREE_PATH":           executeWorktree,
+		"WORKTREE_PATH":           ".",
 		"REVIEW_REPORT_PATHS":     reviewReportPathsBullet,
 		"REVIEW_REPORTS_MARKDOWN": reviewInjection,
 		// Backward compatibility for older templates that still use fanout placeholders.
 		"FANOUT_REVIEW_PATHS":     reviewReportPathsBullet,
 		"FANOUT_REVIEWS_MARKDOWN": reviewInjection,
-		"ROUND_TRIAGE_PATH":       roundTriageWorktreePath,
-		"ROUND_PLAN_PATH":         roundPlanWorktreePath,
-		"ROUND_VERIFICATION_PATH": roundVerificationWorktreePath,
-		"ROUND_STATUS_PATH":       roundStatusWorktreePath,
-		"ROUND_SUMMARY_PATH":      roundSummaryWorktreePath,
+		"ROUND_TRIAGE_PATH":       roundTriageRelPath,
+		"ROUND_PLAN_PATH":         roundPlanRelPath,
+		"ROUND_VERIFICATION_PATH": roundVerificationRelPath,
+		"ROUND_STATUS_PATH":       roundStatusRelPath,
+		"ROUND_SUMMARY_PATH":      roundSummaryRelPath,
 	}
 
 	var threadID *string
@@ -1085,10 +1114,47 @@ func (o *Orchestrator) secretHygieneScan(candidateBranch string) error {
 			continue
 		}
 		text := string(content)
+		if containsDisallowedEmail(text) {
+			return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
+		}
 		for _, pattern := range secretRiskyPatterns {
 			if pattern.MatchString(text) {
-				return NewDeepReviewError("secret-hygiene scan failed: pattern matched in %s", rel)
+				return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
 			}
+		}
+		for _, pattern := range personalRiskyPatterns {
+			if pattern.MatchString(text) {
+				return NewDeepReviewError("privacy scan failed: personal-info-like pattern matched in %s", rel)
+			}
+		}
+		for _, pattern := range privatePathPatterns {
+			if pattern.MatchString(text) {
+				return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
+			}
+		}
+	}
+	return nil
+}
+
+func (o *Orchestrator) deliveryCommitMessageScan(candidateBranch string) error {
+	out, err := Git(
+		o.managedRepoPath,
+		o.config.GitBin,
+		true,
+		"log",
+		"--format=%s%n%b%x00",
+		"origin/"+o.config.SourceBranch+".."+candidateBranch,
+	)
+	if err != nil {
+		return err
+	}
+	for _, rawEntry := range strings.Split(out, "\x00") {
+		entry := strings.TrimSpace(rawEntry)
+		if entry == "" {
+			continue
+		}
+		if textHasDisallowedSensitivePattern(entry) {
+			return NewDeepReviewError("privacy scan failed: disallowed sensitive content detected in delivery commit message")
 		}
 	}
 	return nil
@@ -1116,8 +1182,14 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 	}
 	o.pushCount++
 
-	prTitle := fmt.Sprintf("deepreview: %s review updates", o.config.SourceBranch)
+	prTitle := sanitizePublicText("deepreview: review updates")
+	if err := assertPublicTextSafe(prTitle, "pr title"); err != nil {
+		return DeliveryResult{}, err
+	}
 	prBody := o.buildPRBody(defaultBranch, candidateBranch, summaries, changedFiles)
+	if err := assertPublicTextSafe(prBody, "pr body"); err != nil {
+		return DeliveryResult{}, err
+	}
 	prBodyBasePath := filepath.Join(o.runRoot, "pr-body.base.md")
 	prBodyPath := filepath.Join(o.runRoot, "pr-body.md")
 	if err := os.WriteFile(prBodyBasePath, []byte(prBody), 0o644); err != nil {
@@ -1172,6 +1244,8 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 	}
 
 	summaryOutputPath := filepath.Join(o.runRoot, "pr-top-summary.md")
+	baseBodyRelPath := filepath.Base(baseBodyPath)
+	summaryOutputRelPath := filepath.Base(summaryOutputPath)
 	variables := map[string]string{
 		"REPO_SLUG":            o.repoIdentity.Slug(),
 		"SOURCE_BRANCH":        o.config.SourceBranch,
@@ -1181,10 +1255,10 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 		"RUN_ID":               o.config.RunID,
 		"PR_TITLE":             prTitle,
 		"PR_URL":               prURL,
-		"MANAGED_REPO_PATH":    o.managedRepoPath,
-		"RUN_ROOT":             o.runRoot,
-		"BASE_PR_BODY_PATH":    baseBodyPath,
-		"OUTPUT_SUMMARY_PATH":  summaryOutputPath,
+		"MANAGED_REPO_PATH":    ".",
+		"RUN_ROOT":             ".",
+		"BASE_PR_BODY_PATH":    baseBodyRelPath,
+		"OUTPUT_SUMMARY_PATH":  summaryOutputRelPath,
 		"CHANGED_FILES_LIST":   formatChangedFilesList(changedFiles),
 		"ROUND_ARTIFACT_INDEX": buildRoundArtifactIndex(o.runRoot, summaries),
 	}
@@ -1217,8 +1291,17 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 	if generatedSummary == "" {
 		return NewDeepReviewError("enhanced pr summary was empty: %s", summaryOutputPath)
 	}
+	if err := assertPublicTextSafe(generatedSummary, "enhanced pr summary"); err != nil {
+		return err
+	}
 	baseBody := strings.TrimSpace(sanitizePublicText(string(baseBodyRaw)))
+	if err := assertPublicTextSafe(baseBody, "base pr body"); err != nil {
+		return err
+	}
 	combined := sanitizePublicText(strings.TrimSpace(generatedSummary + "\n\n---\n\n" + baseBody + "\n"))
+	if err := assertPublicTextSafe(combined, "combined pr body"); err != nil {
+		return err
+	}
 	if err := os.WriteFile(finalBodyPath, []byte(combined), 0o644); err != nil {
 		return err
 	}
@@ -1306,14 +1389,14 @@ func buildRoundArtifactIndex(runRoot string, summaries []string) string {
 	return strings.Join(sections, "\n\n")
 }
 
-func (o *Orchestrator) buildPRBody(defaultBranch, candidateBranch string, summaries, changedFiles []string) string {
+func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles []string) string {
 	var b strings.Builder
 	write := func(format string, args ...any) {
 		_, _ = fmt.Fprintf(&b, format, args...)
 	}
 
 	write("## at a glance\n")
-	write("- reviewed source branch `%s` against `%s` across `%d` round(s).\n", o.config.SourceBranch, defaultBranch, len(summaries))
+	write("- reviewed requested source changes across `%d` round(s).\n", len(summaries))
 	if len(changedFiles) == 0 {
 		write("- no repository file changes were delivered.\n")
 	} else {
@@ -1331,9 +1414,7 @@ func (o *Orchestrator) buildPRBody(defaultBranch, candidateBranch string, summar
 
 	write("## deepreview report\n")
 	write("- run id: `%s`\n", o.config.RunID)
-	write("- source branch: `%s`\n", o.config.SourceBranch)
-	write("- default branch: `%s`\n", defaultBranch)
-	write("- candidate branch: `%s`\n", candidateBranch)
+	write("- source/default/candidate branch metadata omitted for privacy\n")
 	write("- rounds executed: `%d`\n\n", len(summaries))
 
 	write("## changed files\n")
@@ -1470,7 +1551,7 @@ func summarizeChangedFilePreview(changedFiles []string, limit int) (string, int)
 	return strings.Join(parts, ", "), len(unique) - len(preview)
 }
 
-func (o *Orchestrator) writeFinalSummary(defaultBranch, candidateBranch string, delivery DeliveryResult, summaries []string) error {
+func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryResult, summaries []string) error {
 	if delivery.Skipped {
 		if o.pushCount != 0 {
 			return NewDeepReviewError("invalid delivery push count: expected 0 for skipped delivery, got %d", o.pushCount)
@@ -1483,10 +1564,7 @@ func (o *Orchestrator) writeFinalSummary(defaultBranch, candidateBranch string, 
 		"# deepreview final summary",
 		"",
 		fmt.Sprintf("- run id: `%s`", o.config.RunID),
-		fmt.Sprintf("- repo: `%s`", o.repoIdentity.Slug()),
-		fmt.Sprintf("- source branch: `%s`", o.config.SourceBranch),
-		fmt.Sprintf("- default branch: `%s`", defaultBranch),
-		fmt.Sprintf("- candidate branch: `%s`", candidateBranch),
+		"- repo/branch metadata omitted for privacy",
 		fmt.Sprintf("- mode: `%s`", delivery.Mode),
 		fmt.Sprintf("- rounds: `%d`", len(summaries)),
 		fmt.Sprintf("- run artifacts: `%s`", filepath.ToSlash(filepath.Join("runs", o.config.RunID))),
@@ -1532,6 +1610,9 @@ func (o *Orchestrator) writeFinalSummary(defaultBranch, candidateBranch string, 
 	}
 
 	finalText := sanitizePublicText(strings.Join(lines, "\n") + "\n")
+	if err := assertPublicTextSafe(finalText, "final summary"); err != nil {
+		return err
+	}
 	return os.WriteFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText), 0o644)
 }
 
@@ -1560,7 +1641,70 @@ func sanitizePublicText(text string) string {
 	for _, pattern := range privatePathPatterns {
 		sanitized = pattern.ReplaceAllString(sanitized, "[redacted-path]")
 	}
+	for _, pattern := range personalRiskyPatterns {
+		sanitized = pattern.ReplaceAllString(sanitized, "[redacted-personal]")
+	}
+	sanitized = emailPattern.ReplaceAllStringFunc(sanitized, func(match string) string {
+		if isAllowedPlaceholderEmail(match) {
+			return match
+		}
+		return "[redacted-email]"
+	})
 	return sanitized
+}
+
+func isAllowedPlaceholderEmail(email string) bool {
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(email)), "@")
+	if len(parts) != 2 {
+		return false
+	}
+	domain := strings.TrimSpace(parts[1])
+	if domain == "" {
+		return false
+	}
+	if _, ok := allowedPlaceholderEmailDomains[domain]; ok {
+		return true
+	}
+	return strings.HasSuffix(domain, ".example.com") || strings.HasSuffix(domain, ".example.org") || strings.HasSuffix(domain, ".example.net")
+}
+
+func containsDisallowedEmail(text string) bool {
+	matches := emailPattern.FindAllString(text, -1)
+	for _, match := range matches {
+		if !isAllowedPlaceholderEmail(match) {
+			return true
+		}
+	}
+	return false
+}
+
+func textHasDisallowedSensitivePattern(text string) bool {
+	if containsDisallowedEmail(text) {
+		return true
+	}
+	for _, pattern := range secretRiskyPatterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	for _, pattern := range privatePathPatterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	for _, pattern := range personalRiskyPatterns {
+		if pattern.MatchString(text) {
+			return true
+		}
+	}
+	return false
+}
+
+func assertPublicTextSafe(text, surface string) error {
+	if textHasDisallowedSensitivePattern(text) {
+		return NewDeepReviewError("privacy guard blocked %s: disallowed sensitive content remained after sanitization", surface)
+	}
+	return nil
 }
 
 func shortSHA(sha string) string {
@@ -1589,10 +1733,10 @@ func progressMessage(err error) string {
 		if snippet != "" {
 			message += " | " + trimForDisplay(snippet, 180)
 		}
-		return message
+		return trimForDisplay(sanitizePublicText(message), 220)
 	}
 
-	return trimForDisplay(err.Error(), 220)
+	return trimForDisplay(sanitizePublicText(err.Error()), 220)
 }
 
 func firstNonEmptyLine(text string) string {
@@ -1621,18 +1765,18 @@ func trimForDisplay(text string, maxRunes int) string {
 
 func (o *Orchestrator) writeRunConfig() error {
 	payload := map[string]any{
-		"repo":                  o.config.Repo,
-		"source_branch":         o.config.SourceBranch,
+		"repo":                  sanitizePublicText(o.config.Repo),
+		"source_branch":         sanitizePublicText(o.config.SourceBranch),
 		"concurrency":           o.config.Concurrency,
 		"max_rounds":            o.config.MaxRounds,
 		"mode":                  o.config.Mode,
-		"workspace_root":        o.workspaceRoot,
+		"workspace_root":        sanitizePublicText(o.workspaceRoot),
 		"run_id":                o.config.RunID,
-		"git_bin":               o.config.GitBin,
-		"codex_bin":             o.config.CodexBin,
+		"git_bin":               sanitizePublicText(o.config.GitBin),
+		"codex_bin":             sanitizePublicText(o.config.CodexBin),
 		"codex_model":           o.config.CodexModel,
 		"codex_reasoning":       o.config.CodexReasoning,
-		"gh_bin":                o.config.GhBin,
+		"gh_bin":                sanitizePublicText(o.config.GhBin),
 		"codex_timeout_seconds": o.config.CodexTimeoutSeconds,
 	}
 	b, err := json.MarshalIndent(payload, "", "  ")
