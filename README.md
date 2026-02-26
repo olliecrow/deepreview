@@ -50,10 +50,19 @@ go build -o ./bin/deepreview ./cmd/deepreview
 ./bin/deepreview review
 ```
 
-4. Optional explicit target repo and source branch.
+4. Optional quick checks before a full run.
+
+```bash
+./bin/deepreview doctor
+./bin/deepreview dry-run
+```
+
+5. Optional explicit target repo and source branch.
 
 ```bash
 ./bin/deepreview review <repo> --source-branch <branch>
+./bin/deepreview doctor <repo> --source-branch <branch>
+./bin/deepreview dry-run <repo> --source-branch <branch>
 ```
 
 ## Useful options
@@ -63,27 +72,74 @@ go build -o ./bin/deepreview ./cmd/deepreview
 ./bin/deepreview review <repo> --source-branch <branch> --mode yolo
 ./bin/deepreview review <repo> --source-branch <branch> --tui
 ./bin/deepreview review <repo> --source-branch <branch> --no-tui
+./bin/deepreview doctor <repo> --source-branch <branch> --mode pr
+./bin/deepreview dry-run <repo> --source-branch <branch> --mode yolo
 ```
 
-## Optional shell alias
+## Short example output
 
-If you run deepreview often, an alias can speed things up.
+Doctor:
+
+```text
+deepreview doctor
+repo: owner/repo
+source branch: feature/login
+mode: pr
+
+[ok] tool available: git
+[ok] tool available: codex
+[ok] gh auth status
+[ok] remote source branch reachable
+
+doctor result: PASS
+```
+
+Dry run:
+
+```text
+deepreview dry-run
+repo: owner/repo
+source branch: feature/login
+mode: pr
+
+planned order:
+1. preflight checks
+2. acquire per-repo run lock
+3. prepare stage
+4. round loop
+5. delivery stage
+6. final summary
+```
+
+## Optional shell shortcut
+
+If you run deepreview often, add a short alias:
 
 ```bash
 alias dr="/path/to/deepreview/bin/deepreview"
 ```
 
-Then run.
+Then run:
 
 ```bash
 dr review
 ```
 
+If you are actively editing deepreview source, rebuild after changes:
+
+```bash
+go build -o ./bin/deepreview ./cmd/deepreview
+```
+
 ## Command summary
 
 - `deepreview review [<repo>] [--source-branch <branch>]`
+- `deepreview doctor [<repo>] [--source-branch <branch>]`
+- `deepreview dry-run [<repo>] [--source-branch <branch>]`
 - `deepreview --help`
 - `deepreview review --help`
+- `deepreview doctor --help`
+- `deepreview dry-run --help`
 
 Common options.
 
