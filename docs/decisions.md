@@ -493,6 +493,19 @@ References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/cli.go`, `README.md`
 
 Decision:
+Treat user interrupt (`Ctrl+C`) as graceful cancellation, not abrupt termination: cancel run, cleanup worktrees/locks, then exit.
+Context:
+Long-running review runs need a predictable operator escape hatch. Abrupt process termination can leave stale worktrees/locks and block subsequent runs.
+Rationale:
+Graceful cancellation preserves operator control while maintaining workspace hygiene and lock correctness.
+Trade-offs:
+Adds interrupt orchestration and cancellation-aware command execution plumbing.
+Enforcement:
+Review command now captures interrupts, cancels in-flight commands, shows a TUI cancel hint, and returns exit code `130`; integration test verifies interrupt-triggered cleanup of locks/worktrees.
+References:
+`internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/tui.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/gitops.go`
+
+Decision:
 When source branch is inferred, require local branch readiness: no tracked local changes and exact local/upstream synchronization.
 Context:
 deepreview reviews remote branch state; inferred local context should match the remote state to avoid reviewing stale or partial work.
