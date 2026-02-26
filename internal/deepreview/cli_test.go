@@ -133,7 +133,7 @@ func TestRunCLIHelpEntrypointsReturnZero(t *testing.T) {
 	}
 }
 
-func TestRunCLIUnsupportedCommandSanitizesUserInput(t *testing.T) {
+func TestRunCLIUnsupportedCommandShowsRawUserInput(t *testing.T) {
 	originalStderr := os.Stderr
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -154,11 +154,8 @@ func TestRunCLIUnsupportedCommandSanitizesUserInput(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("expected exit code 1 for unsupported command, got %d", code)
 	}
-	if !strings.Contains(output, "unsupported command: [redacted-path]") {
-		t.Fatalf("expected redacted unsupported-command output, got:\n%s", output)
-	}
-	if strings.Contains(output, "/Users/oc/private-command") {
-		t.Fatalf("unsupported-command output must not contain local absolute path, got:\n%s", output)
+	if !strings.Contains(output, "unsupported command: /Users/oc/private-command") {
+		t.Fatalf("expected unsupported-command output to keep original token, got:\n%s", output)
 	}
 }
 

@@ -1708,10 +1708,10 @@ func progressMessage(err error) string {
 		if snippet != "" {
 			message += " | " + trimForDisplay(snippet, 180)
 		}
-		return trimForDisplay(sanitizePublicText(message), 220)
+		return trimForDisplay(message, 220)
 	}
 
-	return trimForDisplay(sanitizePublicText(err.Error()), 220)
+	return trimForDisplay(err.Error(), 220)
 }
 
 func firstNonEmptyLine(text string) string {

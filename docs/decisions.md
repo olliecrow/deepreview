@@ -683,20 +683,20 @@ Centralized sanitization plus pre-delivery scans provide consistent protection w
 Trade-offs:
 Conservative pattern-based blocking can reject some edge-case content that resembles sensitive data.
 Enforcement:
-Runtime sanitizes CLI/TUI/text reporter output and PR/summary content, validates generated public text before delivery writes, scans changed files for secret/personal/path patterns, and scans delivery commit messages before push/PR creation.
+Runtime sanitizes PR/summary delivery content, validates generated public text before delivery writes, scans changed files for secret/personal/path patterns, and scans delivery commit messages before push/PR creation. Local CLI/TUI/text progress output remains literal for operator visibility and debugging.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/progress.go`, `internal/deepreview/text_reporter.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`
+`internal/deepreview/orchestrator.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`
 
 Decision:
-Sanitize unsupported-command CLI error output so raw user-provided command tokens cannot leak local paths or personal identifiers.
+Keep unsupported-command CLI error output literal to preserve local operator context.
 Context:
-User input for the top-level command token is echoed on CLI errors and can include local absolute paths.
+User input for the top-level command token is echoed on CLI errors; sanitizing this path degraded local usability and made diagnosis harder.
 Rationale:
-Even on invalid invocation paths, deepreview should preserve the same privacy posture as normal run output.
+Local terminal output should be maximally useful for the operator. Privacy policy is enforced on delivery/public surfaces, not local stderr/stdout.
 Trade-offs:
-Error text is slightly less literal because sensitive substrings are redacted.
+Machine-local paths can appear in local terminal output; users should treat terminal transcripts as local artifacts unless intentionally shared.
 Enforcement:
-`RunCLI` sanitizes the unsupported command token before writing to stderr, with regression coverage asserting `/Users/...` redaction.
+`RunCLI` prints the original unsupported token, with regression coverage asserting `/Users/...` is preserved locally.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`
 
