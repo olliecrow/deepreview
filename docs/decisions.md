@@ -688,6 +688,19 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/progress.go`, `internal/deepreview/text_reporter.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`
 
 Decision:
+Sanitize unsupported-command CLI error output so raw user-provided command tokens cannot leak local paths or personal identifiers.
+Context:
+User input for the top-level command token is echoed on CLI errors and can include local absolute paths.
+Rationale:
+Even on invalid invocation paths, deepreview should preserve the same privacy posture as normal run output.
+Trade-offs:
+Error text is slightly less literal because sensitive substrings are redacted.
+Enforcement:
+`RunCLI` sanitizes the unsupported command token before writing to stderr, with regression coverage asserting `/Users/...` redaction.
+References:
+`internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`
+
+Decision:
 Keep PR descriptions size-safe and privacy-safe by using a detailed Codex-generated final body and excluding raw per-worker review reports/full execute artifact dumps.
 Context:
 Large multi-round runs can produce PR descriptions that exceed GitHub's body limit (`65536` chars), causing delivery failures at `gh pr create`.

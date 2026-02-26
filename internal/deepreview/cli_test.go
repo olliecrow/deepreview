@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -129,6 +130,35 @@ func TestRunCLIHelpEntrypointsReturnZero(t *testing.T) {
 		if code := RunCLI(tc); code != 0 {
 			t.Fatalf("expected exit code 0 for %v, got %d", tc, code)
 		}
+	}
+}
+
+func TestRunCLIUnsupportedCommandSanitizesUserInput(t *testing.T) {
+	originalStderr := os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("pipe create failed: %v", err)
+	}
+	os.Stderr = w
+	code := RunCLI([]string{"/Users/oc/private-command"})
+	_ = w.Close()
+	os.Stderr = originalStderr
+
+	outputBytes, readErr := io.ReadAll(r)
+	_ = r.Close()
+	if readErr != nil {
+		t.Fatalf("stderr read failed: %v", readErr)
+	}
+	output := string(outputBytes)
+
+	if code != 1 {
+		t.Fatalf("expected exit code 1 for unsupported command, got %d", code)
+	}
+	if !strings.Contains(output, "unsupported command: [redacted-path]") {
+		t.Fatalf("expected redacted unsupported-command output, got:\n%s", output)
+	}
+	if strings.Contains(output, "/Users/oc/private-command") {
+		t.Fatalf("unsupported-command output must not contain local absolute path, got:\n%s", output)
 	}
 }
 
