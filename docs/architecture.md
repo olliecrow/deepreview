@@ -18,7 +18,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - mode (`pr` or `yolo`)
 - concurrency (default `4`)
 - max rounds (default `5`)
-- UI mode (`--tui` opt-in full-screen UI, default structured text progress logs, optional `--no-tui` force-off)
+- UI mode (full-screen UI by default when terminal capabilities are valid; optional `--no-tui` force-off for structured text logs)
 - if source branch is inferred from local repo context, require local readiness:
   - no tracked local changes
   - local branch exactly synchronized with upstream remote branch

@@ -17,7 +17,6 @@ import (
 
 type ParsedArgs struct {
 	Config ReviewConfig
-	TUI    bool
 	NoTUI  bool
 }
 
@@ -49,16 +48,11 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 	maxRounds := fs.Int("max-rounds", defaultMaxRounds, "max rounds")
 	mode := fs.String("mode", ModePR, "delivery mode")
 	yolo := fs.Bool("yolo", false, "alias for --mode yolo")
-	tui := fs.Bool("tui", false, "enable full-screen terminal UI")
 	noTUI := fs.Bool("no-tui", false, "disable terminal UI")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return ParsedArgs{}, err
 	}
-	if *tui && *noTUI {
-		return ParsedArgs{}, NewDeepReviewError("--tui and --no-tui cannot be used together")
-	}
-
 	repo := strings.TrimSpace(repoFromPrefix)
 	remaining := fs.Args()
 	if repo == "" && len(remaining) > 0 {
@@ -116,7 +110,7 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		CodexTimeout:        defaultCodexTimeoutSeconds * time.Second,
 	}
 
-	return ParsedArgs{Config: cfg, TUI: *tui, NoTUI: *noTUI}, nil
+	return ParsedArgs{Config: cfg, NoTUI: *noTUI}, nil
 }
 
 func normalizeLegacyArgs(args []string) []string {
@@ -181,7 +175,7 @@ What this command does:
      - mode=yolo: pushes directly to source branch
 
 Usage:
-  deepreview review [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--tui|--no-tui]
+  deepreview review [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--no-tui]
 
 Arguments:
   <repo>
@@ -228,14 +222,9 @@ Optional flags:
     Alias for --mode yolo. If set, it overrides --mode.
     Legacy alias --YOLO is also accepted.
 
-  --tui                 (default: false)
-    Enable full-screen TUI progress display.
-    Context:
-      TUI is opt-in for reliability; otherwise deepreview emits stable structured text logs.
-      Requires stdin/stdout terminals, non-dumb TERM, and valid terminal size.
-
   --no-tui              (default: false)
     Force structured text progress logs (disables full-screen TUI).
+    Default behavior is TUI-on when terminal capabilities are valid.
 
 Environment overrides:
   DEEPREVIEW_WORKSPACE_ROOT   (default: ~/deepreview)
@@ -257,13 +246,13 @@ Examples:
   deepreview review owner/repo --source-branch feature/login --concurrency 6 --max-rounds 2
   deepreview review owner/repo --source-branch feature/login --mode yolo
   deepreview review owner/repo --source-branch feature/login --yolo
-  deepreview review owner/repo --source-branch feature/login --tui
+  deepreview review owner/repo --source-branch feature/login
   deepreview review owner/repo --source-branch feature/login --no-tui
 
 Troubleshooting:
   - Missing tools: ensure git/codex/(gh for pr mode) are on PATH or set env overrides.
   - Auth failures: run local auth flows for codex and gh.
-  - Terminal rendering issues: run without --tui (or pass --no-tui) for stable text logs.
+  - Terminal rendering issues: pass --no-tui for stable text logs.
   - Invalid mode: allowed values are only pr or yolo (case-insensitive).
 `, defaultConcurrency, defaultMaxRounds, ModePR, forcedCodexModel, forcedCodexReasoningEffort, defaultCodexTimeoutSeconds)
 }
@@ -379,7 +368,6 @@ func runReviewCommand(args []string) int {
 	stdinFD := int(os.Stdin.Fd())
 	termWidth, termHeight, sizeErr := term.GetSize(stdoutFD)
 	enableTUI := shouldEnableTUI(
-		parsed.TUI,
 		parsed.NoTUI,
 		term.IsTerminal(stdinFD),
 		term.IsTerminal(stdoutFD),
@@ -684,8 +672,8 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintln(out, "dry-run only: no prompts were executed, no commits were pushed, and no pull request was created.")
 }
 
-func shouldEnableTUI(requestedTUI, noTUI, stdinIsTerminal, stdoutIsTerminal bool, termName string, width, height int, sizeErr error) bool {
-	if !requestedTUI || noTUI || !stdinIsTerminal || !stdoutIsTerminal {
+func shouldEnableTUI(noTUI, stdinIsTerminal, stdoutIsTerminal bool, termName string, width, height int, sizeErr error) bool {
+	if noTUI || !stdinIsTerminal || !stdoutIsTerminal {
 		return false
 	}
 	if strings.EqualFold(strings.TrimSpace(termName), "dumb") {
