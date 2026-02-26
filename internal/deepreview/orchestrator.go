@@ -404,6 +404,12 @@ func (o *Orchestrator) preflight() error {
 	if _, err := os.Stat(filepath.Join(o.promptsRoot, "review", "independent-review.md")); err != nil {
 		return NewDeepReviewError("independent review prompt template missing")
 	}
+	if o.config.Mode == ModePR {
+		deliveryTemplate := filepath.Join(o.promptsRoot, "delivery", "pr-description-summary.md")
+		if _, err := os.Stat(deliveryTemplate); err != nil {
+			return NewDeepReviewError("delivery prompt template missing: %s", deliveryTemplate)
+		}
+	}
 	return nil
 }
 
@@ -1098,6 +1104,7 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 
 	deliveryBranch := "deepreview/" + SanitizeSegment(o.config.SourceBranch) + "/" + SanitizeSegment(o.config.RunID)
 	refspec := candidateBranch + ":" + deliveryBranch
+	o.reporter.StageProgress("delivery", "pushing delivery branch and creating pull request", nil)
 	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, refspec); err != nil {
 		return DeliveryResult{}, err
 	}
@@ -1105,7 +1112,11 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 
 	prTitle := fmt.Sprintf("deepreview: %s review updates", o.config.SourceBranch)
 	prBody := o.buildPRBody(defaultBranch, candidateBranch, summaries, changedFiles)
+	prBodyBasePath := filepath.Join(o.runRoot, "pr-body.base.md")
 	prBodyPath := filepath.Join(o.runRoot, "pr-body.md")
+	if err := os.WriteFile(prBodyBasePath, []byte(prBody), 0o644); err != nil {
+		return DeliveryResult{}, err
+	}
 	if err := os.WriteFile(prBodyPath, []byte(prBody), 0o644); err != nil {
 		return DeliveryResult{}, err
 	}
@@ -1134,6 +1145,10 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 		lines := strings.Split(trimmed, "\n")
 		prURL = strings.TrimSpace(lines[len(lines)-1])
 	}
+	o.reporter.StageProgress("delivery", "running post-pr codex summary and updating pr body", nil)
+	if err := o.enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, prBodyBasePath, prBodyPath, summaries, changedFiles); err != nil {
+		o.reporter.StageProgress("delivery", "post-pr description enhancement failed; keeping base body: "+progressMessage(err), nil)
+	}
 
 	return DeliveryResult{
 		Mode:          ModePR,
@@ -1141,6 +1156,148 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 		PRURL:         prURL,
 		CommitsURL:    fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(deliveryBranch)),
 	}, nil
+}
+
+func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, baseBodyPath, finalBodyPath string, summaries, changedFiles []string) error {
+	templatePath := filepath.Join(o.promptsRoot, "delivery", "pr-description-summary.md")
+	templateText, err := ReadTemplate(templatePath)
+	if err != nil {
+		return err
+	}
+
+	summaryOutputPath := filepath.Join(o.runRoot, "pr-top-summary.md")
+	variables := map[string]string{
+		"REPO_SLUG":            o.repoIdentity.Slug(),
+		"SOURCE_BRANCH":        o.config.SourceBranch,
+		"DEFAULT_BRANCH":       defaultBranch,
+		"CANDIDATE_BRANCH":     candidateBranch,
+		"DELIVERY_BRANCH":      deliveryBranch,
+		"RUN_ID":               o.config.RunID,
+		"PR_TITLE":             prTitle,
+		"PR_URL":               prURL,
+		"MANAGED_REPO_PATH":    o.managedRepoPath,
+		"RUN_ROOT":             o.runRoot,
+		"BASE_PR_BODY_PATH":    baseBodyPath,
+		"OUTPUT_SUMMARY_PATH":  summaryOutputPath,
+		"CHANGED_FILES_LIST":   formatChangedFilesList(changedFiles),
+		"ROUND_ARTIFACT_INDEX": buildRoundArtifactIndex(o.runRoot, summaries),
+	}
+	prompt, err := RenderTemplate(templateText, variables)
+	if err != nil {
+		return err
+	}
+	logPrefix := filepath.Join(o.runRoot, "logs", "delivery-pr-description")
+	if _, err := o.codexRunner.RunPrompt(o.runRoot, prompt, nil, logPrefix); err != nil {
+		return err
+	}
+
+	if err := ensureCanonicalArtifact(summaryOutputPath, []string{
+		summaryOutputPath,
+		filepath.Join(o.runRoot, "pr-summary.md"),
+		filepath.Join(o.runRoot, "summary.md"),
+	}); err != nil {
+		return NewDeepReviewError("enhanced pr summary output missing: %s", summaryOutputPath)
+	}
+	baseBodyRaw, err := os.ReadFile(baseBodyPath)
+	if err != nil {
+		return err
+	}
+	generatedSummaryRaw, err := os.ReadFile(summaryOutputPath)
+	if err != nil {
+		return err
+	}
+
+	generatedSummary := strings.TrimSpace(sanitizePublicText(string(generatedSummaryRaw)))
+	if generatedSummary == "" {
+		return NewDeepReviewError("enhanced pr summary was empty: %s", summaryOutputPath)
+	}
+	baseBody := strings.TrimSpace(sanitizePublicText(string(baseBodyRaw)))
+	combined := sanitizePublicText(strings.TrimSpace(generatedSummary + "\n\n---\n\n" + baseBody + "\n"))
+	if err := os.WriteFile(finalBodyPath, []byte(combined), 0o644); err != nil {
+		return err
+	}
+
+	prRef := strings.TrimSpace(prURL)
+	if prRef == "" {
+		prRef = deliveryBranch
+	}
+	_, err = RunCommand(
+		[]string{
+			o.config.GhBin,
+			"pr", "edit", prRef,
+			"--repo", o.repoIdentity.Slug(),
+			"--body-file", finalBodyPath,
+		},
+		o.managedRepoPath,
+		"",
+		true,
+		0,
+	)
+	return err
+}
+
+func formatChangedFilesList(changedFiles []string) string {
+	if len(changedFiles) == 0 {
+		return "- none"
+	}
+	unique := make([]string, 0, len(changedFiles))
+	seen := map[string]struct{}{}
+	for _, raw := range changedFiles {
+		path := strings.TrimSpace(raw)
+		if path == "" {
+			continue
+		}
+		if _, ok := seen[path]; ok {
+			continue
+		}
+		seen[path] = struct{}{}
+		unique = append(unique, path)
+	}
+	sort.Strings(unique)
+	lines := make([]string, 0, len(unique))
+	for _, path := range unique {
+		lines = append(lines, "- `"+sanitizePublicText(path)+"`")
+	}
+	if len(lines) == 0 {
+		return "- none"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func buildRoundArtifactIndex(runRoot string, summaries []string) string {
+	if len(summaries) == 0 {
+		return "- none"
+	}
+	sections := make([]string, 0, len(summaries))
+	for _, summaryPath := range summaries {
+		roundDir := filepath.Dir(summaryPath)
+		roundLabel := filepath.Base(roundDir)
+		lines := []string{roundLabel + ":"}
+
+		artifactPaths := []string{
+			filepath.Join(roundDir, "round-triage.md"),
+			filepath.Join(roundDir, "round-plan.md"),
+			filepath.Join(roundDir, "round-verification.md"),
+			filepath.Join(roundDir, "round-summary.md"),
+			filepath.Join(roundDir, "round-status.json"),
+		}
+		reviewPaths, _ := filepath.Glob(filepath.Join(roundDir, "review-*.md"))
+		sort.Strings(reviewPaths)
+		artifactPaths = append(reviewPaths, artifactPaths...)
+
+		for _, path := range artifactPaths {
+			if _, err := os.Stat(path); err != nil {
+				continue
+			}
+			rel := path
+			if r, err := filepath.Rel(runRoot, path); err == nil {
+				rel = r
+			}
+			lines = append(lines, "- "+filepath.ToSlash(rel))
+		}
+		sections = append(sections, strings.Join(lines, "\n"))
+	}
+	return strings.Join(sections, "\n\n")
 }
 
 func (o *Orchestrator) buildPRBody(defaultBranch, candidateBranch string, summaries, changedFiles []string) string {

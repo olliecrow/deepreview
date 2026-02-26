@@ -42,6 +42,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
 - final delivery push is allowed only after round execution completes and no blocking verification failures are reported.
 - default delivery mode is `pr` and must not push source branch directly.
+- in `pr` mode, deepreview creates the PR with deterministic artifact-backed body content, then runs one fresh codex prompt to generate a top summary and updates the PR description by prepending that summary.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
@@ -105,16 +106,19 @@ Cleanup policy:
 
 ## PR body contract (default PR mode)
 PR bodies should include these sections:
+- codex-generated top summary (high-level narrative of what happened, why it mattered, and final status)
 - round summary
 - key fixes
 - verification evidence
 - residual risks
+- detailed per-round review and execute artifacts
 
 ## Prompt-template contract
 - Prompt templates are file-based and unversioned in v1.
 - Prompt root directory is `prompts/`.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
+- PR mode uses one post-delivery description-enhancement template: `prompts/delivery/pr-description-summary.md`.
 - Default execute queue order:
   - `01-consolidate-reviews.md`
   - `02-plan.md`

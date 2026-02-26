@@ -291,11 +291,23 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); err != nil {
 		t.Fatalf("pr-body.md missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(runDir, "pr-body.base.md")); err != nil {
+		t.Fatalf("pr-body.base.md missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "pr-top-summary.md")); err != nil {
+		t.Fatalf("pr-top-summary.md missing: %v", err)
+	}
 	prBodyBytes, err := os.ReadFile(filepath.Join(runDir, "pr-body.md"))
 	if err != nil {
 		t.Fatalf("missing pr-body.md: %v", err)
 	}
 	prBody := string(prBodyBytes)
+	if !strings.HasPrefix(strings.TrimSpace(prBody), "# summary") {
+		t.Fatalf("pr body should be prepended with codex summary section, got:\n%s", prBody)
+	}
+	if !strings.Contains(prBody, "\n\n---\n\n## at a glance\n") {
+		t.Fatalf("pr body should preserve deterministic detail section under separator")
+	}
 	if strings.Contains(prBody, "/Users/") {
 		t.Fatalf("pr body must not contain local absolute user paths")
 	}
