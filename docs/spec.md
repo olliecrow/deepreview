@@ -20,7 +20,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview must not operate in the user's own active checkout.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
 - inferred source branch requires local readiness checks: no tracked local changes and exact local/upstream synchronization.
-- v1 keeps orchestration simple: no automatic retry/backoff/self-healing loops for failed stages.
+- deepreview keeps orchestration simple: no automatic retry/backoff/self-healing loops for failed stages.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - round loop runs up to `--max-rounds` (default `5`) and may stop early.
 - independent reviews run in independent worktrees.
@@ -29,7 +29,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - independent-review reports prioritize critical/high issues first; they may include a small optional section of obvious non-blocking improvements only when high-confidence, low-risk, and non-behavior-changing.
 - independent review completion waits for all workers in that round.
 - each execute pass runs in a fresh worktree.
-- independent-review workers use one shared independent-review prompt template in v1.
+- independent-review workers use one shared independent-review prompt template.
 - each execute pass runs an ordered multi-prompt queue in one Codex chat context.
 - execute prompt-1 (consolidate reviews) treats independent reviews as inputs, not gospel, and only accepts high-conviction items after independent validation.
 - execute prompt-2 (plan) must produce an end-to-end, execution-ready plan and defer low-confidence items.
@@ -121,7 +121,7 @@ PR bodies should include these sections:
 - detailed per-round review and execute artifacts
 
 ## Prompt-template contract
-- Prompt templates are file-based and unversioned in v1.
+- Prompt templates are file-based and unversioned.
 - Prompt root directory is `prompts/`.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
@@ -139,7 +139,7 @@ PR bodies should include these sections:
 ## Codex autonomy contract
 - codex is the primary reasoning engine for review/execute decisions.
 - codex is allowed to inspect git history and recent commits/PR context when useful.
-- deepreview should avoid over-hardcoding repo-specific heuristics in v1.
+- deepreview should avoid over-hardcoding repo-specific heuristics.
 
 ## Related docs
 - pipeline and stage flow details: [architecture.md](architecture.md)

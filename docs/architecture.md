@@ -72,7 +72,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - verification and secret-hygiene checks gate final delivery.
 - verification execution is codex-led (tests, pre-commit checks, locally runnable CI-like checks when available) with explicit evidence in round/final summaries.
 
-## Simplicity model (v1)
+## Simplicity model
 - no automatic retry/backoff/self-healing loops.
 - fail fast on failed stages, then report clearly.
 - prioritize straightforward control flow over production-hardening complexity.

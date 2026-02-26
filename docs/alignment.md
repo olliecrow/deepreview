@@ -28,7 +28,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-15 | Optional `yolo` mode may commit/push directly to original source branch. | `docs/spec.md`, `docs/architecture.md` |
 | R-16 | Use local Codex CLI session/subscription; do not require repository-stored API keys for core flow. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-17 | Reuse compatible patterns internally but do not reference external inspiration projects in committed deepreview artifacts. | `docs/spec.md`, `AGENTS.md`, `docs/decisions.md` |
-| R-18 | Keep v1 simple; no automatic retry mechanisms/backoff/self-healing orchestration. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
+| R-18 | Keep orchestration simple; no automatic retry mechanisms/backoff/self-healing orchestration. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-19 | Run iterative deepreview loops with configurable max rounds (default 5). | `docs/spec.md`, `docs/architecture.md` |
 | R-20 | Codex is trusted as the main judge and may stop early via round status flag file. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-21 | Do not push in intermediate rounds; perform one push only at final delivery step. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
@@ -43,8 +43,8 @@ This document maps the user-provided project description to canonical requiremen
 | R-30 | Default PR body includes sections: round summary, key fixes, verification evidence, residual risks. | `docs/spec.md`, `docs/decisions.md` |
 | R-31 | Verification execution is codex-led; codex should run available tests/pre-commit/local CI checks and report outcomes. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-32 | Round stop-flag file uses a strict schema with enum decision values and deterministic run-artifact path. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
-| R-33 | Prompt templates are file-based and unversioned in v1. | `docs/spec.md`, `docs/decisions.md` |
-| R-34 | Independent review stage uses one shared prompt template for all independent reviewers in v1. | `docs/spec.md`, `docs/architecture.md`, `prompts/review/independent-review.md` |
+| R-33 | Prompt templates are file-based and unversioned. | `docs/spec.md`, `docs/decisions.md` |
+| R-34 | Independent review stage uses one shared prompt template for all independent reviewers. | `docs/spec.md`, `docs/architecture.md`, `prompts/review/independent-review.md` |
 | R-35 | Execute stage runs an ordered prompt queue sequentially in one Codex chat context, with independent review content injected into prompt context. | `docs/spec.md`, `docs/architecture.md`, `prompts/execute/queue.txt`, `prompts/execute/01-consolidate-reviews.md`, `prompts/execute/02-plan.md`, `prompts/execute/03-execute-verify.md`, `prompts/execute/04-cleanup-summary-commit.md` |
 | R-36 | Consolidate stage treats independent reviews as inputs (not gospel), performs independent validation, and only advances high-conviction accepted items. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `prompts/execute/01-consolidate-reviews.md` |
 | R-37 | Plan stage must produce an end-to-end executable plan, defer low-confidence items, and include explicit docs/decision updates and verification matrix. | `docs/spec.md`, `prompts/execute/02-plan.md`, `prompts/README.md` |

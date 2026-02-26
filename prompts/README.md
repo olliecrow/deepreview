@@ -1,6 +1,6 @@
 # Prompt Templates
 
-This directory contains file-based, unversioned prompt templates for deepreview v1.
+This directory contains file-based, unversioned prompt templates for deepreview.
 
 ## Goals
 - Keep prompt behavior explicit, editable, and deterministic.
