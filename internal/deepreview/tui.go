@@ -98,6 +98,7 @@ const (
 	ansiReset            = "\x1b[0m"
 	viewportRightGutter  = 6
 	timelineSafetyGutter = 2
+	sideBySidePanelGap   = 2
 	defaultContentWidth  = 72
 )
 
@@ -372,15 +373,23 @@ func (m tuiModel) View() string {
 
 	if contentWidth >= 110 {
 		metaLines, summaryLines = equalizeLineCounts(metaLines, summaryLines)
-		leftW := clamp((contentWidth-1)*62/100, 52, contentWidth-34)
-		rightW := contentWidth - 1 - leftW
+		available := contentWidth - sideBySidePanelGap
+		if available < 1 {
+			available = 1
+		}
+		leftW := clamp(available*62/100, 52, available-34)
+		rightW := available - leftW
 		if rightW < 32 {
 			rightW = 32
-			leftW = contentWidth - 1 - rightW
+			leftW = available - rightW
+		}
+		if leftW < 1 {
+			leftW = 1
+			rightW = available - leftW
 		}
 		contextBox := renderPanel(borderStyle, "run context", metaLines, leftW)
 		summaryBox := renderPanel(summaryBorderStyle, "live summary", summaryLines, rightW)
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, valueStyle.Render(contextBox), " ", valueStyle.Render(summaryBox)))
+		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, valueStyle.Render(contextBox), strings.Repeat(" ", sideBySidePanelGap), valueStyle.Render(summaryBox)))
 	} else {
 		contextBox := renderPanel(borderStyle, "run context", metaLines, contentWidth)
 		summaryBox := renderPanel(summaryBorderStyle, "live summary", summaryLines, contentWidth)
