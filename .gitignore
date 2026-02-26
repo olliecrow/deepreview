@@ -1,3 +1,17 @@
 plan/
 bin/
 /deepreview
+
+# Local/private artifacts
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.log
+tmp/
+temp/
+.claude/
+.codex/
