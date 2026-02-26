@@ -3,147 +3,108 @@
 <img width="1258" height="622" alt="Screenshot 2026-02-25 at 23 07 17" src="https://github.com/user-attachments/assets/f8441f56-159f-410f-a3fc-0b0bd9c30504" />
 
 
-deepreview is a local CLI that performs deep branch reviews using parallel Codex independent reviews and iterative execute rounds, then delivers one final result to GitHub.
+deepreview is a local CLI for deep branch reviews.
+It runs parallel Codex reviews, consolidates them, executes fixes, verifies outcomes, and keeps looping until the execute phase makes no code changes.
 
-## What deepreview does
-- Reviews a specific source branch against the repository default branch context.
-- Runs independent reviews concurrently in isolated worktrees.
-- Consolidates findings in execute rounds and applies verified fixes locally.
-- Runs a staged execute prompt queue (consolidate reviews, plan, execute/verify, cleanup/summary/finalize) in one Codex context per round.
-- Repeats review/execute for bounded rounds (default `5`) with change-driven early stop.
-- Round progression rule: if execute phase makes repository changes, deepreview must run at least one additional review round before delivery.
-- Stop rule: if execute phase produces no repository changes, deepreview stops the round loop.
-- If `--max-rounds` is too low to allow that post-change review round, deepreview fails with a clear error.
-- Pushes exactly once at final delivery:
-  - default: opens a PR into the original source branch
-  - `yolo` mode: pushes directly to the original source branch
+## What this project is trying to achieve
 
-## Key capabilities
-- Managed workspace isolation (`~/deepreview`) so user checkouts are untouched.
-- Optional repo/branch inference from current directory when run inside a valid GitHub repo.
-- Local branch-readiness validation for inferred source branch:
-  - no tracked local changes
-  - local branch synchronized with upstream remote branch
-- Fresh worktrees per independent review/execute stage to reduce stale context carryover.
-- Fresh managed clone replacement each run to avoid stale repository/worktree state.
-- Configurable independent review concurrency (default `4`).
-- Configurable max rounds (default `5`).
-- Full-screen terminal UI is available via explicit `--tui` opt-in.
-  - TUI is non-interactive and passively streams live run state.
-  - TUI uses structured panels (`run context`, `live summary`, `stage timeline`, `status`) for clearer live progress.
-  - On wide terminals, context and summary are shown side-by-side.
-  - Stage marker legend is shown in-footer (`> active`, `+ done`, `x failed`, `~ running`).
-  - TUI has a compact mode for very small terminal sizes.
-- Default progress output uses structured text logs with elapsed timings.
-- Prints an explicit completion summary after run exit (including PR URL in `pr` mode or commits URL in `yolo` mode).
-- Aggressive cleanup of stale worktrees/transient artifacts.
-- Codex-first decision flow with codex-led verification.
-- In `yolo` mode, default-branch direct-push permission is preflight-checked before rounds.
-- Codex execution is pinned to `gpt-5.3-codex` with `model_reasoning_effort=xhigh` for all review/execute prompts.
-- Internal deepreview operational artifacts are never delivered into repository diffs (`.deepreview/*` is blocked from commit/push/PR delivery).
-- PR body is generated from per-round review/execute artifacts with sanitization for local system paths and secret-like patterns.
-- Parallel runs are supported across different repositories.
-- Same-repo runs are serialized with a per-repo run lock (a second concurrent run for the same repo is rejected).
+Give you a reliable review loop that finds issues, applies fixes safely, and delivers one final result to GitHub.
 
-## Requirements
-- Go 1.26+
+## What you experience as a user
+
+1. You run deepreview for a repository and source branch.
+2. It launches several independent review workers in parallel.
+3. Each worker writes a review markdown report.
+4. The execute stage combines reports, plans changes, applies fixes, and verifies results.
+5. It runs cleanup, summary, and commit steps in an isolated managed workspace.
+6. If execute changed code, deepreview runs another review round.
+7. If execute made no code changes, deepreview stops the loop.
+8. In default mode, it opens one pull request back into your source branch.
+9. In yolo mode, it pushes directly to your source branch.
+
+## Safety and isolation
+
+- Review and execute work happen under `~/deepreview`, not in your local checkout.
+- Default mode works on a delivery branch and opens a pull request.
+- Your current branch and working directory stay untouched in default mode.
+- yolo mode is available, and it is off by default.
+- Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
+
+## Quick start
+
+1. Make sure tools are installed and authenticated.
+
 - `git`
-- `codex` CLI authenticated locally
-- `gh` CLI authenticated locally (required for default PR mode)
+- `codex`
+- `gh`, required for default pull request mode
 
-## Managed directories
-- Workspace root: `~/deepreview`
-- Managed repo clones: `~/deepreview/repos/<owner>/<repo>/`
-- Run artifacts/logs: `~/deepreview/runs/<run-id>/`
+2. Build deepreview.
 
-## Quickstart
-1. Ensure local tools are available and authenticated (`git`, `codex`, `gh`).
-2. Build deepreview:
 ```bash
 go build -o ./bin/deepreview ./cmd/deepreview
 ```
-3. Run deepreview:
+
+3. Run deepreview from inside a GitHub repo checkout.
+
 ```bash
 ./bin/deepreview review
 ```
-   - If run from a valid GitHub repo checkout, deepreview infers `<repo>` and `--source-branch` from current context.
-   - If inferred source branch is used, deepreview requires:
-     - no tracked local changes
-     - local branch synchronized with upstream remote branch
-4. Optional explicit target repo + source branch:
+
+4. Optional explicit target repo and source branch.
+
 ```bash
 ./bin/deepreview review <repo> --source-branch <branch>
 ```
-   - If `<repo>` is a local path, it must have `remote.origin.url` configured.
-   - deepreview always clones/fetches into its managed workspace and does not run review work in your local repo directory.
-5. Optional controls:
+
+## Useful options
+
 ```bash
 ./bin/deepreview review <repo> --source-branch <branch> --concurrency 4 --max-rounds 5
-```
-6. Optional direct-push mode:
-```bash
 ./bin/deepreview review <repo> --source-branch <branch> --mode yolo
-# equivalent:
-./bin/deepreview review <repo> --source-branch <branch> --yolo
-```
-7. Optional non-interactive/plain mode:
-```bash
-./bin/deepreview review <repo> --source-branch <branch> --no-tui
-```
-8. Optional full-screen TUI mode:
-```bash
 ./bin/deepreview review <repo> --source-branch <branch> --tui
+./bin/deepreview review <repo> --source-branch <branch> --no-tui
 ```
 
 ## Optional shell alias
-If you run deepreview often, adding a shell alias can speed up usage.
 
-Example alias (short command `dr`):
+If you run deepreview often, an alias can speed things up.
+
 ```bash
-alias dr="/absolute/path/to/deepreview/bin/deepreview"
+alias dr="/path/to/deepreview/bin/deepreview"
 ```
 
-Add it permanently:
-- `zsh`:
-```bash
-echo 'alias dr="/absolute/path/to/deepreview/bin/deepreview"' >> ~/.zshrc
-source ~/.zshrc
-```
-- `bash`:
-```bash
-echo 'alias dr="/absolute/path/to/deepreview/bin/deepreview"' >> ~/.bashrc
-source ~/.bashrc
-```
+Then run.
 
-After that, run:
 ```bash
 dr review
 ```
 
-## Command summary (v1 contract)
+## Command summary
+
 - `deepreview review [<repo>] [--source-branch <branch>]`
-- `deepreview --help` (top-level help)
-- `deepreview review --help` (detailed command help, flags, env overrides, troubleshooting)
-- Inference defaults:
-  - if `<repo>` is omitted and cwd is a valid GitHub repo, deepreview uses cwd repo
-  - if `--source-branch` is omitted, deepreview uses current branch from local repo context
-- Common options:
-  - `--concurrency <n>`
-  - `--max-rounds <n>`
-  - `--mode <pr|yolo>` (case-insensitive values)
-  - `--yolo` (legacy `--YOLO` also accepted)
-  - `--tui`
-  - `--no-tui`
+- `deepreview --help`
+- `deepreview review --help`
+
+Common options.
+
+- `--concurrency <n>`
+- `--max-rounds <n>`
+- `--mode <pr|yolo>`
+- `--yolo`
+- `--tui`
+- `--no-tui`
 
 ## Delivery conventions
-- Delivery branch prefix: `deepreview/`
-- PR title prefix: `deepreview:`
 
-## Documentation Map
+- Delivery branch prefix: `deepreview/`
+- Pull request title prefix: `deepreview:`
+
+## Documentation map
+
 - [AGENTS.md](AGENTS.md): repository operating instructions and agent constraints
-- [docs/spec.md](docs/spec.md): canonical runtime/product contract
+- [docs/spec.md](docs/spec.md): canonical runtime and product behavior
 - [docs/architecture.md](docs/architecture.md): pipeline and isolation model
-- [docs/workflows.md](docs/workflows.md): execution and note-routing conventions
+- [docs/workflows.md](docs/workflows.md): execution and note routing conventions
 - [docs/decisions.md](docs/decisions.md): durable decision rationale
 - [docs/alignment.md](docs/alignment.md): requirement traceability baseline
 - [prompts/README.md](prompts/README.md): prompt template pack and execute queue
