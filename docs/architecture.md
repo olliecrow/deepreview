@@ -70,6 +70,8 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - `yolo` mode is explicit opt-in.
 - no pushes occur during intermediate rounds.
 - verification and secret-hygiene checks gate final delivery.
+- privacy guardrails are enforced on delivery/public surfaces (PR title/body, delivery summaries, delivery commit messages, and changed files).
+- local terminal progress/error output is intentionally literal and unredacted for operator debugging.
 - verification execution is codex-led (tests, pre-commit checks, locally runnable CI-like checks when available) with explicit evidence in round/final summaries.
 
 ## Simplicity model
