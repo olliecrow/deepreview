@@ -410,7 +410,7 @@ func runReviewCommand(args []string) int {
 			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 			return 130
 		}
-		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", sanitizePublicText(err.Error()))
 		return 1
 	}
 
@@ -436,7 +436,7 @@ func runReviewCommand(args []string) int {
 
 	orchestrator, err := NewOrchestrator(parsed.Config, reporter)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", sanitizePublicText(err.Error()))
 		return 1
 	}
 
@@ -450,7 +450,7 @@ func runReviewCommand(args []string) int {
 			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 			return 130
 		}
-		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", sanitizePublicText(err.Error()))
 		return 1
 	}
 	if interruptCount.Load() > 0 {
@@ -478,21 +478,21 @@ func runDoctorCommand(args []string) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", sanitizePublicText(err.Error()))
 		return 1
 	}
 	orchestrator, err := NewOrchestrator(parsed.Config, &NullProgressReporter{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", sanitizePublicText(err.Error()))
 		return 1
 	}
 
 	checks := buildDoctorChecks(orchestrator)
 	fmt.Fprintf(os.Stdout, "deepreview doctor\n")
-	fmt.Fprintf(os.Stdout, "repo: %s\n", orchestrator.repoIdentity.Slug())
-	fmt.Fprintf(os.Stdout, "source branch: %s\n", parsed.Config.SourceBranch)
-	fmt.Fprintf(os.Stdout, "mode: %s\n", parsed.Config.Mode)
-	fmt.Fprintf(os.Stdout, "workspace root: %s\n\n", orchestrator.workspaceRoot)
+	fmt.Fprintf(os.Stdout, "repo: %s\n", sanitizePublicText(orchestrator.repoIdentity.Slug()))
+	fmt.Fprintf(os.Stdout, "source branch: %s\n", sanitizePublicText(parsed.Config.SourceBranch))
+	fmt.Fprintf(os.Stdout, "mode: %s\n", sanitizePublicText(parsed.Config.Mode))
+	fmt.Fprintf(os.Stdout, "workspace root: %s\n\n", sanitizePublicText(orchestrator.workspaceRoot))
 
 	passedAll := true
 	for _, check := range checks {
@@ -503,7 +503,7 @@ func runDoctorCommand(args []string) int {
 		}
 		fmt.Fprintf(os.Stdout, "[%s] %s", state, check.Name)
 		if strings.TrimSpace(check.Detail) != "" {
-			fmt.Fprintf(os.Stdout, " - %s", check.Detail)
+			fmt.Fprintf(os.Stdout, " - %s", sanitizePublicText(check.Detail))
 		}
 		fmt.Fprintln(os.Stdout)
 	}
@@ -667,12 +667,12 @@ func runDryRunCommand(args []string) int {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
 		}
-		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", sanitizePublicText(err.Error()))
 		return 1
 	}
 	orchestrator, err := NewOrchestrator(parsed.Config, &NullProgressReporter{})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", sanitizePublicText(err.Error()))
 		return 1
 	}
 	printDryRunPlan(os.Stdout, orchestrator)
@@ -682,13 +682,13 @@ func runDryRunCommand(args []string) int {
 func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	cfg := o.config
 	fmt.Fprintln(out, "deepreview dry-run")
-	fmt.Fprintf(out, "repo: %s\n", o.repoIdentity.Slug())
-	fmt.Fprintf(out, "source branch: %s\n", cfg.SourceBranch)
-	fmt.Fprintf(out, "mode: %s\n", cfg.Mode)
+	fmt.Fprintf(out, "repo: %s\n", sanitizePublicText(o.repoIdentity.Slug()))
+	fmt.Fprintf(out, "source branch: %s\n", sanitizePublicText(cfg.SourceBranch))
+	fmt.Fprintf(out, "mode: %s\n", sanitizePublicText(cfg.Mode))
 	fmt.Fprintf(out, "concurrency: %d\n", cfg.Concurrency)
 	fmt.Fprintf(out, "max rounds: %d\n", cfg.MaxRounds)
-	fmt.Fprintf(out, "workspace root: %s\n", o.workspaceRoot)
-	fmt.Fprintf(out, "managed repo path: %s\n\n", o.managedRepoPath)
+	fmt.Fprintf(out, "workspace root: %s\n", sanitizePublicText(o.workspaceRoot))
+	fmt.Fprintf(out, "managed repo path: %s\n\n", sanitizePublicText(o.managedRepoPath))
 
 	fmt.Fprintln(out, "planned order:")
 	fmt.Fprintln(out, "1. preflight checks")
@@ -775,16 +775,16 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 
 	_, _ = fmt.Fprintf(os.Stdout, "deepreview completed: run `%s`\n", config.RunID)
 	if repoSlug != "" {
-		_, _ = fmt.Fprintf(os.Stdout, "repository reviewed: `%s`\n", repoSlug)
+		_, _ = fmt.Fprintf(os.Stdout, "repository reviewed: `%s`\n", sanitizePublicText(repoSlug))
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "source branch reviewed: `%s`\n", config.SourceBranch)
+	_, _ = fmt.Fprintf(os.Stdout, "source branch reviewed: `%s`\n", sanitizePublicText(config.SourceBranch))
 	if managedRepoPath != "" {
-		_, _ = fmt.Fprintf(os.Stdout, "reviewed directory: %s\n", managedRepoPath)
+		_, _ = fmt.Fprintf(os.Stdout, "reviewed directory: %s\n", sanitizePublicText(managedRepoPath))
 	}
 	if isLocalDirectory(config.Repo) {
-		_, _ = fmt.Fprintf(os.Stdout, "requested local repo: %s\n", config.Repo)
+		_, _ = fmt.Fprintf(os.Stdout, "requested local repo: %s\n", sanitizePublicText(config.Repo))
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "delivery mode: `%s`\n", config.Mode)
+	_, _ = fmt.Fprintf(os.Stdout, "delivery mode: `%s`\n", sanitizePublicText(config.Mode))
 	if reviewSnapshot.CompletedRounds > 0 {
 		_, _ = fmt.Fprintf(os.Stdout, "review rounds completed: %d\n", reviewSnapshot.CompletedRounds)
 	}
@@ -795,35 +795,35 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 		}
 	}
 	if delivery == nil {
-		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
-		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
+		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", sanitizePublicText(runRoot))
+		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", sanitizePublicText(filepath.Join(runRoot, "final-summary.md")))
 		return
 	}
 
 	if delivery.Skipped {
-		_, _ = fmt.Fprintf(os.Stdout, "delivery skipped: %s\n", delivery.SkipReason)
+		_, _ = fmt.Fprintf(os.Stdout, "delivery skipped: %s\n", sanitizePublicText(delivery.SkipReason))
 		_, _ = fmt.Fprintf(os.Stdout, "no push or PR was created because no deliverable repository changes were found.\n")
-		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
-		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
+		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", sanitizePublicText(runRoot))
+		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", sanitizePublicText(filepath.Join(runRoot, "final-summary.md")))
 		return
 	}
 
 	switch delivery.Mode {
 	case ModePR:
 		if strings.TrimSpace(delivery.PRURL) != "" {
-			_, _ = fmt.Fprintf(os.Stdout, "PR created: %s\n", delivery.PRURL)
+			_, _ = fmt.Fprintf(os.Stdout, "PR created: %s\n", sanitizePublicText(delivery.PRURL))
 		} else {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery completed in PR mode.\n")
 		}
 	case ModeYolo:
 		if strings.TrimSpace(delivery.CommitsURL) != "" {
-			_, _ = fmt.Fprintf(os.Stdout, "changes pushed: %s\n", delivery.CommitsURL)
+			_, _ = fmt.Fprintf(os.Stdout, "changes pushed: %s\n", sanitizePublicText(delivery.CommitsURL))
 		} else {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery completed in YOLO mode.\n")
 		}
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
-	_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
+	_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", sanitizePublicText(runRoot))
+	_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", sanitizePublicText(filepath.Join(runRoot, "final-summary.md")))
 }
 
 type completionReviewSnapshot struct {
