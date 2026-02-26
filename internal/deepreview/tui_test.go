@@ -429,6 +429,24 @@ func TestTUIViewRespectsHeightAcrossRange(t *testing.T) {
 	}
 }
 
+func TestTUIViewUsesFixedFrameShapeAcrossRange(t *testing.T) {
+	for width := 2; width <= 200; width++ {
+		for _, height := range []int{1, 2, 4, 8, 10, 12, 14, 16, 18, 20, 24, 30, 40, 60} {
+			model := seededTUIModelForViewTests(width, height)
+			view := model.View()
+			lines := strings.Split(view, "\n")
+			if len(lines) != height {
+				t.Fatalf("width=%d height=%d expected %d lines, got %d", width, height, height, len(lines))
+			}
+			for i, line := range lines {
+				if got := lipgloss.Width(line); got != width-1 {
+					t.Fatalf("width=%d height=%d line=%d expected width=%d, got=%d", width, height, i+1, width-1, got)
+				}
+			}
+		}
+	}
+}
+
 func TestTUIViewRespectsHeightUnderRandomizedInputs(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	for iter := 0; iter < 250; iter++ {

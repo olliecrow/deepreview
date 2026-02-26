@@ -57,7 +57,8 @@ This document defines the canonical runtime and product contract for `deepreview
   - `--max-rounds <n>` default `5`
   - `--mode <pr|yolo>` default `pr` (case-insensitive value parsing)
   - `--yolo` alias for `--mode yolo` (legacy `--YOLO` accepted)
-  - `--no-tui` disable terminal UI
+  - `--tui` enable full-screen terminal UI (opt-in)
+  - `--no-tui` force structured text progress logs
 
 ## Round status artifact contract
 - Status file path: `~/deepreview/runs/<run-id>/round-<round>/round-status.json`
