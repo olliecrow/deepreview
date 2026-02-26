@@ -93,11 +93,12 @@ var (
 )
 
 const (
-	passiveDisplayLine  = "display: passive live stream (auto-refresh 100ms)"
-	stageLegendLine     = "legend: > active, + done, x failed, ~ running"
-	ansiReset           = "\x1b[0m"
-	viewportRightGutter = 1
-	defaultContentWidth = 72
+	passiveDisplayLine   = "display: passive live stream (auto-refresh 100ms)"
+	stageLegendLine      = "legend: > active, + done, x failed, ~ running"
+	ansiReset            = "\x1b[0m"
+	viewportRightGutter  = 6
+	timelineSafetyGutter = 2
+	defaultContentWidth  = 72
 )
 
 func chip(style lipgloss.Style, text string) string {
@@ -162,6 +163,24 @@ func renderPanel(style lipgloss.Style, title string, bodyLines []string, totalWi
 		lines = append(lines, fit(line, inner))
 	}
 	return style.Width(widthWithoutBorder).Render(strings.Join(lines, "\n"))
+}
+
+func equalizeLineCounts(left, right []string) ([]string, []string) {
+	if len(left) == len(right) {
+		return left, right
+	}
+	if len(left) < len(right) {
+		padded := append([]string{}, left...)
+		for len(padded) < len(right) {
+			padded = append(padded, "")
+		}
+		return padded, right
+	}
+	padded := append([]string{}, right...)
+	for len(padded) < len(left) {
+		padded = append(padded, "")
+	}
+	return left, padded
 }
 
 func timelineColumns(innerWidth int) (int, int, int, int) {
@@ -290,7 +309,7 @@ func (m tuiModel) View() string {
 	if m.width > 0 && contentWidth < 28 {
 		compactTitle := fit(fmt.Sprintf("deepreview %s %s", spinner, fmtDuration(elapsed)), contentWidth)
 		latest := fit("latest: "+latestStageLine(snapshot), contentWidth)
-		return clampViewHeight(strings.Join([]string{compactTitle, latest}, "\n"), m.width, m.height)
+		return finalizeView(strings.Join([]string{compactTitle, latest}, "\n"), m.width, m.height)
 	}
 
 	lines := make([]string, 0, 12)
@@ -352,6 +371,7 @@ func (m tuiModel) View() string {
 	}
 
 	if contentWidth >= 110 {
+		metaLines, summaryLines = equalizeLineCounts(metaLines, summaryLines)
 		leftW := clamp((contentWidth-1)*62/100, 52, contentWidth-34)
 		rightW := contentWidth - 1 - leftW
 		if rightW < 32 {
@@ -384,10 +404,13 @@ func (m tuiModel) View() string {
 		}
 		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("stage timeline (compact %d/%d)", len(rows), len(snapshot.Stages)), compactLines, contentWidth))
 		lines = append(lines, renderStatusPanel(snapshot, contentWidth))
-		return clampViewHeight(strings.Join(lines, "\n\n"), m.width, m.height)
+		return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
 	}
 
-	tablePanelWidth := contentWidth
+	tablePanelWidth := contentWidth - timelineSafetyGutter
+	if tablePanelWidth < 28 {
+		tablePanelWidth = contentWidth
+	}
 	tableInner := panelInnerWidth(tableBorderStyle, tablePanelWidth)
 	stageCol, statusCol, timeCol, detailsCol := timelineColumns(tableInner)
 
@@ -432,7 +455,7 @@ func (m tuiModel) View() string {
 
 	lines = append(lines, renderStatusPanel(snapshot, contentWidth))
 
-	return clampViewHeight(strings.Join(lines, "\n\n"), m.width, m.height)
+	return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
 }
 
 func RunTUIWithWorker(state *SharedProgressState, initialWidth, initialHeight int, worker func() error) error {
@@ -498,6 +521,29 @@ func renderedRowsForView(view string, viewportWidth int) int {
 		rows += renderedRowsForLine(line, viewportWidth)
 	}
 	return rows
+}
+
+func clampViewWidth(view string, viewportWidth int) string {
+	if strings.TrimSpace(view) == "" || viewportWidth <= 0 {
+		return view
+	}
+	safeWidth := effectiveContentWidth(viewportWidth)
+	lines := strings.Split(view, "\n")
+	changed := false
+	for i, line := range lines {
+		if ansi.StringWidth(line) > safeWidth {
+			lines[i] = ansi.Truncate(line, safeWidth, "")
+			changed = true
+		}
+	}
+	if !changed {
+		return view
+	}
+	return strings.Join(lines, "\n")
+}
+
+func finalizeView(view string, viewportWidth, viewportHeight int) string {
+	return clampViewHeight(clampViewWidth(view, viewportWidth), viewportWidth, viewportHeight)
 }
 
 func clampViewHeight(view string, viewportWidth, viewportHeight int) string {

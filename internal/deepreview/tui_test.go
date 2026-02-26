@@ -266,14 +266,43 @@ func TestTUIViewLeavesRightEdgeGutterAcrossRange(t *testing.T) {
 }
 
 func TestEffectiveContentWidth(t *testing.T) {
-	if got := effectiveContentWidth(120); got != 119 {
-		t.Fatalf("expected 119 content width for viewport 120, got %d", got)
+	if got := effectiveContentWidth(120); got != 114 {
+		t.Fatalf("expected 114 content width for viewport 120, got %d", got)
 	}
 	if got := effectiveContentWidth(1); got != 1 {
 		t.Fatalf("expected minimum width 1, got %d", got)
 	}
 	if got := effectiveContentWidth(0); got != defaultContentWidth {
 		t.Fatalf("expected default width %d for unknown viewport, got %d", defaultContentWidth, got)
+	}
+}
+
+func TestNoBorderCollisionArtifactAcrossRange(t *testing.T) {
+	for width := 2; width <= 200; width++ {
+		for _, height := range []int{1, 2, 4, 8, 14, 40, 60} {
+			model := seededTUIModelForViewTests(width, height)
+			view := model.View()
+			if strings.Contains(view, "││") {
+				t.Fatalf("unexpected border collision artifact at width=%d height=%d", width, height)
+			}
+		}
+	}
+}
+
+func TestTopPanelsBottomBordersAlignWhenSideBySide(t *testing.T) {
+	model := seededTUIModelForViewTests(140, 40)
+	view := model.View()
+	foundAlignedBottom := false
+	for _, line := range strings.Split(view, "\n") {
+		first := strings.Index(line, "╰")
+		last := strings.LastIndex(line, "╰")
+		if first >= 0 && last > first && strings.Contains(line[first:], "╯") && strings.Contains(line[last:], "╯") {
+			foundAlignedBottom = true
+			break
+		}
+	}
+	if !foundAlignedBottom {
+		t.Fatalf("expected side-by-side top panels to have aligned bottom borders in one row")
 	}
 }
 
@@ -369,6 +398,19 @@ func TestRenderedRowsForView(t *testing.T) {
 	}, "\n")
 	if got := renderedRowsForView(view, 80); got != 3 {
 		t.Fatalf("expected 3 rendered rows, got %d", got)
+	}
+}
+
+func TestClampViewWidthUsesSafeGutter(t *testing.T) {
+	view := strings.Join([]string{
+		strings.Repeat("a", 200),
+		strings.Repeat("b", 200),
+	}, "\n")
+	out := clampViewWidth(view, 80)
+	for i, line := range strings.Split(out, "\n") {
+		if got := lipgloss.Width(line); got > effectiveContentWidth(80) {
+			t.Fatalf("line %d exceeds safe width after clamp: got=%d want<=%d", i+1, got, effectiveContentWidth(80))
+		}
 	}
 }
 
