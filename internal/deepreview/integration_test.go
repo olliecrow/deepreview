@@ -361,11 +361,20 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if !strings.Contains(prBody, "- key changed files:") {
 		t.Fatalf("pr body missing key changed files bullet")
 	}
-	if !strings.Contains(prBody, "### independent reviews") {
-		t.Fatalf("pr body missing independent reviews section")
+	if !strings.Contains(prBody, "## round decisions") {
+		t.Fatalf("pr body missing round decisions section")
 	}
-	if !strings.Contains(prBody, "### execute artifacts") {
-		t.Fatalf("pr body missing execute artifacts section")
+	if !strings.Contains(prBody, "## round summaries") {
+		t.Fatalf("pr body missing round summaries section")
+	}
+	if !strings.Contains(prBody, "## note") {
+		t.Fatalf("pr body missing note section")
+	}
+	if strings.Contains(prBody, "### independent reviews") {
+		t.Fatalf("pr body should not include embedded independent review details")
+	}
+	if strings.Contains(prBody, "### execute artifacts") {
+		t.Fatalf("pr body should not include embedded execute artifact dumps")
 	}
 	if strings.Contains(string(finalSummaryBytes), "/Users/") {
 		t.Fatalf("final summary must not contain local absolute user paths")

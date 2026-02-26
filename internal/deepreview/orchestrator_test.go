@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 func runGitTest(t *testing.T, cwd string, args ...string) string {
@@ -174,4 +175,37 @@ func TestAcquireRepoRunLockAllowsDifferentRepos(t *testing.T) {
 		t.Fatalf("second lock for different repo should succeed: %v", err)
 	}
 	defer second.releaseRepoRunLock()
+}
+
+func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {
+	td := t.TempDir()
+	roundDir := filepath.Join(td, "round-01")
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-summary.md"), []byte("summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-status.json"), []byte(`{"decision":"stop","reason":"complete","confidence":0.9}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
+	oversized := strings.Repeat("x", githubPRBodyTargetChars+4096)
+	out := o.capPRBodyForGitHub(oversized, []string{filepath.Join(roundDir, "round-summary.md")}, []string{"a.go", "b.go"})
+	if utf8.RuneCountInString(out) > githubPRBodyTargetChars {
+		t.Fatalf("expected capped pr body <= %d chars, got %d", githubPRBodyTargetChars, utf8.RuneCountInString(out))
+	}
+	if !strings.Contains(out, "compact body because the full body exceeded GitHub PR size limits") {
+		t.Fatalf("expected compact-body fallback marker, got:\n%s", out)
+	}
+}
+
+func TestCapPRBodyForGitHubKeepsNormalBody(t *testing.T) {
+	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
+	body := "## at a glance\n- short body\n"
+	out := o.capPRBodyForGitHub(body, nil, nil)
+	if out != body {
+		t.Fatalf("expected short body to remain unchanged")
+	}
 }
