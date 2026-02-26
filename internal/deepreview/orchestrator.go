@@ -55,6 +55,9 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	if config.CodexTimeout <= 0 {
 		config.CodexTimeout = time.Duration(config.CodexTimeoutSeconds) * time.Second
 	}
+	// Enforce globally pinned Codex settings regardless of caller-supplied config.
+	config.CodexModel = forcedCodexModel
+	config.CodexReasoning = forcedCodexReasoningEffort
 
 	return &Orchestrator{
 		config:          config,

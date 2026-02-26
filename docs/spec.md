@@ -47,6 +47,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
 - Codex auth should rely on local Codex CLI session/subscription, not repository-stored API keys.
+- all Codex prompt executions (new and resumed threads, including post-delivery prompts) must use `--model gpt-5.3-codex` and `model_reasoning_effort="xhigh"`.
 
 ## Runtime contract
 - command entrypoint: `deepreview`

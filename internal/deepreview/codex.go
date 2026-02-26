@@ -17,17 +17,14 @@ type CodexRunner struct {
 }
 
 func (c *CodexRunner) buildCommand(threadID *string) []string {
-	reasoningValue := c.Reasoning
-	if strings.TrimSpace(reasoningValue) == "" {
-		reasoningValue = "xhigh"
-	}
-	reasoningConfig := fmt.Sprintf("model_reasoning_effort=%q", reasoningValue)
+	// Hard-pin model and reasoning for every Codex invocation.
+	reasoningConfig := fmt.Sprintf("model_reasoning_effort=%q", forcedCodexReasoningEffort)
 	command := []string{c.CodexBin, "exec"}
 	if threadID != nil && *threadID != "" {
 		command = append(command, "resume", *threadID)
 	}
 	command = append(command,
-		"--model", c.CodexModel,
+		"--model", forcedCodexModel,
 		"-c", reasoningConfig,
 		"--full-auto", "--json", "-",
 	)
@@ -35,8 +32,8 @@ func (c *CodexRunner) buildCommand(threadID *string) []string {
 }
 
 func (c *CodexRunner) RunPrompt(cwd, prompt string, threadID *string, logPrefixPath string) (CodexRunResult, error) {
-	if strings.TrimSpace(c.CodexModel) == "" {
-		return CodexRunResult{}, NewDeepReviewError("codex model must be configured")
+	if strings.TrimSpace(c.CodexBin) == "" {
+		return CodexRunResult{}, NewDeepReviewError("codex binary must be configured")
 	}
 	command := c.buildCommand(threadID)
 

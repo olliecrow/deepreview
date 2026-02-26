@@ -44,3 +44,22 @@ func TestCodexRunnerBuildCommandResumeThread(t *testing.T) {
 		t.Fatalf("unexpected command:\n got: %#v\nwant: %#v", got, want)
 	}
 }
+
+func TestCodexRunnerBuildCommandForcesPinnedModelAndReasoning(t *testing.T) {
+	runner := CodexRunner{
+		CodexBin:   "codex",
+		CodexModel: "other-model",
+		Reasoning:  "low",
+	}
+	got := runner.buildCommand(nil)
+	want := []string{
+		"codex",
+		"exec",
+		"--model", "gpt-5.3-codex",
+		"-c", `model_reasoning_effort="xhigh"`,
+		"--full-auto", "--json", "-",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected command:\n got: %#v\nwant: %#v", got, want)
+	}
+}
