@@ -391,6 +391,10 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 }
 
 func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("interrupt signaling semantics differ on windows; covered by unix integration path")
+	}
+
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
