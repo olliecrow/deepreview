@@ -324,6 +324,19 @@ References:
 `docs/spec.md`
 
 Decision:
+In PR mode, run one fresh post-delivery Codex call to generate a comprehensive top summary and prepend it to the PR description, while preserving the deterministic detailed artifact body below.
+Context:
+The deterministic PR body already captures full per-round evidence, but users also want a clearer human narrative at the top that explains what happened and why.
+Rationale:
+Creating PRs first with deterministic body content preserves reliability; a dedicated post-creation summary pass improves readability without changing delivery commits or execution outcomes.
+Trade-offs:
+Adds one extra Codex call and one PR edit operation in PR mode; summary quality can vary with model performance.
+Enforcement:
+Delivery flow creates PR using deterministic body, runs dedicated delivery summary template in a fresh Codex context, prepends generated summary to `pr-body.md`, and updates PR description via `gh pr edit`.
+References:
+`internal/deepreview/orchestrator.go`, `prompts/delivery/pr-description-summary.md`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
 Use codex-led verification by default: codex should attempt available tests, pre-commit checks, and locally runnable CI-like checks, then report what ran and outcomes.
 Context:
 The project favors codex autonomy and a minimal CLI surface, while still requiring explicit verification evidence.

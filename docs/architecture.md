@@ -47,7 +47,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 4. Final delivery (single push point):
 - require completed round execution and no blocking verification failures
-- `pr` mode (default): create/push delivery branch, open PR into source branch with required sections
+- `pr` mode (default): create/push delivery branch, open PR into source branch with deterministic detailed artifact body, then run one fresh Codex post-delivery summary prompt and prepend that summary to the PR description via PR edit
 - `yolo` mode: push committed candidate state directly to source branch
 
 5. Finalization:
