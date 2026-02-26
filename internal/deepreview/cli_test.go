@@ -63,6 +63,12 @@ func TestParseReviewArgsDefaults(t *testing.T) {
 	if parsed.Config.CodexReasoning != forcedCodexReasoningEffort {
 		t.Fatalf("expected codex reasoning %s, got %s", forcedCodexReasoningEffort, parsed.Config.CodexReasoning)
 	}
+	if parsed.TUI {
+		t.Fatalf("expected --tui default to false")
+	}
+	if parsed.NoTUI {
+		t.Fatalf("expected --no-tui default to false")
+	}
 }
 
 func TestParseReviewArgsHelp(t *testing.T) {
@@ -119,29 +125,39 @@ func TestRunCLIHelpEntrypointsReturnZero(t *testing.T) {
 }
 
 func TestShouldEnableTUI(t *testing.T) {
-	if shouldEnableTUI(true, true, true, "xterm-256color", 120, 40, nil) {
+	if shouldEnableTUI(true, true, true, true, "xterm-256color", 120, 40, nil) {
 		t.Fatalf("expected false when --no-tui is set")
 	}
-	if shouldEnableTUI(false, false, true, "xterm-256color", 120, 40, nil) {
+	if shouldEnableTUI(false, false, true, true, "xterm-256color", 120, 40, nil) {
+		t.Fatalf("expected false when --tui is not requested")
+	}
+	if shouldEnableTUI(true, false, false, true, "xterm-256color", 120, 40, nil) {
 		t.Fatalf("expected false when stdin is not a terminal")
 	}
-	if shouldEnableTUI(false, true, false, "xterm-256color", 120, 40, nil) {
+	if shouldEnableTUI(true, false, true, false, "xterm-256color", 120, 40, nil) {
 		t.Fatalf("expected false when stdout is not a terminal")
 	}
-	if shouldEnableTUI(false, true, true, "dumb", 120, 40, nil) {
+	if shouldEnableTUI(true, false, true, true, "dumb", 120, 40, nil) {
 		t.Fatalf("expected false for TERM=dumb")
 	}
-	if shouldEnableTUI(false, true, true, "xterm-256color", 0, 40, nil) {
+	if shouldEnableTUI(true, false, true, true, "xterm-256color", 0, 40, nil) {
 		t.Fatalf("expected false for zero width")
 	}
-	if shouldEnableTUI(false, true, true, "xterm-256color", 120, 0, nil) {
+	if shouldEnableTUI(true, false, true, true, "xterm-256color", 120, 0, nil) {
 		t.Fatalf("expected false for zero height")
 	}
-	if shouldEnableTUI(false, true, true, "xterm-256color", 120, 40, errors.New("size unavailable")) {
+	if shouldEnableTUI(true, false, true, true, "xterm-256color", 120, 40, errors.New("size unavailable")) {
 		t.Fatalf("expected false for terminal size error")
 	}
-	if !shouldEnableTUI(false, true, true, "xterm-256color", 120, 40, nil) {
-		t.Fatalf("expected true for interactive non-dumb terminal with valid size")
+	if !shouldEnableTUI(true, false, true, true, "xterm-256color", 120, 40, nil) {
+		t.Fatalf("expected true when --tui is requested and terminal is valid")
+	}
+}
+
+func TestParseReviewArgsRejectsConflictingTUIFlags(t *testing.T) {
+	_, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature/test", "--tui", "--no-tui"}, time.Unix(1700000000, 0))
+	if err == nil {
+		t.Fatalf("expected conflict error for --tui + --no-tui")
 	}
 }
 

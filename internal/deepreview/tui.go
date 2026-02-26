@@ -19,7 +19,7 @@ type workerResultMsg struct {
 type tickMsg time.Time
 
 func tickCmd() tea.Cmd {
-	return tea.Tick(100*time.Millisecond, func(t time.Time) tea.Msg { return tickMsg(t) })
+	return tea.Tick(1*time.Second, func(t time.Time) tea.Msg { return tickMsg(t) })
 }
 
 func waitWorkerCmd(doneCh <-chan error) tea.Cmd {
@@ -93,7 +93,7 @@ var (
 )
 
 const (
-	passiveDisplayLine   = "display: passive live stream (auto-refresh 100ms)"
+	passiveDisplayLine   = "display: passive live stream (auto-refresh 1s)"
 	stageLegendLine      = "legend: > active, + done, x failed, ~ running"
 	ansiReset            = "\x1b[0m"
 	viewportRightGutter  = 6
@@ -552,7 +552,57 @@ func clampViewWidth(view string, viewportWidth int) string {
 }
 
 func finalizeView(view string, viewportWidth, viewportHeight int) string {
-	return clampViewHeight(clampViewWidth(view, viewportWidth), viewportWidth, viewportHeight)
+	return stabilizeFrame(clampViewHeight(clampViewWidth(view, viewportWidth), viewportWidth, viewportHeight), viewportWidth, viewportHeight)
+}
+
+func stabilizeFrame(view string, viewportWidth, viewportHeight int) string {
+	if viewportWidth > 0 && viewportWidth <= 1 {
+		return ""
+	}
+	if viewportWidth <= 0 {
+		return view
+	}
+	// Keep one column free to avoid terminal auto-wrap drift.
+	safeFrameWidth := viewportWidth - 1
+	if safeFrameWidth < 1 {
+		safeFrameWidth = 1
+	}
+	lines := []string{}
+	if view != "" {
+		lines = strings.Split(view, "\n")
+	}
+	if viewportHeight > 0 && len(lines) > viewportHeight {
+		lines = lines[:viewportHeight]
+	}
+	capHint := len(lines)
+	if viewportHeight > capHint {
+		capHint = viewportHeight
+	}
+	out := make([]string, 0, capHint)
+	for _, line := range lines {
+		out = append(out, padDisplayWidth(ansi.Truncate(line, safeFrameWidth, ""), safeFrameWidth))
+	}
+	if viewportHeight > 0 {
+		blank := strings.Repeat(" ", safeFrameWidth)
+		for len(out) < viewportHeight {
+			out = append(out, blank)
+		}
+	}
+	if len(out) == 0 {
+		return ""
+	}
+	return strings.Join(out, "\n")
+}
+
+func padDisplayWidth(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	displayWidth := ansi.StringWidth(text)
+	if displayWidth >= width {
+		return text
+	}
+	return text + strings.Repeat(" ", width-displayWidth)
 }
 
 func clampViewHeight(view string, viewportWidth, viewportHeight int) string {

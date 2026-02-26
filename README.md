@@ -28,13 +28,13 @@ deepreview is a local CLI that performs deep branch reviews using parallel Codex
 - Fresh managed clone replacement each run to avoid stale repository/worktree state.
 - Configurable independent review concurrency (default `4`).
 - Configurable max rounds (default `5`).
-- Auto-launches a full-screen terminal UI when running in an interactive terminal.
+- Full-screen terminal UI is available via explicit `--tui` opt-in.
   - TUI is non-interactive and passively streams live run state.
   - TUI uses structured panels (`run context`, `live summary`, `stage timeline`, `status`) for clearer live progress.
   - On wide terminals, context and summary are shown side-by-side.
   - Stage marker legend is shown in-footer (`> active`, `+ done`, `x failed`, `~ running`).
   - TUI has a compact mode for very small terminal sizes.
-- Non-interactive/`--no-tui` runs stream structured text progress logs with elapsed timings.
+- Default progress output uses structured text logs with elapsed timings.
 - Prints an explicit completion summary after run exit (including PR URL in `pr` mode or commits URL in `yolo` mode).
 - Aggressive cleanup of stale worktrees/transient artifacts.
 - Codex-first decision flow with codex-led verification.
@@ -90,6 +90,10 @@ go build -o ./bin/deepreview ./cmd/deepreview
 ```bash
 ./bin/deepreview review <repo> --source-branch <branch> --no-tui
 ```
+8. Optional full-screen TUI mode:
+```bash
+./bin/deepreview review <repo> --source-branch <branch> --tui
+```
 
 ## Optional shell alias
 If you run deepreview often, adding a shell alias can speed up usage.
@@ -128,6 +132,7 @@ dr review
   - `--max-rounds <n>`
   - `--mode <pr|yolo>` (case-insensitive values)
   - `--yolo` (legacy `--YOLO` also accepted)
+  - `--tui`
   - `--no-tui`
 
 ## Delivery conventions
