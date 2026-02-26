@@ -19,6 +19,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview operates only in managed workspace paths under `~/deepreview`.
 - deepreview must not operate in the user's own active checkout.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
+- when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
 - inferred source branch requires local readiness checks: no tracked local changes and exact local/upstream synchronization.
 - deepreview keeps orchestration simple: no automatic retry/backoff/self-healing loops for failed stages.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
@@ -57,6 +58,8 @@ This document defines the canonical runtime and product contract for `deepreview
 - minimum inputs:
   - none when running inside a valid local GitHub repo context
   - otherwise provide enough explicit context (`<repo>` and/or `--source-branch`) to resolve target repo + source branch
+- optional inference override:
+  - `DEEPREVIEW_CALLER_CWD` can be set by launch wrappers to preserve caller repo inference when the wrapper changes directories before invoking deepreview.
 - core options:
   - `--concurrency <n>` default `4`
   - `--max-rounds <n>` default `5`

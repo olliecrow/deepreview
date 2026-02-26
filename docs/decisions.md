@@ -480,6 +480,19 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/local_context.go`, `README.md`
 
 Decision:
+When wrappers launch deepreview from the source checkout (for example via `cd ... && go run`), treat caller repo context as authoritative for implicit repo/branch inference.
+Context:
+Shell wrappers that changed directory into the deepreview repo caused omitted `<repo>` inference to silently target `olliecrow/deepreview`, producing cross-repo lock collisions and runs against the wrong repository.
+Rationale:
+Inference must track operator intent, not launcher implementation details. Supporting explicit caller context (`DEEPREVIEW_CALLER_CWD`) and guarded `OLDPWD` fallback preserves default ergonomics while preventing wrong-repo runs in common wrapper setups.
+Trade-offs:
+Adds inference precedence logic and one wrapper-specific fallback path.
+Enforcement:
+`inferRepoAndBranch` now resolves implicit repo context using `DEEPREVIEW_CALLER_CWD` first, then `OLDPWD` only when current repo matches deepreview source root; targeted tests assert wrapper fallback, env override precedence, and non-source-root stability.
+References:
+`internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/cli.go`, `README.md`
+
+Decision:
 When source branch is inferred, require local branch readiness: no tracked local changes and exact local/upstream synchronization.
 Context:
 deepreview reviews remote branch state; inferred local context should match the remote state to avoid reviewing stale or partial work.
