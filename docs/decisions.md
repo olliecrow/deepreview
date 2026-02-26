@@ -272,6 +272,19 @@ References:
 `prompts/execute/01-consolidate-reviews.md`, `prompts/execute/02-plan.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
+Independent review outputs stay severity-first, but may include an optional non-blocking section for obvious low-risk no-brainer improvements.
+Context:
+Review quality is primarily judged on finding critical/high issues, but reviewers can also notice clear simplification/robustness/performance/memory wins during the same pass.
+Rationale:
+Capturing only obvious no-regret improvements increases practical value without diluting merge-blocker focus or encouraging speculative churn.
+Trade-offs:
+Adds minor report verbosity and introduces some reviewer judgment on what counts as "obvious"; requires clear guardrails.
+Enforcement:
+Independent-review prompt requires critical/high issues as primary output and limits optional improvements to high-confidence, low-risk, non-behavior-changing items.
+References:
+`prompts/review/independent-review.md`, `docs/spec.md`, `prompts/README.md`, `docs/alignment.md`
+
+Decision:
 Encourage local commits throughout execution; require changed work to be committed locally before round completion, with no empty commits.
 Context:
 Round-based progression should preserve progress safely while avoiding remote churn until final delivery.
