@@ -449,7 +449,7 @@ Providing a small optional alias pattern (`dr`) improves ergonomics without chan
 Trade-offs:
 Adds a small amount of shell-specific onboarding text to README.
 Enforcement:
-README includes optional alias setup examples for `zsh` and `bash`, plus example invocation using the alias.
+README includes optional alias setup guidance with an example invocation using the alias.
 References:
 `README.md`, `docs/alignment.md`
 
