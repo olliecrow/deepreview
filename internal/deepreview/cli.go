@@ -230,6 +230,10 @@ Environment overrides:
   DEEPREVIEW_WORKSPACE_ROOT   (default: ~/deepreview)
     Root for managed repos + run artifacts.
 
+  DEEPREVIEW_CALLER_CWD       (optional)
+    Explicit caller working directory for repo/branch inference when wrappers launch deepreview
+    from another directory.
+
   DEEPREVIEW_GIT_BIN          (default: git)
   DEEPREVIEW_CODEX_BIN        (default: codex)
   DEEPREVIEW_GH_BIN           (default: gh)

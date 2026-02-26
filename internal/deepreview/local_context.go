@@ -3,6 +3,7 @@ package deepreview
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -13,6 +14,80 @@ type LocalGitHubRepoState struct {
 	Owner         string
 	Name          string
 	CurrentBranch string
+}
+
+const deepreviewCallerCWDEnv = "DEEPREVIEW_CALLER_CWD"
+
+var detectDeepreviewSourceRoot = defaultDeepreviewSourceRoot
+
+func defaultDeepreviewSourceRoot() (string, bool) {
+	_, thisFile, _, ok := runtime.Caller(0)
+	if !ok {
+		return "", false
+	}
+	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
+	if st, err := os.Stat(filepath.Join(root, "prompts")); err != nil || !st.IsDir() {
+		return "", false
+	}
+	abs, err := filepath.Abs(root)
+	if err != nil {
+		return "", false
+	}
+	return abs, true
+}
+
+func samePath(a, b string) bool {
+	aAbs, errA := filepath.Abs(filepath.Clean(a))
+	bAbs, errB := filepath.Abs(filepath.Clean(b))
+	return errA == nil && errB == nil && aAbs == bAbs
+}
+
+func resolveImplicitRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
+	if state := resolveCallerCWDRepoState(gitBin, cwdState); state != nil {
+		return state
+	}
+	if state := resolveOldPWDRepoState(gitBin, cwdState); state != nil {
+		return state
+	}
+	return cwdState
+}
+
+func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
+	callerCWD := strings.TrimSpace(os.Getenv(deepreviewCallerCWDEnv))
+	if callerCWD == "" {
+		return nil
+	}
+	state, err := detectGitHubRepoState(gitBin, callerCWD)
+	if err != nil || state == nil {
+		return nil
+	}
+	if cwdState != nil && samePath(cwdState.Path, state.Path) {
+		return cwdState
+	}
+	return state
+}
+
+func resolveOldPWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
+	if cwdState == nil {
+		return nil
+	}
+	sourceRoot, ok := detectDeepreviewSourceRoot()
+	if !ok || !samePath(cwdState.Path, sourceRoot) {
+		return nil
+	}
+
+	oldpwd := strings.TrimSpace(os.Getenv("OLDPWD"))
+	if oldpwd == "" {
+		return nil
+	}
+	state, err := detectGitHubRepoState(gitBin, oldpwd)
+	if err != nil || state == nil {
+		return nil
+	}
+	if samePath(cwdState.Path, state.Path) {
+		return nil
+	}
+	return state
 }
 
 func detectGitHubRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
@@ -178,6 +253,7 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 	if err != nil {
 		return "", "", err
 	}
+	cwdState = resolveImplicitRepoState(gitBin, cwdState)
 
 	if strings.TrimSpace(repo) == "" {
 		if cwdState == nil {

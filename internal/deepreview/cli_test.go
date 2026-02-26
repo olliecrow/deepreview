@@ -99,6 +99,7 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"--max-rounds <int>    (default: 5)",
 		"--mode <pr|yolo>      (default: pr)",
 		"DEEPREVIEW_WORKSPACE_ROOT",
+		"DEEPREVIEW_CALLER_CWD",
 		"If <repo> is omitted:",
 		"Troubleshooting:",
 		"Codex model: gpt-5.3-codex",
