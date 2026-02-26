@@ -7,6 +7,15 @@ import (
 	"testing"
 )
 
+func setSourceRootDetectorForTest(t *testing.T, detector func() (string, bool)) {
+	t.Helper()
+	previous := detectDeepreviewSourceRoot
+	detectDeepreviewSourceRoot = detector
+	t.Cleanup(func() {
+		detectDeepreviewSourceRoot = previous
+	})
+}
+
 func TestInferRepoAndBranchFromCurrentDirectory(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {
@@ -101,6 +110,78 @@ func TestInferRepoAndBranchFromProvidedLocalRepoPath(t *testing.T) {
 		}
 		if resolvedBranch != "feature/test" {
 			t.Fatalf("expected branch feature/test, got %s", resolvedBranch)
+		}
+	})
+}
+
+func TestInferRepoAndBranchFallsBackToOldPWDFromSourceRoot(t *testing.T) {
+	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/test")
+	sourceRepoAbs := canonicalPath(t, sourceRepo)
+	callerRepoAbs := canonicalPath(t, callerRepo)
+	setSourceRootDetectorForTest(t, func() (string, bool) {
+		return sourceRepoAbs, true
+	})
+	t.Setenv("OLDPWD", callerRepo)
+
+	withWorkingDir(t, sourceRepo, func() {
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		if resolvedRepo != callerRepoAbs {
+			t.Fatalf("expected inferred repo %s, got %s", callerRepoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/test" {
+			t.Fatalf("expected inferred branch feature/test, got %s", resolvedBranch)
+		}
+	})
+}
+
+func TestInferRepoAndBranchOldPWDFallbackIgnoredOutsideSourceRoot(t *testing.T) {
+	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
+	otherRepo := createSyncedGitHubLikeRepo(t, "feature/other")
+	currentRepoAbs := canonicalPath(t, currentRepo)
+	setSourceRootDetectorForTest(t, func() (string, bool) {
+		return canonicalPath(t, otherRepo), true
+	})
+	t.Setenv("OLDPWD", otherRepo)
+
+	withWorkingDir(t, currentRepo, func() {
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		if resolvedRepo != currentRepoAbs {
+			t.Fatalf("expected inferred repo %s, got %s", currentRepoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/current" {
+			t.Fatalf("expected inferred branch feature/current, got %s", resolvedBranch)
+		}
+	})
+}
+
+func TestInferRepoAndBranchPrefersCallerCWDEnv(t *testing.T) {
+	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	sourceRepoAbs := canonicalPath(t, sourceRepo)
+	callerRepoAbs := canonicalPath(t, callerRepo)
+	setSourceRootDetectorForTest(t, func() (string, bool) {
+		return sourceRepoAbs, true
+	})
+	t.Setenv("OLDPWD", sourceRepo)
+	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
+
+	withWorkingDir(t, sourceRepo, func() {
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		if resolvedRepo != callerRepoAbs {
+			t.Fatalf("expected inferred repo %s, got %s", callerRepoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/caller" {
+			t.Fatalf("expected inferred branch feature/caller, got %s", resolvedBranch)
 		}
 	})
 }
