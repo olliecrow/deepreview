@@ -75,31 +75,26 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 var (
 	spinnerFrames = []string{"|", "/", "-", "\\"}
 
-	headerStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("24")).Padding(0, 1)
-	accentStyle        = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("45"))
-	subtleStyle        = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
-	valueStyle         = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
-	runningStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
-	successStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
-	errorStyle         = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))
-	borderStyle        = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
-	summaryBorderStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("69")).Padding(0, 1)
-	tableBorderStyle   = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("33")).Padding(0, 1)
-	footerBorderStyle  = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("240")).Padding(0, 1)
-	highlightStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("51"))
-	tableHeaderStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
-	zebraStyle         = lipgloss.NewStyle().Background(lipgloss.Color("235"))
-	chipBaseStyle      = lipgloss.NewStyle().Bold(true).Padding(0, 1)
+	headerStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("231")).Background(lipgloss.Color("24")).Padding(0, 1)
+	accentStyle      = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("45"))
+	subtleStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("244"))
+	valueStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("252"))
+	runningStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("11"))
+	successStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("10"))
+	errorStyle       = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("9"))
+	borderStyle      = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("63")).Padding(0, 1)
+	tableBorderStyle = lipgloss.NewStyle().Border(lipgloss.RoundedBorder()).BorderForeground(lipgloss.Color("33")).Padding(0, 1)
+	highlightStyle   = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("51"))
+	tableHeaderStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("117"))
+	zebraStyle       = lipgloss.NewStyle().Background(lipgloss.Color("235"))
+	chipBaseStyle    = lipgloss.NewStyle().Bold(true).Padding(0, 1)
 )
 
 const (
-	passiveDisplayLine   = "display: passive live stream (auto-refresh 1s)"
-	stageLegendLine      = "legend: > active, + done, x failed, ~ running"
 	ansiReset            = "\x1b[0m"
 	viewportRightGutter  = 6
 	viewportBottomGutter = 1
 	timelineSafetyGutter = 2
-	sideBySidePanelGap   = 2
 	defaultContentWidth  = 72
 )
 
@@ -126,13 +121,6 @@ func joinChipsWithinWidth(chips []string, width int) string {
 		return chips[0]
 	}
 	return line
-}
-
-func lineCount(text string) int {
-	if text == "" {
-		return 0
-	}
-	return strings.Count(text, "\n") + 1
 }
 
 func renderPanelTitle(label string) string {
@@ -165,24 +153,6 @@ func renderPanel(style lipgloss.Style, title string, bodyLines []string, totalWi
 		lines = append(lines, fit(line, inner))
 	}
 	return style.Width(widthWithoutBorder).Render(strings.Join(lines, "\n"))
-}
-
-func equalizeLineCounts(left, right []string) ([]string, []string) {
-	if len(left) == len(right) {
-		return left, right
-	}
-	if len(left) < len(right) {
-		padded := append([]string{}, left...)
-		for len(padded) < len(right) {
-			padded = append(padded, "")
-		}
-		return padded, right
-	}
-	padded := append([]string{}, right...)
-	for len(padded) < len(left) {
-		padded = append(padded, "")
-	}
-	return left, padded
 }
 
 func timelineColumns(innerWidth int) (int, int, int, int) {
@@ -324,19 +294,6 @@ func plannedTimelineRows(snapshot ProgressSnapshot) ([]StageSnapshot, bool) {
 	return rows, true
 }
 
-func maxSeenRound(snapshot ProgressSnapshot) string {
-	maxRound := 0
-	for _, row := range snapshot.Stages {
-		if row.RoundNumber != nil && *row.RoundNumber > maxRound {
-			maxRound = *row.RoundNumber
-		}
-	}
-	if maxRound == 0 {
-		return "-"
-	}
-	return fmt.Sprintf("%d", maxRound)
-}
-
 func statusMarker(status string, isActive bool) string {
 	if isActive && status == "running" {
 		return ">"
@@ -388,8 +345,16 @@ func (m tuiModel) View() string {
 		return finalizeView(strings.Join([]string{compactTitle, latest}, "\n"), m.width, m.height)
 	}
 
-	lines := make([]string, 0, 12)
-	topPlain := fmt.Sprintf("deepreview %s  elapsed %s", spinner, fmtDuration(elapsed))
+	lines := make([]string, 0, 10)
+	totalStages := len(snapshot.Stages)
+	progressPercent := 0
+	if totalStages > 0 {
+		progressPercent = int((float64(completedCount) / float64(totalStages)) * 100)
+	}
+	progressBarWidth := clamp(contentWidth/6, 10, 20)
+	progressBar := renderProgressBar(completedCount, totalStages, progressBarWidth)
+	progressSummary := fmt.Sprintf("%s %d/%d (%d%%)", progressBar, completedCount, totalStages, progressPercent)
+	topPlain := fmt.Sprintf("deepreview %s  elapsed %s  %s", spinner, fmtDuration(elapsed), progressSummary)
 	lines = append(lines, headerStyle.Render(fit(topPlain, panelInnerWidth(headerStyle, contentWidth))))
 
 	runChipStyle := chipBaseStyle.Foreground(lipgloss.Color("231")).Background(lipgloss.Color("24"))
@@ -418,15 +383,6 @@ func (m tuiModel) View() string {
 	}, contentWidth)
 	lines = append(lines, badgeLine+ansiReset)
 
-	barWidth := clamp(contentWidth-30, 12, 54)
-	progressBar := renderProgressBar(completedCount, len(snapshot.Stages), barWidth)
-	progressPercent := 0
-	if len(snapshot.Stages) > 0 {
-		progressPercent = int((float64(completedCount) / float64(len(snapshot.Stages))) * 100)
-	}
-	progressPlain := fmt.Sprintf("progress %s %d/%d complete (%d%%)", progressBar, completedCount, len(snapshot.Stages), progressPercent)
-	lines = append(lines, accentStyle.Render(fit(progressPlain, contentWidth)))
-
 	activity := latestActivity(snapshot)
 	maxRoundsLabel := "-"
 	if snapshot.MaxRounds > 0 {
@@ -439,43 +395,13 @@ func (m tuiModel) View() string {
 		"max rounds: " + maxRoundsLabel,
 		"artifacts: " + orFallback(snapshot.RunRoot, "-"),
 		"latest: " + latestStageLine(snapshot),
-	}
-	summaryLines := []string{
-		"round: " + maxSeenRound(snapshot),
-		"active stage: " + activity.name,
-		"active round: " + activity.round,
-		"active status: " + activity.status,
-		"active elapsed: " + activity.elapsed,
+		"active: r" + activity.round + " / " + activity.name + " / " + activity.status + " / " + activity.elapsed,
 	}
 	if strings.TrimSpace(activity.message) != "" {
-		summaryLines = append(summaryLines, "details: "+activity.message)
+		metaLines = append(metaLines, "details: "+activity.message)
 	}
-
-	if contentWidth >= 110 {
-		metaLines, summaryLines = equalizeLineCounts(metaLines, summaryLines)
-		available := contentWidth - sideBySidePanelGap
-		if available < 1 {
-			available = 1
-		}
-		leftW := clamp(available*62/100, 52, available-34)
-		rightW := available - leftW
-		if rightW < 32 {
-			rightW = 32
-			leftW = available - rightW
-		}
-		if leftW < 1 {
-			leftW = 1
-			rightW = available - leftW
-		}
-		contextBox := renderPanel(borderStyle, "run context", metaLines, leftW)
-		summaryBox := renderPanel(summaryBorderStyle, "live summary", summaryLines, rightW)
-		lines = append(lines, lipgloss.JoinHorizontal(lipgloss.Top, valueStyle.Render(contextBox), strings.Repeat(" ", sideBySidePanelGap), valueStyle.Render(summaryBox)))
-	} else {
-		contextBox := renderPanel(borderStyle, "run context", metaLines, contentWidth)
-		summaryBox := renderPanel(summaryBorderStyle, "live summary", summaryLines, contentWidth)
-		lines = append(lines, valueStyle.Render(contextBox))
-		lines = append(lines, valueStyle.Render(summaryBox))
-	}
+	contextBox := renderPanel(borderStyle, "run context", metaLines, contentWidth)
+	lines = append(lines, valueStyle.Render(contextBox))
 
 	if m.width < 60 || m.height < 12 {
 		timelineRows := snapshot.Stages
@@ -498,7 +424,6 @@ func (m tuiModel) View() string {
 			compactLines = append(compactLines, subtleStyle.Render(fit(fmt.Sprintf("history: %d older stage(s) hidden", hiddenOlder), compactInner)))
 		}
 		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (compact %d/%d)", timelineTitle, len(rows), len(timelineRows)), compactLines, contentWidth))
-		lines = append(lines, renderStatusPanel(snapshot, contentWidth))
 		return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
 	}
 
@@ -553,8 +478,6 @@ func (m tuiModel) View() string {
 		tableLines = append(tableLines, subtleStyle.Render(fit(fmt.Sprintf("history: %d older stage(s) hidden", hiddenOlder), tableInner)))
 	}
 	lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (%d/%d visible)", timelineTitle, len(rows), len(timelineRows)), tableLines, tablePanelWidth))
-
-	lines = append(lines, renderStatusPanel(snapshot, contentWidth))
 
 	return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
 }
@@ -858,38 +781,10 @@ func compactWindow(rows []StageSnapshot, limit int) ([]StageSnapshot, int) {
 	return window, start
 }
 
-func renderFooter(snapshot ProgressSnapshot) (string, lipgloss.Style) {
-	footer := "status: running"
-	footerStyle := runningStyle
-	failedCount := 0
-	for _, stage := range snapshot.Stages {
-		if stage.Status == "failed" {
-			failedCount++
-		}
-	}
-	if failedCount > 0 && snapshot.Success == nil {
-		footer = fmt.Sprintf("status: running with %d failed stage(s)", failedCount)
-		footerStyle = errorStyle
-	}
-	if snapshot.Success != nil {
-		if *snapshot.Success {
-			footer = "status: success"
-			footerStyle = successStyle
-		} else {
-			footer = "status: failed"
-			footerStyle = errorStyle
-		}
-		if snapshot.FinalMessage != "" {
-			footer += " | " + normalizeDisplayText(snapshot.FinalMessage)
-		}
-	}
-	return footer, footerStyle
-}
-
 func stageRowsLimit(lines []string, viewportWidth, viewportHeight int) int {
 	frameRows := renderedRowsForView(strings.Join(lines, "\n\n"), viewportWidth)
 	frameHeight := effectiveFrameHeight(viewportHeight)
-	rows := frameHeight - (frameRows + 8)
+	rows := frameHeight - (frameRows + 6)
 	if rows < 1 {
 		return 1
 	}
@@ -909,16 +804,4 @@ func statusTextStyle(status string) lipgloss.Style {
 	default:
 		return valueStyle
 	}
-}
-
-func renderStatusPanel(snapshot ProgressSnapshot, contentWidth int) string {
-	panelWidth := contentWidth
-	footer, footerStyle := renderFooter(snapshot)
-	footerInner := panelInnerWidth(footerBorderStyle, panelWidth)
-	footerLines := []string{
-		subtleStyle.Render(fit(passiveDisplayLine, footerInner)),
-		subtleStyle.Render(fit(stageLegendLine, footerInner)),
-		footerStyle.Render(fit(footer, footerInner)),
-	}
-	return renderPanel(footerBorderStyle, "status", footerLines, panelWidth)
 }

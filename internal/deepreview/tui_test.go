@@ -140,19 +140,6 @@ func TestTimelineColumnsHaveUsableDetails(t *testing.T) {
 	}
 }
 
-func TestRenderFooterShowsDegradedDuringRunningFailures(t *testing.T) {
-	snapshot := ProgressSnapshot{
-		Stages: []StageSnapshot{
-			{Name: "prepare", Status: "done"},
-			{Name: "execute", Status: "failed"},
-		},
-	}
-	footer, _ := renderFooter(snapshot)
-	if !strings.Contains(footer, "running with 1 failed stage") {
-		t.Fatalf("unexpected footer: %s", footer)
-	}
-}
-
 func TestStageRowsLimitMinimumOne(t *testing.T) {
 	lines := []string{"a", "b", "c"}
 	if got := stageRowsLimit(lines, 80, 2); got != 1 {
@@ -352,23 +339,26 @@ func TestNoBorderCollisionArtifactAcrossRange(t *testing.T) {
 	}
 }
 
-func TestTopPanelsBottomBordersAlignWhenSideBySide(t *testing.T) {
+func TestTUIViewUsesSingleContextPanelLayout(t *testing.T) {
 	model := seededTUIModelForViewTests(140, 40)
 	view := model.View()
-	foundAlignedBottom := false
-	for _, line := range strings.Split(view, "\n") {
-		first := strings.Index(line, "╰")
-		last := strings.LastIndex(line, "╰")
-		if first >= 0 && last > first && strings.Contains(line[first:], "╯") && strings.Contains(line[last:], "╯") {
-			foundAlignedBottom = true
-			break
-		}
+	if strings.Contains(view, "LIVE SUMMARY") {
+		t.Fatalf("did not expect live summary panel in compact layout")
 	}
-	if !foundAlignedBottom {
-		t.Fatalf("expected side-by-side top panels to have aligned bottom borders in one row")
+	if strings.Contains(view, "\n│ STATUS") {
+		t.Fatalf("did not expect status panel in compact layout")
 	}
-	if !strings.Contains(view, "╮  ╭") {
-		t.Fatalf("expected two-space gap between side-by-side top panels")
+	if !strings.Contains(view, "RUN CONTEXT") {
+		t.Fatalf("expected run context panel")
+	}
+	if !strings.Contains(view, "STAGE TIMELINE") {
+		t.Fatalf("expected stage timeline panel")
+	}
+	if !strings.Contains(view, "3/4 (75%)") {
+		t.Fatalf("expected inline progress summary in header")
+	}
+	if strings.Contains(view, "... output clipped to terminal height ...") {
+		t.Fatalf("did not expect clipped marker at 140x40 viewport")
 	}
 }
 
