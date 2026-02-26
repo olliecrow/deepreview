@@ -3,6 +3,8 @@ package deepreview
 import (
 	"errors"
 	"flag"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -158,4 +160,80 @@ func TestParseReviewArgsInfersRepoAndBranchFromCurrentRepo(t *testing.T) {
 			t.Fatalf("expected inferred source branch feature/test, got %s", parsed.Config.SourceBranch)
 		}
 	})
+}
+
+func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {
+	runRoot := t.TempDir()
+	round1 := filepath.Join(runRoot, "round-01")
+	round2 := filepath.Join(runRoot, "round-02")
+	if err := os.MkdirAll(round1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(round2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(round1, "round-status.json"),
+		[]byte("{\"decision\":\"continue\",\"reason\":\"keep going\",\"confidence\":0.45}\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(round2, "round-status.json"),
+		[]byte("{\"decision\":\"stop\",\"reason\":\"all major issues addressed\",\"confidence\":0.93}\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := readCompletionReviewSnapshot(runRoot)
+	if snapshot.CompletedRounds != 2 {
+		t.Fatalf("expected 2 completed rounds, got %d", snapshot.CompletedRounds)
+	}
+	if !snapshot.HasFinalStatus {
+		t.Fatalf("expected final status to be present")
+	}
+	if snapshot.FinalStatus.Decision != "stop" {
+		t.Fatalf("expected final decision stop, got %s", snapshot.FinalStatus.Decision)
+	}
+	if snapshot.FinalStatus.Confidence == nil || *snapshot.FinalStatus.Confidence != 0.93 {
+		t.Fatalf("expected final confidence 0.93, got %#v", snapshot.FinalStatus.Confidence)
+	}
+}
+
+func TestReadCompletionReviewSnapshotSkipsInvalidRoundStatus(t *testing.T) {
+	runRoot := t.TempDir()
+	round1 := filepath.Join(runRoot, "round-01")
+	round2 := filepath.Join(runRoot, "round-02")
+	if err := os.MkdirAll(round1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(round2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(round1, "round-status.json"), []byte("{invalid json}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(round2, "round-status.json"),
+		[]byte("{\"decision\":\"stop\",\"reason\":\"done\"}\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := readCompletionReviewSnapshot(runRoot)
+	if snapshot.CompletedRounds != 2 {
+		t.Fatalf("expected 2 completed rounds, got %d", snapshot.CompletedRounds)
+	}
+	if !snapshot.HasFinalStatus {
+		t.Fatalf("expected final status to be present")
+	}
+	if snapshot.FinalStatus.Decision != "stop" {
+		t.Fatalf("expected final decision stop, got %s", snapshot.FinalStatus.Decision)
+	}
+	if snapshot.FinalStatus.Reason != "done" {
+		t.Fatalf("expected final reason done, got %s", snapshot.FinalStatus.Reason)
+	}
 }

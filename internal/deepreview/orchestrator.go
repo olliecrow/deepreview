@@ -82,6 +82,10 @@ func (o *Orchestrator) RepoSlug() string {
 	return o.repoIdentity.Slug()
 }
 
+func (o *Orchestrator) ManagedRepoPath() string {
+	return o.managedRepoPath
+}
+
 func (o *Orchestrator) LastDelivery() *DeliveryResult {
 	if o.lastDelivery == nil {
 		return nil

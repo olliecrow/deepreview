@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -347,9 +348,34 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 	if runRoot == "" {
 		runRoot = filepath.Join(config.WorkspaceRoot, "runs", config.RunID)
 	}
+	repoSlug := strings.TrimSpace(orchestrator.RepoSlug())
+	if repoSlug == "" {
+		repoSlug = strings.TrimSpace(config.Repo)
+	}
+	managedRepoPath := strings.TrimSpace(orchestrator.ManagedRepoPath())
+	reviewSnapshot := readCompletionReviewSnapshot(runRoot)
 
 	_, _ = fmt.Fprintf(os.Stdout, "deepreview completed: run `%s`\n", config.RunID)
+	if repoSlug != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "repository reviewed: `%s`\n", repoSlug)
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "source branch reviewed: `%s`\n", config.SourceBranch)
+	if managedRepoPath != "" {
+		_, _ = fmt.Fprintf(os.Stdout, "reviewed directory: %s\n", managedRepoPath)
+	}
+	if isLocalDirectory(config.Repo) {
+		_, _ = fmt.Fprintf(os.Stdout, "requested local repo: %s\n", config.Repo)
+	}
 	_, _ = fmt.Fprintf(os.Stdout, "delivery mode: `%s`\n", config.Mode)
+	if reviewSnapshot.CompletedRounds > 0 {
+		_, _ = fmt.Fprintf(os.Stdout, "review rounds completed: %d\n", reviewSnapshot.CompletedRounds)
+	}
+	if reviewSnapshot.HasFinalStatus {
+		_, _ = fmt.Fprintf(os.Stdout, "final review status: %s\n", formatFinalReviewStatus(reviewSnapshot.FinalStatus))
+		if reason := formatFinalReviewReason(reviewSnapshot.FinalStatus); reason != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "final review summary: %s\n", reason)
+		}
+	}
 	if delivery == nil {
 		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
 		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
@@ -380,4 +406,56 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 	}
 	_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
 	_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
+}
+
+type completionReviewSnapshot struct {
+	CompletedRounds int
+	HasFinalStatus  bool
+	FinalStatus     RoundStatus
+}
+
+func readCompletionReviewSnapshot(runRoot string) completionReviewSnapshot {
+	snapshot := completionReviewSnapshot{}
+	if strings.TrimSpace(runRoot) == "" {
+		return snapshot
+	}
+	statusPaths, err := filepath.Glob(filepath.Join(runRoot, "round-*", "round-status.json"))
+	if err != nil {
+		return snapshot
+	}
+	sort.Strings(statusPaths)
+	snapshot.CompletedRounds = len(statusPaths)
+	for _, statusPath := range statusPaths {
+		status, err := readRoundStatus(statusPath)
+		if err != nil {
+			continue
+		}
+		snapshot.FinalStatus = status
+		snapshot.HasFinalStatus = true
+	}
+	return snapshot
+}
+
+func formatFinalReviewStatus(status RoundStatus) string {
+	if status.Confidence != nil {
+		return fmt.Sprintf("decision `%s` (confidence %.2f)", status.Decision, *status.Confidence)
+	}
+	return fmt.Sprintf("decision `%s`", status.Decision)
+}
+
+func formatFinalReviewReason(status RoundStatus) string {
+	reason := strings.TrimSpace(strings.ReplaceAll(status.Reason, "\n", " "))
+	if reason == "" {
+		return ""
+	}
+	return trimForDisplay(sanitizePublicText(reason), 220)
+}
+
+func isLocalDirectory(path string) bool {
+	trimmed := strings.TrimSpace(path)
+	if trimmed == "" {
+		return false
+	}
+	st, err := os.Stat(trimmed)
+	return err == nil && st.IsDir()
 }

@@ -235,6 +235,18 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
 		t.Fatalf("expected pr created summary output, got: %s", output)
 	}
+	if !strings.Contains(output, "repository reviewed: `local/user`") {
+		t.Fatalf("expected repository context in completion summary, got: %s", output)
+	}
+	if !strings.Contains(output, "source branch reviewed: `feature/test`") {
+		t.Fatalf("expected source branch context in completion summary, got: %s", output)
+	}
+	if !strings.Contains(output, "reviewed directory:") {
+		t.Fatalf("expected reviewed directory context in completion summary, got: %s", output)
+	}
+	if !strings.Contains(output, "final review status: decision `stop`") {
+		t.Fatalf("expected final review status context in completion summary, got: %s", output)
+	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
