@@ -353,7 +353,7 @@ func RunCLI(argv []string) int {
 	case "dry-run":
 		return runDryRunCommand(argv[1:])
 	default:
-		fmt.Fprintf(os.Stderr, "deepreview error: unsupported command: %s\n", argv[0])
+		fmt.Fprintf(os.Stderr, "deepreview error: unsupported command: %s\n", sanitizePublicText(argv[0]))
 		PrintUsage()
 		return 1
 	}
