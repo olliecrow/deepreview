@@ -217,6 +217,9 @@ func (o *Orchestrator) Run() error {
 	if err := o.writeRunConfig(); err != nil {
 		return err
 	}
+	if reporterWithMaxRounds, ok := o.reporter.(MaxRoundsAwareProgressReporter); ok {
+		reporterWithMaxRounds.SetMaxRounds(o.config.MaxRounds)
+	}
 	o.reporter.RunStarted(o.config.RunID, o.repoIdentity.Slug(), o.config.SourceBranch, o.config.Mode, o.runRoot)
 
 	var finalErr error

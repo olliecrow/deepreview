@@ -250,6 +250,80 @@ func stageRound(roundNumber *int) string {
 	return fmt.Sprintf("%d", *roundNumber)
 }
 
+func copyRoundPtr(roundNumber *int) *int {
+	if roundNumber == nil {
+		return nil
+	}
+	v := *roundNumber
+	return &v
+}
+
+func isPlannableStage(name string) bool {
+	switch name {
+	case "prepare", "independent review stage", "execute stage", "delivery":
+		return true
+	default:
+		return false
+	}
+}
+
+func plannedTimelineRows(snapshot ProgressSnapshot) ([]StageSnapshot, bool) {
+	if snapshot.MaxRounds <= 0 {
+		return nil, false
+	}
+
+	latestByKey := make(map[string]StageSnapshot)
+	for _, row := range snapshot.Stages {
+		if !isPlannableStage(row.Name) {
+			continue
+		}
+		key := row.Name + "|" + stageRound(row.RoundNumber)
+		latestByKey[key] = row
+	}
+
+	pendingRow := func(name string, round *int) StageSnapshot {
+		message := "waiting"
+		if round != nil {
+			message = "waiting for round start"
+		}
+		return StageSnapshot{
+			RoundNumber: copyRoundPtr(round),
+			Name:        name,
+			Status:      "pending",
+			Message:     message,
+			Elapsed:     0,
+		}
+	}
+
+	rows := make([]StageSnapshot, 0, snapshot.MaxRounds*2+2)
+	if row, ok := latestByKey["prepare|-"]; ok {
+		rows = append(rows, row)
+	} else {
+		rows = append(rows, pendingRow("prepare", nil))
+	}
+	for round := 1; round <= snapshot.MaxRounds; round++ {
+		r := round
+		independentKey := "independent review stage|" + stageRound(&r)
+		if row, ok := latestByKey[independentKey]; ok {
+			rows = append(rows, row)
+		} else {
+			rows = append(rows, pendingRow("independent review stage", &r))
+		}
+		executeKey := "execute stage|" + stageRound(&r)
+		if row, ok := latestByKey[executeKey]; ok {
+			rows = append(rows, row)
+		} else {
+			rows = append(rows, pendingRow("execute stage", &r))
+		}
+	}
+	if row, ok := latestByKey["delivery|-"]; ok {
+		rows = append(rows, row)
+	} else {
+		rows = append(rows, pendingRow("delivery", nil))
+	}
+	return rows, true
+}
+
 func maxSeenRound(snapshot ProgressSnapshot) string {
 	maxRound := 0
 	for _, row := range snapshot.Stages {
@@ -354,10 +428,15 @@ func (m tuiModel) View() string {
 	lines = append(lines, accentStyle.Render(fit(progressPlain, contentWidth)))
 
 	activity := latestActivity(snapshot)
+	maxRoundsLabel := "-"
+	if snapshot.MaxRounds > 0 {
+		maxRoundsLabel = fmt.Sprintf("%d", snapshot.MaxRounds)
+	}
 	metaLines := []string{
 		"run: " + orFallback(snapshot.RunID, "starting..."),
 		"repo: " + orFallback(snapshot.Repo, "-"),
 		"branch: " + orFallback(snapshot.SourceBranch, "-") + "    mode: " + orFallback(snapshot.Mode, "-"),
+		"max rounds: " + maxRoundsLabel,
 		"artifacts: " + orFallback(snapshot.RunRoot, "-"),
 		"latest: " + latestStageLine(snapshot),
 	}
@@ -399,8 +478,14 @@ func (m tuiModel) View() string {
 	}
 
 	if m.width < 60 || m.height < 12 {
+		timelineRows := snapshot.Stages
+		timelineTitle := "stage timeline"
+		if plannedRows, ok := plannedTimelineRows(snapshot); ok {
+			timelineRows = plannedRows
+			timelineTitle = "planned stage timeline"
+		}
 		compactRows := stageRowsLimit(lines, m.width, m.height)
-		rows, hiddenOlder := compactWindow(snapshot.Stages, compactRows)
+		rows, hiddenOlder := compactWindow(timelineRows, compactRows)
 		compactLines := make([]string, 0, len(rows)+2)
 		compactInner := panelInnerWidth(tableBorderStyle, contentWidth)
 		if len(rows) == 0 {
@@ -412,7 +497,7 @@ func (m tuiModel) View() string {
 		if hiddenOlder > 0 {
 			compactLines = append(compactLines, subtleStyle.Render(fit(fmt.Sprintf("history: %d older stage(s) hidden", hiddenOlder), compactInner)))
 		}
-		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("stage timeline (compact %d/%d)", len(rows), len(snapshot.Stages)), compactLines, contentWidth))
+		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (compact %d/%d)", timelineTitle, len(rows), len(timelineRows)), compactLines, contentWidth))
 		lines = append(lines, renderStatusPanel(snapshot, contentWidth))
 		return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
 	}
@@ -428,7 +513,13 @@ func (m tuiModel) View() string {
 	sep := fmt.Sprintf("%s  %s  %s %s  %s", strings.Repeat("-", 5), strings.Repeat("-", stageCol), strings.Repeat("-", statusCol), strings.Repeat("-", timeCol), strings.Repeat("-", detailsCol))
 
 	availableRows := stageRowsLimit(lines, m.width, m.height)
-	rows, hiddenOlder := compactWindow(snapshot.Stages, availableRows)
+	timelineRows := snapshot.Stages
+	timelineTitle := "stage timeline"
+	if plannedRows, ok := plannedTimelineRows(snapshot); ok {
+		timelineRows = plannedRows
+		timelineTitle = "planned stage timeline"
+	}
+	rows, hiddenOlder := compactWindow(timelineRows, availableRows)
 	tableLines := []string{
 		tableHeaderStyle.Render(fit(head, tableInner)),
 		subtleStyle.Render(fit(sep, tableInner)),
@@ -461,7 +552,7 @@ func (m tuiModel) View() string {
 	if hiddenOlder > 0 {
 		tableLines = append(tableLines, subtleStyle.Render(fit(fmt.Sprintf("history: %d older stage(s) hidden", hiddenOlder), tableInner)))
 	}
-	lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("stage timeline (%d/%d visible)", len(rows), len(snapshot.Stages)), tableLines, tablePanelWidth))
+	lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (%d/%d visible)", timelineTitle, len(rows), len(timelineRows)), tableLines, tablePanelWidth))
 
 	lines = append(lines, renderStatusPanel(snapshot, contentWidth))
 
@@ -813,6 +904,8 @@ func statusTextStyle(status string) lipgloss.Style {
 		return successStyle
 	case "failed":
 		return errorStyle
+	case "pending":
+		return subtleStyle
 	default:
 		return valueStyle
 	}
