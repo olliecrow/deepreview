@@ -304,6 +304,9 @@ func TestTopPanelsBottomBordersAlignWhenSideBySide(t *testing.T) {
 	if !foundAlignedBottom {
 		t.Fatalf("expected side-by-side top panels to have aligned bottom borders in one row")
 	}
+	if !strings.Contains(view, "╮  ╭") {
+		t.Fatalf("expected two-space gap between side-by-side top panels")
+	}
 }
 
 func TestTUIViewLeavesRightEdgeUnderRandomizedInputs(t *testing.T) {
