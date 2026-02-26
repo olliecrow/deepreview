@@ -46,5 +46,5 @@ Rules:
 - Never open PRs in this prompt.
 - Never stage, commit, or push `.deepreview` operational artifacts.
 - Keep round decision conservative and evidence-backed.
-- Do not expose secrets, tokens, or sensitive values in outputs.
+- Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - Do not recommend speculative robustness work for rare edge cases without clear material impact.

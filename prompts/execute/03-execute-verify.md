@@ -31,7 +31,7 @@ Rules:
 - Do not open PRs.
 - Keep behavior simple; no retry loops.
 - You may use multiple sub-agents or staged execution inside this prompt if useful.
-- Do not expose secrets, tokens, or sensitive values in outputs.
+- Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.
 - If a planned check cannot run locally, record why and provide the closest reliable substitute run.
 - Do not add low-value robustness for extremely rare edge cases unless strongly justified by evidence.

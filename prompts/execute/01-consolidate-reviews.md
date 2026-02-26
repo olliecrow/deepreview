@@ -40,7 +40,7 @@ Rules:
 - Be conservative about false positives.
 - Prefer clear evidence over speculation.
 - You may use multiple sub-agents or staged analysis inside this prompt if useful.
-- Do not expose secrets, tokens, or sensitive values in outputs.
+- Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.
 - If an item remains low-confidence after investigation, reject or defer it rather than forcing it into execution.
 

@@ -29,6 +29,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 - Your current branch and working directory stay untouched in default mode.
 - yolo mode is available, and it is off by default.
 - Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
+- Delivery surfaces are privacy-guarded (PR text, summaries, logs, and delivery commit messages are redacted/blocked for sensitive personal data patterns).
 - You can cancel at any time with `Ctrl+C`; deepreview performs lock/worktree cleanup before exit.
 
 ## Quick start

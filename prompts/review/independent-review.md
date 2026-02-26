@@ -18,7 +18,7 @@ Rules:
 7. Prioritize high-confidence and high-conviction findings only.
 8. Prioritize critical red flags and serious merge-blocking issues above everything else.
 9. You may inspect git history, recent commits, PR comments, issues, and other GitHub context if useful.
-10. Do not expose secrets, tokens, or sensitive values in report output.
+10. Do not expose secrets, tokens, personal information, or sensitive values in report output.
 11. Reviews and comments from others are inputs, not gospel; independently validate before concluding.
 12. Do not claim a finding unless you can explain evidence and impact clearly.
 13. Use a high bar for recommending change: high confidence, high conviction, no-regret only.

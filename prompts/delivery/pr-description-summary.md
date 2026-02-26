@@ -34,7 +34,7 @@ Requirements:
 2. Explain what happened, why changes were needed, what was fixed, and final status.
 3. Make key risks/trade-offs explicit when relevant.
 4. Keep it concrete and evidence-backed; avoid hype.
-5. Do not include secrets or private local machine paths.
+5. Do not include secrets, personal information, or private local machine paths.
 6. Keep this summary focused on top-level narrative; detailed artifacts stay in the existing body.
 
 Output:

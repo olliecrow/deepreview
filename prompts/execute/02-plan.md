@@ -29,7 +29,7 @@ Rules:
 - Keep the plan specific enough to execute directly.
 - Scope tightly to accepted items; avoid speculative extra work.
 - You may use multiple sub-agents or staged analysis inside this prompt if useful.
-- Do not expose secrets, tokens, or sensitive values in outputs.
+- Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.
 - If confidence for a plan item is not high, exclude it from execution and mark it deferred with rationale.
 
