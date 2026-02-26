@@ -89,5 +89,5 @@ func (r *TextProgressReporter) printf(format string, args ...any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	ts := time.Now().Format("15:04:05")
-	_, _ = fmt.Fprintf(r.out, "[%s] %s\n", ts, sanitizePublicText(fmt.Sprintf(format, args...)))
+	_, _ = fmt.Fprintf(r.out, "[%s] %s\n", ts, fmt.Sprintf(format, args...))
 }

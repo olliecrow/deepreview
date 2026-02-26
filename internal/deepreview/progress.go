@@ -149,18 +149,17 @@ func (r *TUIProgressReporter) SetMaxRounds(maxRounds int) {
 func (r *TUIProgressReporter) RunStarted(runID, repo, sourceBranch, mode, runRoot string) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
-	r.state.runID = sanitizePublicText(runID)
-	r.state.repo = sanitizePublicText(repo)
-	r.state.sourceBranch = sanitizePublicText(sourceBranch)
-	r.state.mode = sanitizePublicText(mode)
-	r.state.runRoot = sanitizePublicText(runRoot)
+	r.state.runID = runID
+	r.state.repo = repo
+	r.state.sourceBranch = sourceBranch
+	r.state.mode = mode
+	r.state.runRoot = runRoot
 	r.state.runStartedAt = time.Now()
 }
 
 func (r *TUIProgressReporter) StageStarted(stageName string, roundNumber *int, message string) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
-	sanitizedStageName := sanitizePublicText(stageName)
 	var rn *int
 	if roundNumber != nil {
 		v := *roundNumber
@@ -168,9 +167,9 @@ func (r *TUIProgressReporter) StageStarted(stageName string, roundNumber *int, m
 	}
 	r.state.stages = append(r.state.stages, StageState{
 		RoundNumber: rn,
-		Name:        sanitizedStageName,
+		Name:        stageName,
 		Status:      "running",
-		Message:     sanitizePublicText(message),
+		Message:     message,
 		StartedAt:   time.Now(),
 	})
 }
@@ -188,11 +187,10 @@ func roundEqual(a, b *int) bool {
 func (r *TUIProgressReporter) StageProgress(stageName, message string, roundNumber *int) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
-	sanitizedStageName := sanitizePublicText(stageName)
 	for i := len(r.state.stages) - 1; i >= 0; i-- {
 		stage := &r.state.stages[i]
-		if stage.Name == sanitizedStageName && roundEqual(stage.RoundNumber, roundNumber) && stage.Status == "running" {
-			stage.Message = sanitizePublicText(message)
+		if stage.Name == stageName && roundEqual(stage.RoundNumber, roundNumber) && stage.Status == "running" {
+			stage.Message = message
 			return
 		}
 	}
@@ -203,9 +201,9 @@ func (r *TUIProgressReporter) StageProgress(stageName, message string, roundNumb
 	}
 	r.state.stages = append(r.state.stages, StageState{
 		RoundNumber: rn,
-		Name:        sanitizedStageName,
+		Name:        stageName,
 		Status:      "running",
-		Message:     sanitizePublicText(message),
+		Message:     message,
 		StartedAt:   time.Now(),
 	})
 }
@@ -213,18 +211,17 @@ func (r *TUIProgressReporter) StageProgress(stageName, message string, roundNumb
 func (r *TUIProgressReporter) StageFinished(stageName string, roundNumber *int, success bool, message string) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
-	sanitizedStageName := sanitizePublicText(stageName)
 	now := time.Now()
 	for i := len(r.state.stages) - 1; i >= 0; i-- {
 		stage := &r.state.stages[i]
-		if stage.Name == sanitizedStageName && roundEqual(stage.RoundNumber, roundNumber) && stage.Status == "running" {
+		if stage.Name == stageName && roundEqual(stage.RoundNumber, roundNumber) && stage.Status == "running" {
 			if success {
 				stage.Status = "done"
 			} else {
 				stage.Status = "failed"
 			}
 			if message != "" {
-				stage.Message = sanitizePublicText(message)
+				stage.Message = message
 			}
 			stage.EndedAt = &now
 			return
@@ -241,9 +238,9 @@ func (r *TUIProgressReporter) StageFinished(stageName string, roundNumber *int, 
 	}
 	r.state.stages = append(r.state.stages, StageState{
 		RoundNumber: rn,
-		Name:        sanitizedStageName,
+		Name:        stageName,
 		Status:      status,
-		Message:     sanitizePublicText(message),
+		Message:     message,
 		StartedAt:   now,
 		EndedAt:     &now,
 	})
@@ -254,6 +251,6 @@ func (r *TUIProgressReporter) RunFinished(success bool, message string) {
 	defer r.state.mu.Unlock()
 	now := time.Now()
 	r.state.success = &success
-	r.state.finalMessage = sanitizePublicText(message)
+	r.state.finalMessage = message
 	r.state.runFinishedAt = &now
 }

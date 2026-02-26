@@ -104,9 +104,10 @@ Cleanup policy:
 
 ## Safety contract
 - never commit tokens, credentials, or private keys.
-- never emit personal information in delivery surfaces (PR title/body, commit messages, summaries, logs, comments, or committed code/docs).
+- never emit personal information in public delivery surfaces (PR title/body, commit messages, delivery summaries, comments, or committed code/docs).
 - treat committed docs/artifacts as potentially public.
 - run privacy-hygiene checks before final delivery actions, including changed-file scans and delivery commit-message scans.
+- keep local terminal progress/error output literal for operator debugging; privacy redaction is enforced at delivery/public surfaces.
 - fail fast on verification failures.
 
 ## Failure-handling contract
