@@ -4,7 +4,9 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -145,15 +147,21 @@ Deep branch review orchestrator using isolated worktrees plus Codex.
 
 Usage:
   deepreview review [<repo>] [--source-branch <branch>] [options]
+  deepreview doctor [<repo>] [--source-branch <branch>] [options]
+  deepreview dry-run [<repo>] [--source-branch <branch>] [options]
   deepreview help
   deepreview --help
 
 Commands:
   review    Run the deepreview pipeline for one source branch.
+  doctor    Run non-mutating preflight checks for a planned run.
+  dry-run   Print the planned execution order without mutating anything.
   help      Show this help text.
 
 Get command-specific help:
   deepreview review --help
+  deepreview doctor --help
+  deepreview dry-run --help
 `
 }
 
@@ -260,6 +268,67 @@ Troubleshooting:
 `, defaultConcurrency, defaultMaxRounds, ModePR, forcedCodexModel, forcedCodexReasoningEffort, defaultCodexTimeoutSeconds)
 }
 
+func DoctorHelpText() string {
+	return fmt.Sprintf(`deepreview doctor
+
+Run non-mutating preflight checks for a planned deepreview run.
+
+What this checks:
+  - required tools are available on PATH
+  - prompt templates and execute queue are present
+  - Codex login status is healthy
+  - GitHub auth status is healthy (when mode=pr)
+  - source branch is reachable on remote
+
+Usage:
+  deepreview doctor [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo]
+
+Notes:
+  - doctor does not clone, commit, push, or open PRs.
+  - argument inference and validation follow the same rules as "deepreview review".
+
+Examples:
+  deepreview doctor
+  deepreview doctor owner/repo --source-branch feature/login
+  deepreview doctor owner/repo --source-branch feature/login --mode yolo
+
+Defaults:
+  --concurrency %d
+  --max-rounds %d
+  --mode %s
+`, defaultConcurrency, defaultMaxRounds, ModePR)
+}
+
+func DryRunHelpText() string {
+	return fmt.Sprintf(`deepreview dry-run
+
+Print the planned execution order for a run without mutating anything.
+
+What this prints:
+  - resolved repo, source branch, mode, and key settings
+  - ordered stage list for prepare, round loop, and delivery
+  - execute-stage step order from the configured queue
+  - stop conditions and delivery behavior
+
+Usage:
+  deepreview dry-run [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo]
+
+Notes:
+  - dry-run does not run Codex, does not mutate git state, and does not push.
+  - argument inference and validation follow the same rules as "deepreview review".
+
+Examples:
+  deepreview dry-run
+  deepreview dry-run owner/repo --source-branch feature/login
+  deepreview dry-run owner/repo --source-branch feature/login --mode yolo
+
+Defaults:
+  --concurrency %d
+  --max-rounds %d
+  --mode %s
+`, defaultConcurrency, defaultMaxRounds, ModePR)
+}
+
 func PrintUsage() {
 	fmt.Fprint(os.Stderr, MainHelpText())
 }
@@ -277,17 +346,27 @@ func RunCLI(argv []string) int {
 		PrintUsage()
 		return 0
 	}
-	if argv[0] != "review" {
+	switch argv[0] {
+	case "review":
+		return runReviewCommand(argv[1:])
+	case "doctor":
+		return runDoctorCommand(argv[1:])
+	case "dry-run":
+		return runDryRunCommand(argv[1:])
+	default:
 		fmt.Fprintf(os.Stderr, "deepreview error: unsupported command: %s\n", argv[0])
 		PrintUsage()
 		return 1
 	}
-	if len(argv) >= 2 && isHelpArg(argv[1]) {
+}
+
+func runReviewCommand(args []string) int {
+	if len(args) >= 1 && isHelpArg(args[0]) {
 		fmt.Fprint(os.Stderr, ReviewHelpText())
 		return 0
 	}
 
-	parsed, err := ParseReviewArgs(argv[1:], time.Now())
+	parsed, err := ParseReviewArgs(args, time.Now())
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {
 			return 0
@@ -334,6 +413,275 @@ func RunCLI(argv []string) int {
 	}
 	printCompletionSummary(orchestrator, parsed.Config)
 	return 0
+}
+
+type doctorCheck struct {
+	Name   string
+	Passed bool
+	Detail string
+}
+
+func runDoctorCommand(args []string) int {
+	if len(args) >= 1 && isHelpArg(args[0]) {
+		fmt.Fprint(os.Stdout, DoctorHelpText())
+		return 0
+	}
+
+	parsed, err := ParseReviewArgs(args, time.Now())
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		return 1
+	}
+	orchestrator, err := NewOrchestrator(parsed.Config, &NullProgressReporter{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		return 1
+	}
+
+	checks := buildDoctorChecks(orchestrator)
+	fmt.Fprintf(os.Stdout, "deepreview doctor\n")
+	fmt.Fprintf(os.Stdout, "repo: %s\n", orchestrator.repoIdentity.Slug())
+	fmt.Fprintf(os.Stdout, "source branch: %s\n", parsed.Config.SourceBranch)
+	fmt.Fprintf(os.Stdout, "mode: %s\n", parsed.Config.Mode)
+	fmt.Fprintf(os.Stdout, "workspace root: %s\n\n", orchestrator.workspaceRoot)
+
+	passedAll := true
+	for _, check := range checks {
+		state := "ok"
+		if !check.Passed {
+			state = "fail"
+			passedAll = false
+		}
+		fmt.Fprintf(os.Stdout, "[%s] %s", state, check.Name)
+		if strings.TrimSpace(check.Detail) != "" {
+			fmt.Fprintf(os.Stdout, " - %s", check.Detail)
+		}
+		fmt.Fprintln(os.Stdout)
+	}
+	if passedAll {
+		fmt.Fprintln(os.Stdout, "\ndoctor result: PASS")
+		return 0
+	}
+	fmt.Fprintln(os.Stdout, "\ndoctor result: FAIL")
+	return 1
+}
+
+func buildDoctorChecks(o *Orchestrator) []doctorCheck {
+	cfg := o.config
+	checks := make([]doctorCheck, 0, 8)
+
+	requiredTools := []string{cfg.GitBin, cfg.CodexBin}
+	if cfg.Mode == ModePR {
+		requiredTools = append(requiredTools, cfg.GhBin)
+	}
+	for _, tool := range requiredTools {
+		path, err := exec.LookPath(tool)
+		if err != nil {
+			checks = append(checks, doctorCheck{
+				Name:   fmt.Sprintf("tool available: %s", tool),
+				Passed: false,
+				Detail: "not found on PATH",
+			})
+			continue
+		}
+		checks = append(checks, doctorCheck{
+			Name:   fmt.Sprintf("tool available: %s", tool),
+			Passed: true,
+			Detail: path,
+		})
+	}
+
+	if err := checkPromptTemplates(o.promptsRoot); err != nil {
+		checks = append(checks, doctorCheck{
+			Name:   "prompt templates and execute queue",
+			Passed: false,
+			Detail: err.Error(),
+		})
+	} else {
+		checks = append(checks, doctorCheck{
+			Name:   "prompt templates and execute queue",
+			Passed: true,
+			Detail: "ready",
+		})
+	}
+
+	codexStatus, codexErr := RunCommand([]string{cfg.CodexBin, "login", "status"}, "", "", false, 20*time.Second)
+	if codexErr != nil {
+		checks = append(checks, doctorCheck{
+			Name:   "codex login status",
+			Passed: false,
+			Detail: codexErr.Error(),
+		})
+	} else if codexStatus.ReturnCode != 0 {
+		checks = append(checks, doctorCheck{
+			Name:   "codex login status",
+			Passed: false,
+			Detail: firstOutputLine(codexStatus.Stdout, codexStatus.Stderr),
+		})
+	} else {
+		checks = append(checks, doctorCheck{
+			Name:   "codex login status",
+			Passed: true,
+			Detail: "authenticated",
+		})
+	}
+
+	if cfg.Mode == ModePR {
+		ghStatus, ghErr := RunCommand([]string{cfg.GhBin, "auth", "status"}, "", "", false, 20*time.Second)
+		if ghErr != nil {
+			checks = append(checks, doctorCheck{
+				Name:   "gh auth status",
+				Passed: false,
+				Detail: ghErr.Error(),
+			})
+		} else if ghStatus.ReturnCode != 0 {
+			checks = append(checks, doctorCheck{
+				Name:   "gh auth status",
+				Passed: false,
+				Detail: firstOutputLine(ghStatus.Stdout, ghStatus.Stderr),
+			})
+		} else {
+			checks = append(checks, doctorCheck{
+				Name:   "gh auth status",
+				Passed: true,
+				Detail: "authenticated",
+			})
+		}
+	}
+
+	sourceRef := "refs/heads/" + cfg.SourceBranch
+	lsRemote, lsRemoteErr := RunCommand([]string{cfg.GitBin, "ls-remote", "--exit-code", o.repoIdentity.CloneSource, sourceRef}, "", "", false, 30*time.Second)
+	if lsRemoteErr != nil {
+		checks = append(checks, doctorCheck{
+			Name:   "remote source branch reachable",
+			Passed: false,
+			Detail: lsRemoteErr.Error(),
+		})
+	} else if lsRemote.ReturnCode != 0 {
+		checks = append(checks, doctorCheck{
+			Name:   "remote source branch reachable",
+			Passed: false,
+			Detail: firstOutputLine(lsRemote.Stdout, lsRemote.Stderr),
+		})
+	} else {
+		checks = append(checks, doctorCheck{
+			Name:   "remote source branch reachable",
+			Passed: true,
+			Detail: fmt.Sprintf("%s (%s)", cfg.SourceBranch, o.repoIdentity.CloneSource),
+		})
+	}
+
+	return checks
+}
+
+func checkPromptTemplates(promptsRoot string) error {
+	queuePath := filepath.Join(promptsRoot, "execute", "queue.txt")
+	queue, err := ReadQueue(queuePath)
+	if err != nil {
+		return err
+	}
+	for _, templateName := range queue {
+		templatePath := filepath.Join(promptsRoot, "execute", templateName)
+		if _, err := os.Stat(templatePath); err != nil {
+			return NewDeepReviewError("execute template file not found: %s", templatePath)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(promptsRoot, "review", "independent-review.md")); err != nil {
+		return NewDeepReviewError("independent review prompt template missing")
+	}
+	return nil
+}
+
+func firstOutputLine(stdout, stderr string) string {
+	raw := strings.TrimSpace(stderr)
+	if raw == "" {
+		raw = strings.TrimSpace(stdout)
+	}
+	if raw == "" {
+		return "no output"
+	}
+	line := strings.TrimSpace(strings.Split(raw, "\n")[0])
+	if line == "" {
+		return "no output"
+	}
+	return trimForDisplay(sanitizePublicText(line), 220)
+}
+
+func runDryRunCommand(args []string) int {
+	if len(args) >= 1 && isHelpArg(args[0]) {
+		fmt.Fprint(os.Stdout, DryRunHelpText())
+		return 0
+	}
+
+	parsed, err := ParseReviewArgs(args, time.Now())
+	if err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return 0
+		}
+		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		return 1
+	}
+	orchestrator, err := NewOrchestrator(parsed.Config, &NullProgressReporter{})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "deepreview error: %v\n", err)
+		return 1
+	}
+	printDryRunPlan(os.Stdout, orchestrator)
+	return 0
+}
+
+func printDryRunPlan(out io.Writer, o *Orchestrator) {
+	cfg := o.config
+	fmt.Fprintln(out, "deepreview dry-run")
+	fmt.Fprintf(out, "repo: %s\n", o.repoIdentity.Slug())
+	fmt.Fprintf(out, "source branch: %s\n", cfg.SourceBranch)
+	fmt.Fprintf(out, "mode: %s\n", cfg.Mode)
+	fmt.Fprintf(out, "concurrency: %d\n", cfg.Concurrency)
+	fmt.Fprintf(out, "max rounds: %d\n", cfg.MaxRounds)
+	fmt.Fprintf(out, "workspace root: %s\n", o.workspaceRoot)
+	fmt.Fprintf(out, "managed repo path: %s\n\n", o.managedRepoPath)
+
+	fmt.Fprintln(out, "planned order:")
+	fmt.Fprintln(out, "1. preflight checks")
+	fmt.Fprintln(out, "2. acquire per-repo run lock")
+	fmt.Fprintln(out, "3. prepare stage")
+	fmt.Fprintln(out, "   - sync managed repository copy")
+	fmt.Fprintln(out, "   - resolve default branch and source branch head")
+	fmt.Fprintln(out, "   - create candidate branch from source head")
+	if cfg.Mode == ModeYolo {
+		fmt.Fprintln(out, "   - if source branch is default branch, run yolo push preflight")
+	}
+	fmt.Fprintf(out, "4. round loop, up to %d round(s)\n", cfg.MaxRounds)
+	fmt.Fprintln(out, "   - independent review stage, run parallel reviewers and collect review markdown reports")
+	fmt.Fprintln(out, "   - execute stage, run queue steps in order:")
+
+	queuePath := filepath.Join(o.promptsRoot, "execute", "queue.txt")
+	if queue, err := ReadQueue(queuePath); err == nil {
+		for idx, templateName := range queue {
+			fmt.Fprintf(out, "     %d. %s\n", idx+1, executePromptLabel(templateName))
+		}
+	} else {
+		fmt.Fprintln(out, "     1. consolidate reviews")
+		fmt.Fprintln(out, "     2. plan changes")
+		fmt.Fprintln(out, "     3. execute and verify")
+		fmt.Fprintln(out, "     4. cleanup, summary, commit")
+	}
+
+	fmt.Fprintln(out, "   - if execute changed repository files, run another review round")
+	fmt.Fprintln(out, "   - if execute made no repository changes, stop additional rounds")
+	fmt.Fprintln(out, "5. delivery stage")
+	fmt.Fprintln(out, "   - validate delivery files and run secret hygiene scan")
+	if cfg.Mode == ModePR {
+		fmt.Fprintln(out, "   - push candidate branch and open one pull request into source branch")
+	} else {
+		fmt.Fprintln(out, "   - push final changes directly to source branch")
+	}
+	fmt.Fprintln(out, "6. write final summary and print completion output")
+	fmt.Fprintln(out)
+	fmt.Fprintln(out, "dry-run only: no prompts were executed, no commits were pushed, and no pull request was created.")
 }
 
 func shouldEnableTUI(requestedTUI, noTUI, stdinIsTerminal, stdoutIsTerminal bool, termName string, width, height int, sizeErr error) bool {

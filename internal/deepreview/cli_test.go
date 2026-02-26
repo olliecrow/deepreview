@@ -82,8 +82,12 @@ func TestMainHelpTextIncludesCoreSections(t *testing.T) {
 	help := MainHelpText()
 	for _, want := range []string{
 		"deepreview review [<repo>] [--source-branch <branch>]",
+		"deepreview doctor [<repo>] [--source-branch <branch>]",
+		"deepreview dry-run [<repo>] [--source-branch <branch>]",
 		"Commands:",
 		"deepreview review --help",
+		"deepreview doctor --help",
+		"deepreview dry-run --help",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("main help missing %q", want)
@@ -116,10 +120,40 @@ func TestRunCLIHelpEntrypointsReturnZero(t *testing.T) {
 		{"help"},
 		{"review", "--help"},
 		{"review", "help"},
+		{"doctor", "--help"},
+		{"doctor", "help"},
+		{"dry-run", "--help"},
+		{"dry-run", "help"},
 	}
 	for _, tc := range tests {
 		if code := RunCLI(tc); code != 0 {
 			t.Fatalf("expected exit code 0 for %v, got %d", tc, code)
+		}
+	}
+}
+
+func TestDoctorHelpTextIncludesCoreSections(t *testing.T) {
+	help := DoctorHelpText()
+	for _, want := range []string{
+		"deepreview doctor",
+		"Run non-mutating preflight checks",
+		"source branch is reachable on remote",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("doctor help missing %q", want)
+		}
+	}
+}
+
+func TestDryRunHelpTextIncludesCoreSections(t *testing.T) {
+	help := DryRunHelpText()
+	for _, want := range []string{
+		"deepreview dry-run",
+		"planned execution order",
+		"does not run Codex",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("dry-run help missing %q", want)
 		}
 	}
 }
