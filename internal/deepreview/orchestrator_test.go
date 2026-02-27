@@ -209,3 +209,49 @@ func TestCapPRBodyForGitHubKeepsNormalBody(t *testing.T) {
 		t.Fatalf("expected short body to remain unchanged")
 	}
 }
+
+func TestNormalizePRTitleAddsPrefixAndNormalizesWhitespace(t *testing.T) {
+	out := normalizePRTitle("  improve logging clarity \n and test coverage  ", "deepreview: review updates")
+	if out != "deepreview: improve logging clarity and test coverage" {
+		t.Fatalf("unexpected normalized title: %q", out)
+	}
+}
+
+func TestNormalizePRTitleFallsBackWhenGeneratedTitleEmpty(t *testing.T) {
+	out := normalizePRTitle("   \n", "deepreview: fallback title")
+	if out != "deepreview: fallback title" {
+		t.Fatalf("expected fallback title, got: %q", out)
+	}
+}
+
+func TestNormalizePRTitleHandlesDeepreviewPrefixedVariants(t *testing.T) {
+	out := normalizePRTitle("DeepReview - tighten retry behavior", "deepreview: fallback")
+	if out != "deepreview: tighten retry behavior" {
+		t.Fatalf("expected normalized prefixed variant, got: %q", out)
+	}
+}
+
+func TestNormalizePRTitleCapsLengthForGitHubSafety(t *testing.T) {
+	longCore := strings.Repeat("x", githubPRTitleTargetChars+100)
+	out := normalizePRTitle(longCore, "deepreview: fallback")
+	if utf8.RuneCountInString(out) > githubPRTitleTargetChars {
+		t.Fatalf("expected title <= %d chars, got %d", githubPRTitleTargetChars, utf8.RuneCountInString(out))
+	}
+	if !strings.HasPrefix(strings.ToLower(out), "deepreview:") {
+		t.Fatalf("expected deepreview prefix after normalization, got: %q", out)
+	}
+}
+
+func TestBasePRTitleFromChangesUsesTopAreaAndFileCount(t *testing.T) {
+	title := basePRTitleFromChanges([]string{"cmd/a.go", "cmd/b.go", "internal/x.go"})
+	if title != "deepreview: cmd updates (3 files)" {
+		t.Fatalf("unexpected base title: %q", title)
+	}
+}
+
+func TestBasePRTitleFromChangesHandlesRootOnlyChanges(t *testing.T) {
+	title := basePRTitleFromChanges([]string{"README.md", "go.mod"})
+	if title != "deepreview: review updates (2 files)" {
+		t.Fatalf("unexpected base title for root-only changes: %q", title)
+	}
+}

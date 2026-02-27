@@ -324,11 +324,31 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); err != nil {
 		t.Fatalf("pr-body.md missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(runDir, "pr-title.base.txt")); err != nil {
+		t.Fatalf("pr-title.base.txt missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "pr-title.txt")); err != nil {
+		t.Fatalf("pr-title.txt missing: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "pr-top-title.txt")); err != nil {
+		t.Fatalf("pr-top-title.txt missing: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(runDir, "pr-body.base.md")); err != nil {
 		t.Fatalf("pr-body.base.md missing: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "pr-top-summary.md")); err != nil {
 		t.Fatalf("pr-top-summary.md missing: %v", err)
+	}
+	prTitleBytes, err := os.ReadFile(filepath.Join(runDir, "pr-title.txt"))
+	if err != nil {
+		t.Fatalf("missing pr-title.txt: %v", err)
+	}
+	prTitle := strings.TrimSpace(string(prTitleBytes))
+	if !strings.HasPrefix(strings.ToLower(prTitle), "deepreview:") {
+		t.Fatalf("pr title should keep deepreview prefix, got: %q", prTitle)
+	}
+	if strings.Contains(prTitle, "/Users/") {
+		t.Fatalf("pr title must not contain local absolute user paths")
 	}
 	prBodyBytes, err := os.ReadFile(filepath.Join(runDir, "pr-body.md"))
 	if err != nil {
