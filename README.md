@@ -34,6 +34,12 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 - Local terminal output is intentionally unredacted so operators can see literal paths and command errors while running deepreview.
 - You can cancel at any time with `Ctrl+C`; deepreview performs lock/worktree cleanup before exit.
 
+## Known limitations
+
+- Requires local `git` and `codex`; default pull request mode also requires `gh`.
+- Review quality depends on Codex outputs and repository test coverage.
+- Deep runs can take significant time on large repositories or high `--max-rounds`.
+
 ## Quick start
 
 1. Make sure tools are installed and authenticated.
@@ -61,6 +67,13 @@ go build -o ./bin/deepreview ./cmd/deepreview
 ./bin/deepreview dry-run
 ```
 
+Show command help.
+
+```bash
+./bin/deepreview --help
+./bin/deepreview review --help
+```
+
 5. Optional explicit target repo and source branch.
 
 ```bash
@@ -77,6 +90,17 @@ go build -o ./bin/deepreview ./cmd/deepreview
 ./bin/deepreview review <repo> --source-branch <branch> --no-tui
 ./bin/deepreview doctor <repo> --source-branch <branch> --mode pr
 ./bin/deepreview dry-run <repo> --source-branch <branch> --mode yolo
+```
+
+Install shell tab completion.
+
+```bash
+# bash
+./bin/deepreview completion bash > ~/.local/share/bash-completion/completions/deepreview
+
+# zsh
+mkdir -p ~/.zsh/completions
+./bin/deepreview completion zsh > ~/.zsh/completions/_deepreview
 ```
 
 ## Short example output
@@ -134,7 +158,7 @@ If your launcher changes directories before invoking deepreview (for example, wr
 deepreview() {
   local caller_cwd="$PWD"
   (
-    cd /Users/oc/repos/me/deepreview || return 1
+    cd /path/to/deepreview || return 1
     DEEPREVIEW_CALLER_CWD="$caller_cwd" go run ./cmd/deepreview review "$@"
   )
 }
@@ -151,10 +175,12 @@ go build -o ./bin/deepreview ./cmd/deepreview
 - `deepreview review [<repo>] [--source-branch <branch>]`
 - `deepreview doctor [<repo>] [--source-branch <branch>]`
 - `deepreview dry-run [<repo>] [--source-branch <branch>]`
+- `deepreview completion [bash|zsh]`
 - `deepreview --help`
 - `deepreview review --help`
 - `deepreview doctor --help`
 - `deepreview dry-run --help`
+- `deepreview completion --help`
 
 Common options.
 
@@ -162,7 +188,7 @@ Common options.
 - `--max-rounds <n>`
 - `--mode <pr|yolo>`
 - `--yolo`
-- `--no-tui`
+- `--no-tui` (disable full-screen terminal user interface)
 
 ## Delivery conventions
 

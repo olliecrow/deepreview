@@ -701,6 +701,21 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`
 
 Decision:
+Provide first-class shell completion output and document command help for every top-level command.
+Context:
+deepreview is operated as a daily CLI and now has multiple top-level commands; discoverability and typing safety matter in high-frequency use.
+Rationale:
+Adding `completion [bash|zsh]` and explicit help paths for it keeps the CLI self-service without changing review execution logic.
+Trade-offs:
+Completion templates require periodic maintenance as command flags evolve.
+Enforcement:
+- `RunCLI` dispatches `completion`, with dedicated help text and strict shell validation.
+- Main help text lists completion command and completion-specific help entrypoint.
+- Tests cover completion help output, shell script generation, and unsupported-shell errors.
+References:
+`internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `README.md`
+
+Decision:
 Keep PR descriptions size-safe and privacy-safe by using a detailed Codex-generated final body and excluding raw per-worker review reports/full execute artifact dumps.
 Context:
 Large multi-round runs can produce PR descriptions that exceed GitHub's body limit (`65536` chars), causing delivery failures at `gh pr create`.
