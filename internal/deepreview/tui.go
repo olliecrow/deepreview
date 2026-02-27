@@ -36,7 +36,6 @@ type tuiModel struct {
 	cancelRequested bool
 	workerErr       error
 	done            bool
-	finalShownAt    *time.Time
 	width           int
 	height          int
 	tick            int
@@ -63,10 +62,10 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.height = msg.Height
 		return m, tea.ClearScreen
 	case tea.KeyMsg:
+		if m.done {
+			return m, tea.Quit
+		}
 		if msg.String() == "ctrl+c" {
-			if m.done {
-				return m, tea.Quit
-			}
 			if !m.cancelRequested {
 				m.cancelRequested = true
 				if m.requestCancel != nil {
@@ -76,18 +75,14 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	case workerResultMsg:
-		now := time.Now()
 		m.done = true
 		m.workerErr = msg.err
-		m.finalShownAt = &now
-		return m, tickCmd()
+		return m, nil
 	case tickMsg:
-		m.tick++
-		if m.done && m.finalShownAt != nil {
-			if time.Since(*m.finalShownAt) >= 600*time.Millisecond {
-				return m, tea.Quit
-			}
+		if m.done {
+			return m, nil
 		}
+		m.tick++
 		return m, tickCmd()
 	}
 	return m, nil
@@ -419,7 +414,11 @@ func (m tuiModel) View() string {
 	progressSummary := fmt.Sprintf("%s %d/%d (%d%%)", progressBar, completedCount, totalStages, progressPercent)
 	topPlain := fmt.Sprintf("deepreview %s  elapsed %s  %s", spinner, fmtDuration(elapsed), progressSummary)
 	headerInnerWidth := panelInnerWidth(headerStyle, panelWidth)
-	rightHint := subtleStyle.Render("ctrl+c to cancel")
+	rightHintText := "ctrl+c to cancel"
+	if m.done {
+		rightHintText = "finished - press any key to exit"
+	}
+	rightHint := subtleStyle.Render(rightHintText)
 	headerLine := joinHeaderWithRightHint(topPlain, rightHint, headerInnerWidth)
 	lines = append(lines, headerStyle.Render(headerLine))
 
