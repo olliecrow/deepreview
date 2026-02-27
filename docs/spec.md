@@ -67,7 +67,8 @@ This document defines the canonical runtime and product contract for `deepreview
   - `--mode <pr|yolo>` default `pr` (case-insensitive value parsing)
   - `--yolo` alias for `--mode yolo` (legacy `--YOLO` accepted)
   - full-screen terminal UI is enabled by default when terminal capabilities are valid
-  - when TUI is enabled, the completed final frame remains visible until a keypress exits the UI
+  - when TUI is enabled, deepreview exits the UI automatically on completion and prints the text summary immediately
+  - before printing the completion summary after a TUI run, deepreview clears the terminal and prints summary text from the top-left cursor position
   - `--no-tui` force structured text progress logs
 
 Helper command behavior:

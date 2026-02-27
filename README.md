@@ -26,6 +26,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 9. In default mode, it then runs one post-delivery Codex pass to generate the final PR description.
 10. The final PR body is a detailed Codex-generated summary with round outcomes and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 11. In yolo mode, it pushes directly to your source branch.
+12. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
 
 ## Requirements
 
