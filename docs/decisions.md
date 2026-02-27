@@ -259,17 +259,17 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-When TUI mode is enabled, deepreview keeps the final completion frame visible until user keypress, then exits TUI and prints the normal completion summary in terminal text.
+When TUI mode is enabled, deepreview exits immediately on completion, clears the terminal, and then prints the normal completion summary in terminal text.
 Context:
-Auto-exiting the TUI immediately after completion made the terminal state hard to read and easy to miss.
+Holding the completed frame required an extra keypress and caused confusing overlap artifacts between the final TUI frame and summary output in some terminals.
 Rationale:
-Holding the completed frame provides a clear end-of-run signal without changing existing completion summary output behavior.
+Immediate exit removes unnecessary interaction, and clearing the terminal ensures the summary starts in a clean, readable state without visual overlap from prior TUI repaint output.
 Trade-offs:
-TUI users must press a key to return to shell output; non-TUI mode remains unchanged.
+Users no longer pause on a static final frame in TUI mode; completion context now relies on the text summary and artifacts.
 Enforcement:
-TUI update loop exits only on keypress after worker completion; tests assert no auto-quit on completion tick and presence of done-state exit hint.
+TUI update loop exits on worker completion without waiting for keypress; CLI clears terminal before printing completion summary after TUI runs; tests assert worker-completion auto-quit and done-state hint text.
 References:
-`internal/deepreview/tui.go`, `internal/deepreview/tui_test.go`, `docs/spec.md`
+`internal/deepreview/tui.go`, `internal/deepreview/cli.go`, `internal/deepreview/tui_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Apply local readiness checks to explicit `--source-branch` runs when the explicit branch matches the current local branch context.

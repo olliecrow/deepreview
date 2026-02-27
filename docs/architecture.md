@@ -56,6 +56,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - `yolo` mode: push committed candidate state directly to source branch
 
 5. Finalization:
+- if TUI mode was active, exit TUI immediately on completion and clear terminal screen before summary output
 - emit final summary and alignment evidence pointers
 - ensure no stale transient worktrees/artifacts remain
 

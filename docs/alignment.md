@@ -63,6 +63,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-50 | All Codex prompt calls (new/resume, including post-delivery PR enhancement) must be hard-pinned to `gpt-5.3-codex` with `model_reasoning_effort=xhigh`. | `internal/deepreview/codex.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `docs/spec.md`, `docs/decisions.md` |
 | R-51 | Deepreview must provide non-mutating helper commands: `doctor` for preflight checks and `dry-run` for ordered execution preview. | `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `README.md`, `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-52 | Privacy boundary is split by surface: public/delivery surfaces must be redacted/guarded, while local terminal output remains literal for operator debugging. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/progress.go`, `internal/deepreview/text_reporter.go` |
+| R-53 | In TUI mode, completion must not block on keypress; deepreview exits UI automatically, clears terminal, and then prints text completion summary. | `internal/deepreview/tui.go`, `internal/deepreview/cli.go`, `internal/deepreview/tui_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md` |
 
 ## Alignment gate
 For each requirement touched by a change, evidence must be captured for:
