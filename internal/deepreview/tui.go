@@ -117,10 +117,26 @@ const (
 	viewportBottomGutter = 1
 	timelineSafetyGutter = 2
 	defaultContentWidth  = 72
+	sectionSeparator     = "\n"
 )
 
 func chip(style lipgloss.Style, text string) string {
 	return style.Render(text)
+}
+
+func alignedPanelWidth(contentWidth int) int {
+	panelWidth := contentWidth - timelineSafetyGutter
+	if panelWidth < 28 {
+		return contentWidth
+	}
+	return panelWidth
+}
+
+func joinSections(lines []string) string {
+	if len(lines) == 0 {
+		return ""
+	}
+	return strings.Join(lines, sectionSeparator)
 }
 
 func joinHeaderWithRightHint(left, right string, width int) string {
@@ -385,6 +401,7 @@ func (m tuiModel) View() string {
 	completedCount := doneCount + failedCount
 
 	contentWidth := effectiveContentWidth(m.width)
+	panelWidth := alignedPanelWidth(contentWidth)
 	if m.width > 0 && contentWidth < 28 {
 		compactTitle := fit(fmt.Sprintf("deepreview %s %s", spinner, fmtDuration(elapsed)), contentWidth)
 		latest := fit("latest: "+latestStageLine(snapshot), contentWidth)
@@ -397,12 +414,12 @@ func (m tuiModel) View() string {
 	if totalStages > 0 {
 		progressPercent = int((float64(completedCount) / float64(totalStages)) * 100)
 	}
-	progressBarWidth := clamp(contentWidth/6, 10, 20)
+	progressBarWidth := clamp(panelWidth/6, 10, 20)
 	progressBar := renderProgressBar(completedCount, totalStages, progressBarWidth)
 	progressSummary := fmt.Sprintf("%s %d/%d (%d%%)", progressBar, completedCount, totalStages, progressPercent)
 	topPlain := fmt.Sprintf("deepreview %s  elapsed %s  %s", spinner, fmtDuration(elapsed), progressSummary)
-	headerInnerWidth := panelInnerWidth(headerStyle, contentWidth)
-	rightHint := subtleStyle.Render("ctrl+c to cancel (cleanup runs)")
+	headerInnerWidth := panelInnerWidth(headerStyle, panelWidth)
+	rightHint := subtleStyle.Render("ctrl+c to cancel")
 	headerLine := joinHeaderWithRightHint(topPlain, rightHint, headerInnerWidth)
 	lines = append(lines, headerStyle.Render(headerLine))
 
@@ -429,7 +446,7 @@ func (m tuiModel) View() string {
 		runningChip,
 		doneChip,
 		failedChip,
-	}, contentWidth)
+	}, panelWidth)
 	lines = append(lines, badgeLine+ansiReset)
 
 	activity := latestActivity(snapshot)
@@ -449,7 +466,7 @@ func (m tuiModel) View() string {
 	if strings.TrimSpace(activity.message) != "" {
 		metaLines = append(metaLines, "details: "+activity.message)
 	}
-	contextBox := renderPanel(borderStyle, "run context", metaLines, contentWidth)
+	contextBox := renderPanel(borderStyle, "run context", metaLines, panelWidth)
 	lines = append(lines, valueStyle.Render(contextBox))
 
 	if m.width < 60 || m.height < 12 {
@@ -462,7 +479,7 @@ func (m tuiModel) View() string {
 		compactRows := stageRowsLimit(lines, m.width, m.height)
 		rows, hiddenOlder := compactWindow(timelineRows, compactRows)
 		compactLines := make([]string, 0, len(rows)+2)
-		compactInner := panelInnerWidth(tableBorderStyle, contentWidth)
+		compactInner := panelInnerWidth(tableBorderStyle, panelWidth)
 		if len(rows) == 0 {
 			compactLines = append(compactLines, subtleStyle.Render(fit("- waiting for first stage...", compactInner)))
 		}
@@ -472,15 +489,11 @@ func (m tuiModel) View() string {
 		if hiddenOlder > 0 {
 			compactLines = append(compactLines, subtleStyle.Render(fit(fmt.Sprintf("history: %d older stage(s) hidden", hiddenOlder), compactInner)))
 		}
-		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (compact %d/%d)", timelineTitle, len(rows), len(timelineRows)), compactLines, contentWidth))
-		return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
+		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (compact %d/%d)", timelineTitle, len(rows), len(timelineRows)), compactLines, panelWidth))
+		return finalizeView(joinSections(lines), m.width, m.height)
 	}
 
-	tablePanelWidth := contentWidth - timelineSafetyGutter
-	if tablePanelWidth < 28 {
-		tablePanelWidth = contentWidth
-	}
-	tableInner := panelInnerWidth(tableBorderStyle, tablePanelWidth)
+	tableInner := panelInnerWidth(tableBorderStyle, panelWidth)
 	stageCol, statusCol, timeCol, detailsCol := timelineColumns(tableInner)
 
 	head := fmt.Sprintf("%5s  %-*s  %-*s %-*s  %s", "rnd", stageCol, "stage", statusCol, "status", timeCol, "time", "details")
@@ -526,9 +539,9 @@ func (m tuiModel) View() string {
 	if hiddenOlder > 0 {
 		tableLines = append(tableLines, subtleStyle.Render(fit(fmt.Sprintf("history: %d older stage(s) hidden", hiddenOlder), tableInner)))
 	}
-	lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (%d/%d visible)", timelineTitle, len(rows), len(timelineRows)), tableLines, tablePanelWidth))
+	lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (%d/%d visible)", timelineTitle, len(rows), len(timelineRows)), tableLines, panelWidth))
 
-	return finalizeView(strings.Join(lines, "\n\n"), m.width, m.height)
+	return finalizeView(joinSections(lines), m.width, m.height)
 }
 
 func RunTUIWithWorker(state *SharedProgressState, initialWidth, initialHeight int, requestCancel func(), worker func() error) error {
@@ -831,7 +844,7 @@ func compactWindow(rows []StageSnapshot, limit int) ([]StageSnapshot, int) {
 }
 
 func stageRowsLimit(lines []string, viewportWidth, viewportHeight int) int {
-	frameRows := renderedRowsForView(strings.Join(lines, "\n\n"), viewportWidth)
+	frameRows := renderedRowsForView(joinSections(lines), viewportWidth)
 	frameHeight := effectiveFrameHeight(viewportHeight)
 	rows := frameHeight - (frameRows + 6)
 	if rows < 1 {

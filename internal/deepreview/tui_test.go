@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 func TestRenderProgressBarBounds(t *testing.T) {
@@ -362,6 +363,25 @@ func TestTUIViewUsesSingleContextPanelLayout(t *testing.T) {
 	}
 	if strings.Contains(view, "... output clipped to terminal height ...") {
 		t.Fatalf("did not expect clipped marker at 140x40 viewport")
+	}
+}
+
+func TestTUIViewPanelBordersRemainAligned(t *testing.T) {
+	model := seededTUIModelForViewTests(120, 40)
+	view := model.View()
+
+	borderWidths := make(map[int]int)
+	for _, raw := range strings.Split(view, "\n") {
+		line := ansi.Strip(raw)
+		if strings.HasPrefix(line, "╭") || strings.HasPrefix(line, "╰") {
+			borderWidths[lipgloss.Width(line)]++
+		}
+	}
+	if len(borderWidths) == 0 {
+		t.Fatalf("expected bordered panels in view")
+	}
+	if len(borderWidths) != 1 {
+		t.Fatalf("expected aligned border widths, got widths=%v", borderWidths)
 	}
 }
 

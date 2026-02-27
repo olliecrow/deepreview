@@ -11,7 +11,6 @@ import (
 	"runtime"
 	"sort"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -31,6 +30,8 @@ type Orchestrator struct {
 	lastDelivery    *DeliveryResult
 	repoLockPath    string
 }
+
+const stageHeartbeatInterval = 15 * time.Second
 
 func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestrator, error) {
 	workspaceRoot, err := filepath.Abs(config.WorkspaceRoot)
@@ -627,15 +628,14 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		workerReviewPaths = append(workerReviewPaths, workerReviewPath)
 	}
 
-	var wg sync.WaitGroup
-	errCh := make(chan error, o.config.Concurrency)
-	doneCh := make(chan struct{}, o.config.Concurrency)
+	type reviewWorkerResult struct {
+		workerID int
+		err      error
+	}
+	resultsCh := make(chan reviewWorkerResult, o.config.Concurrency)
 
 	for idx := range reviewPaths {
-		wg.Add(1)
 		go func(i int) {
-			defer wg.Done()
-
 			workerID := i + 1
 			worktreePath := worktrees[i]
 			workerReviewRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID)))
@@ -650,49 +650,49 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 			}
 			prompt, err := RenderTemplate(templateText, variables)
 			if err != nil {
-				errCh <- err
+				resultsCh <- reviewWorkerResult{workerID: workerID, err: err}
 				return
 			}
 			logPrefix := filepath.Join(reviewDir, fmt.Sprintf("worker-%02d", workerID), "codex")
 			if _, err := o.codexRunner.RunPrompt(worktreePath, prompt, nil, logPrefix); err != nil {
-				errCh <- err
+				resultsCh <- reviewWorkerResult{
+					workerID: workerID,
+					err:      NewDeepReviewError("independent review worker-%02d failed: %v", workerID, err),
+				}
 				return
 			}
-			doneCh <- struct{}{}
+			resultsCh <- reviewWorkerResult{workerID: workerID}
 		}(idx)
 	}
 
-	go func() {
-		wg.Wait()
-		close(errCh)
-		close(doneCh)
-	}()
-
 	completedCount := 0
-	for {
+	heartbeatStart := time.Now()
+	heartbeatTicker := time.NewTicker(stageHeartbeatInterval)
+	defer heartbeatTicker.Stop()
+	for completedCount < o.config.Concurrency {
 		select {
-		case err, ok := <-errCh:
-			if ok && err != nil {
-				o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
-				return nil, err
+		case result := <-resultsCh:
+			if result.err != nil {
+				o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(result.err))
+				return nil, result.err
 			}
-			if !ok {
-				errCh = nil
-			}
-		case _, ok := <-doneCh:
-			if ok {
-				completedCount++
+			completedCount++
+			o.reporter.StageProgress(
+				"independent review stage",
+				fmt.Sprintf("completed reviewer worker-%02d (%d/%d)", result.workerID, completedCount, o.config.Concurrency),
+				roundPtr(round),
+			)
+		case <-heartbeatTicker.C:
+			if completedCount < o.config.Concurrency {
 				o.reporter.StageProgress(
 					"independent review stage",
-					fmt.Sprintf("completed reviewer workers: %d/%d", completedCount, o.config.Concurrency),
+					stageHeartbeatMessage(
+						fmt.Sprintf("waiting on reviewer workers: %d/%d complete", completedCount, o.config.Concurrency),
+						heartbeatStart,
+					),
 					roundPtr(round),
 				)
-			} else {
-				doneCh = nil
 			}
-		}
-		if errCh == nil && doneCh == nil {
-			break
 		}
 	}
 
@@ -860,7 +860,17 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 			return RoundStatus{}, "", err
 		}
 		logPrefix := filepath.Join(executeDir, fmt.Sprintf("prompt-%02d", idx+1))
-		result, err := o.codexRunner.RunPrompt(executeWorktree, prompt, threadID, logPrefix)
+		result, err := o.runPromptWithHeartbeat(
+			executeWorktree,
+			prompt,
+			threadID,
+			logPrefix,
+			round,
+			stageName,
+			fmt.Sprintf("running execute step %d of %d", idx+1, len(queue)),
+			"execute stage",
+			fmt.Sprintf("running execute workflow (step %d/%d: %s)", idx+1, len(queue), label),
+		)
 		if err != nil {
 			o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
@@ -961,6 +971,50 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 	}
 	o.reporter.StageFinished("execute stage", roundPtr(round), true, fmt.Sprintf("round status recorded (decision=%s)", status.Decision))
 	return status, roundSummaryPath, nil
+}
+
+func stageHeartbeatMessage(base string, start time.Time) string {
+	elapsed := time.Since(start).Round(time.Second)
+	if elapsed < 0 {
+		elapsed = 0
+	}
+	return fmt.Sprintf("%s (elapsed %s)", base, elapsed)
+}
+
+func (o *Orchestrator) runPromptWithHeartbeat(
+	cwd, prompt string,
+	threadID *string,
+	logPrefix string,
+	round int,
+	stageName, stageBaseMessage string,
+	parentStageName, parentStageBaseMessage string,
+) (CodexRunResult, error) {
+	type runResult struct {
+		result CodexRunResult
+		err    error
+	}
+
+	start := time.Now()
+	resultCh := make(chan runResult, 1)
+	go func() {
+		result, err := o.codexRunner.RunPrompt(cwd, prompt, threadID, logPrefix)
+		resultCh <- runResult{result: result, err: err}
+	}()
+
+	ticker := time.NewTicker(stageHeartbeatInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case outcome := <-resultCh:
+			return outcome.result, outcome.err
+		case <-ticker.C:
+			o.reporter.StageProgress(stageName, stageHeartbeatMessage(stageBaseMessage, start), roundPtr(round))
+			if parentStageName != "" {
+				o.reporter.StageProgress(parentStageName, stageHeartbeatMessage(parentStageBaseMessage, start), roundPtr(round))
+			}
+		}
+	}
 }
 
 func ensureCanonicalArtifact(canonicalPath string, candidates []string) error {
