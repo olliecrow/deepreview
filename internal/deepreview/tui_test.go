@@ -419,6 +419,72 @@ func TestTUICtrlCRequestsCancelWithoutImmediateQuit(t *testing.T) {
 	}
 }
 
+func TestTUIWorkerCompletionWaitsForKeypress(t *testing.T) {
+	model := newTUIModel(NewSharedProgressState(), make(chan error), nil, 100, 30)
+	updated, cmd := model.Update(workerResultMsg{err: nil})
+	if cmd != nil {
+		t.Fatalf("expected no auto-quit command after worker completion")
+	}
+	next, ok := updated.(tuiModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+	if !next.done {
+		t.Fatalf("expected done=true after worker completion")
+	}
+}
+
+func TestTUIDoneStateQuitsOnAnyKey(t *testing.T) {
+	model := newTUIModel(NewSharedProgressState(), make(chan error), nil, 100, 30)
+	updated, _ := model.Update(workerResultMsg{err: nil})
+	doneModel, ok := updated.(tuiModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+
+	next, cmd := doneModel.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'x'}})
+	if cmd == nil {
+		t.Fatalf("expected quit command on keypress after completion")
+	}
+	if _, isQuit := cmd().(tea.QuitMsg); !isQuit {
+		t.Fatalf("expected tea.QuitMsg after completion keypress")
+	}
+	if !next.(tuiModel).done {
+		t.Fatalf("expected model to remain in done state")
+	}
+}
+
+func TestTUIDoneStateDoesNotAutoQuitOnTick(t *testing.T) {
+	model := newTUIModel(NewSharedProgressState(), make(chan error), nil, 100, 30)
+	updated, _ := model.Update(workerResultMsg{err: nil})
+	doneModel, ok := updated.(tuiModel)
+	if !ok {
+		t.Fatalf("unexpected model type %T", updated)
+	}
+
+	updated, cmd := doneModel.Update(tickMsg(time.Now()))
+	if cmd != nil {
+		t.Fatalf("expected no tick command once run is done")
+	}
+	if !updated.(tuiModel).done {
+		t.Fatalf("expected done state to persist")
+	}
+}
+
+func TestTUIViewShowsDoneExitHint(t *testing.T) {
+	state := NewSharedProgressState()
+	reporter := NewTUIProgressReporter(state)
+	reporter.RunStarted("run-123", "owner/repo", "feature/resize", "pr", "/tmp/deepreview/runs/run-123")
+	reporter.RunFinished(true, "run completed successfully")
+
+	model := newTUIModel(state, make(chan error), nil, 120, 30)
+	model.done = true
+	view := model.View()
+	if !strings.Contains(view, "finished - press any key to exit") {
+		t.Fatalf("expected done-state exit hint, got:\n%s", view)
+	}
+}
+
 func TestTUIViewLeavesRightEdgeUnderRandomizedInputs(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
 	for iter := 0; iter < 250; iter++ {
