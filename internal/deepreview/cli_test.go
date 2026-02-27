@@ -83,10 +83,12 @@ func TestMainHelpTextIncludesCoreSections(t *testing.T) {
 		"deepreview review [<repo>] [--source-branch <branch>]",
 		"deepreview doctor [<repo>] [--source-branch <branch>]",
 		"deepreview dry-run [<repo>] [--source-branch <branch>]",
+		"deepreview completion [bash|zsh]",
 		"Commands:",
 		"deepreview review --help",
 		"deepreview doctor --help",
 		"deepreview dry-run --help",
+		"deepreview completion --help",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("main help missing %q", want)
@@ -125,6 +127,8 @@ func TestRunCLIHelpEntrypointsReturnZero(t *testing.T) {
 		{"doctor", "help"},
 		{"dry-run", "--help"},
 		{"dry-run", "help"},
+		{"completion", "--help"},
+		{"completion", "help"},
 	}
 	for _, tc := range tests {
 		if code := RunCLI(tc); code != 0 {
@@ -182,6 +186,49 @@ func TestDryRunHelpTextIncludesCoreSections(t *testing.T) {
 		if !strings.Contains(help, want) {
 			t.Fatalf("dry-run help missing %q", want)
 		}
+	}
+}
+
+func TestCompletionHelpTextIncludesInstallExamples(t *testing.T) {
+	help := CompletionHelpText()
+	for _, want := range []string{
+		"deepreview completion",
+		"Usage:",
+		"deepreview completion [bash|zsh]",
+		"deepreview completion bash",
+		"deepreview completion zsh",
+	} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("completion help missing %q", want)
+		}
+	}
+}
+
+func TestCompletionScriptSupportsBashAndZsh(t *testing.T) {
+	bashScript, err := completionScript("bash")
+	if err != nil {
+		t.Fatalf("unexpected bash completion error: %v", err)
+	}
+	if !strings.Contains(bashScript, "complete -F _deepreview_completion deepreview") {
+		t.Fatalf("expected bash completion directive, got:\n%s", bashScript)
+	}
+
+	zshScript, err := completionScript("zsh")
+	if err != nil {
+		t.Fatalf("unexpected zsh completion error: %v", err)
+	}
+	if !strings.Contains(zshScript, "#compdef deepreview") {
+		t.Fatalf("expected zsh completion header, got:\n%s", zshScript)
+	}
+}
+
+func TestCompletionScriptRejectsUnsupportedShell(t *testing.T) {
+	_, err := completionScript("fish")
+	if err == nil {
+		t.Fatalf("expected unsupported shell error")
+	}
+	if !strings.Contains(err.Error(), "unsupported shell") {
+		t.Fatalf("expected unsupported shell error, got %v", err)
 	}
 }
 

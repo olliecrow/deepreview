@@ -148,6 +148,7 @@ Usage:
   deepreview review [<repo>] [--source-branch <branch>] [options]
   deepreview doctor [<repo>] [--source-branch <branch>] [options]
   deepreview dry-run [<repo>] [--source-branch <branch>] [options]
+  deepreview completion [bash|zsh]
   deepreview help
   deepreview --help
 
@@ -155,12 +156,14 @@ Commands:
   review    Run the deepreview pipeline for one source branch.
   doctor    Run non-mutating preflight checks for a planned run.
   dry-run   Print the planned execution order without mutating anything.
+  completion Print shell tab-completion script output.
   help      Show this help text.
 
 Get command-specific help:
   deepreview review --help
   deepreview doctor --help
   deepreview dry-run --help
+  deepreview completion --help
 `
 }
 
@@ -219,7 +222,7 @@ Optional flags:
 
   --mode <pr|yolo>      (default: %s)
     Delivery strategy:
-      pr   -> open PR into the original source branch
+      pr   -> open a pull request into the original source branch
       yolo -> push directly to source branch
     Values are case-insensitive.
 
@@ -228,8 +231,8 @@ Optional flags:
     Legacy alias --YOLO is also accepted.
 
   --no-tui              (default: false)
-    Force structured text progress logs (disables full-screen TUI).
-    Default behavior is TUI-on when terminal capabilities are valid.
+    Force structured text progress logs (disables full-screen terminal user interface).
+    Default behavior enables terminal user interface when terminal capabilities are valid.
 
 Environment overrides:
   DEEPREVIEW_WORKSPACE_ROOT   (default: ~/deepreview)
@@ -328,6 +331,24 @@ Defaults:
 `, defaultConcurrency, defaultMaxRounds, ModePR)
 }
 
+func CompletionHelpText() string {
+	return `deepreview completion
+
+Print a shell completion script for deepreview.
+
+Usage:
+  deepreview completion [bash|zsh]
+
+Defaults:
+  If shell is omitted, output defaults to bash.
+
+Examples:
+  deepreview completion bash > ~/.local/share/bash-completion/completions/deepreview
+  mkdir -p ~/.zsh/completions
+  deepreview completion zsh > ~/.zsh/completions/_deepreview
+`
+}
+
 func PrintUsage() {
 	fmt.Fprint(os.Stderr, MainHelpText())
 }
@@ -352,10 +373,91 @@ func RunCLI(argv []string) int {
 		return runDoctorCommand(argv[1:])
 	case "dry-run":
 		return runDryRunCommand(argv[1:])
+	case "completion":
+		return runCompletionCommand(argv[1:])
 	default:
 		fmt.Fprintf(os.Stderr, "deepreview error: unsupported command: %s\n", argv[0])
 		PrintUsage()
 		return 1
+	}
+}
+
+func runCompletionCommand(args []string) int {
+	if len(args) >= 1 && isHelpArg(args[0]) {
+		fmt.Fprint(os.Stdout, CompletionHelpText())
+		return 0
+	}
+	if len(args) > 1 {
+		fmt.Fprintln(os.Stderr, "deepreview error: completion accepts zero or one shell argument (bash or zsh)")
+		return 1
+	}
+	shell := "bash"
+	if len(args) == 1 {
+		shell = strings.ToLower(strings.TrimSpace(args[0]))
+	}
+	script, err := completionScript(shell)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
+		return 1
+	}
+	fmt.Fprint(os.Stdout, script)
+	return 0
+}
+
+func completionScript(shell string) (string, error) {
+	switch shell {
+	case "bash":
+		return `# bash completion for deepreview
+_deepreview_completion() {
+  local cur prev words cword
+  _init_completion || return
+  local commands="review doctor dry-run completion help"
+  if [[ ${cword} -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
+    return
+  fi
+  case "${words[1]}" in
+    completion)
+      COMPREPLY=( $(compgen -W "bash zsh" -- "${cur}") )
+      ;;
+    review|doctor|dry-run)
+      COMPREPLY=( $(compgen -W "--source-branch --concurrency --max-rounds --mode --yolo --no-tui" -- "${cur}") )
+      ;;
+    *)
+      COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
+      ;;
+  esac
+}
+complete -F _deepreview_completion deepreview
+`, nil
+	case "zsh":
+		return `#compdef deepreview
+_deepreview() {
+  local -a commands
+  commands=(
+    'review:run deep review pipeline for one source branch'
+    'doctor:run non-mutating preflight checks'
+    'dry-run:print planned execution order without mutating state'
+    'completion:print shell completion script'
+    'help:show help text'
+  )
+  if (( CURRENT == 2 )); then
+    _describe 'command' commands
+    return
+  fi
+  case "${words[2]}" in
+    completion)
+      _values 'shell' bash zsh
+      ;;
+    review|doctor|dry-run)
+      _values 'flag' --source-branch --concurrency --max-rounds --mode --yolo --no-tui
+      ;;
+  esac
+}
+_deepreview "$@"
+`, nil
+	default:
+		return "", NewDeepReviewError("unsupported shell %q (expected bash or zsh)", shell)
 	}
 }
 
