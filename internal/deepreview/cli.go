@@ -518,11 +518,13 @@ func runReviewCommand(args []string) int {
 
 	stdoutFD := int(os.Stdout.Fd())
 	stdinFD := int(os.Stdin.Fd())
+	stdinIsTerminal := term.IsTerminal(stdinFD)
+	stdoutIsTerminal := term.IsTerminal(stdoutFD)
 	termWidth, termHeight, sizeErr := term.GetSize(stdoutFD)
 	enableTUI := shouldEnableTUI(
 		parsed.NoTUI,
-		term.IsTerminal(stdinFD),
-		term.IsTerminal(stdoutFD),
+		stdinIsTerminal,
+		stdoutIsTerminal,
 		os.Getenv("TERM"),
 		termWidth,
 		termHeight,
@@ -558,6 +560,9 @@ func runReviewCommand(args []string) int {
 	if interruptCount.Load() > 0 {
 		fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 		return 130
+	}
+	if enableTUI {
+		clearTerminalForCompletionSummary(os.Stdout)
 	}
 	printCompletionSummary(orchestrator, parsed.Config)
 	return 0
@@ -845,6 +850,14 @@ func shouldEnableTUI(noTUI, stdinIsTerminal, stdoutIsTerminal bool, termName str
 	return width > 0 && height > 0
 }
 
+func clearTerminalForCompletionSummary(out io.Writer) {
+	if out == nil {
+		return
+	}
+	// Clear full screen and move cursor to the top-left before summary output.
+	_, _ = io.WriteString(out, "\x1b[2J\x1b[H")
+}
+
 func isInterruptError(err error) bool {
 	if err == nil {
 		return false
@@ -874,6 +887,11 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 	}
 	managedRepoPath := strings.TrimSpace(orchestrator.ManagedRepoPath())
 	reviewSnapshot := readCompletionReviewSnapshot(runRoot)
+	finalSummaryPath := filepath.Join(runRoot, "final-summary.md")
+	printArtifactPaths := func() {
+		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
+		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", finalSummaryPath)
+	}
 
 	_, _ = fmt.Fprintf(os.Stdout, "deepreview completed: run `%s`\n", config.RunID)
 	if repoSlug != "" {
@@ -895,18 +913,19 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 		if reason := formatFinalReviewReason(reviewSnapshot.FinalStatus); reason != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "final review summary: %s\n", reason)
 		}
+		if nextFocus := formatFinalReviewNextFocus(reviewSnapshot.FinalStatus); nextFocus != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "next review focus: %s\n", nextFocus)
+		}
 	}
 	if delivery == nil {
-		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
-		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
+		printArtifactPaths()
 		return
 	}
 
 	if delivery.Skipped {
 		_, _ = fmt.Fprintf(os.Stdout, "delivery skipped: %s\n", delivery.SkipReason)
 		_, _ = fmt.Fprintf(os.Stdout, "no push or PR was created because no deliverable repository changes were found.\n")
-		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
-		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
+		printArtifactPaths()
 		return
 	}
 
@@ -924,8 +943,7 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery completed in YOLO mode.\n")
 		}
 	}
-	_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
-	_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", filepath.Join(runRoot, "final-summary.md"))
+	printArtifactPaths()
 }
 
 type completionReviewSnapshot struct {
@@ -969,6 +987,17 @@ func formatFinalReviewReason(status RoundStatus) string {
 		return ""
 	}
 	return trimForDisplay(reason, 220)
+}
+
+func formatFinalReviewNextFocus(status RoundStatus) string {
+	if status.NextFocus == nil {
+		return ""
+	}
+	nextFocus := strings.TrimSpace(strings.ReplaceAll(*status.NextFocus, "\n", " "))
+	if nextFocus == "" {
+		return ""
+	}
+	return trimForDisplay(nextFocus, 180)
 }
 
 func isLocalDirectory(path string) bool {

@@ -259,6 +259,26 @@ func TestShouldEnableTUI(t *testing.T) {
 	}
 }
 
+func TestClearTerminalForCompletionSummaryWritesEscapeSequence(t *testing.T) {
+	var out strings.Builder
+	clearTerminalForCompletionSummary(&out)
+	if out.String() != "\x1b[2J\x1b[H" {
+		t.Fatalf("unexpected clear sequence: %q", out.String())
+	}
+}
+
+func TestFormatFinalReviewNextFocus(t *testing.T) {
+	if got := formatFinalReviewNextFocus(RoundStatus{}); got != "" {
+		t.Fatalf("expected empty next focus when field is absent, got %q", got)
+	}
+
+	raw := "  tighten flaky tests\nfor parser edge cases  "
+	got := formatFinalReviewNextFocus(RoundStatus{NextFocus: &raw})
+	if got != "tighten flaky tests for parser edge cases" {
+		t.Fatalf("unexpected formatted next focus: %q", got)
+	}
+}
+
 func TestParseReviewArgsRejectsLegacyTUIFlag(t *testing.T) {
 	_, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature/test", "--tui"}, time.Unix(1700000000, 0))
 	if err == nil {
@@ -317,7 +337,7 @@ func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {
 	}
 	if err := os.WriteFile(
 		filepath.Join(round2, "round-status.json"),
-		[]byte("{\"decision\":\"stop\",\"reason\":\"all major issues addressed\",\"confidence\":0.93}\n"),
+		[]byte("{\"decision\":\"stop\",\"reason\":\"all major issues addressed\",\"confidence\":0.93,\"next_focus\":\"monitor integration failure drift\"}\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -335,6 +355,9 @@ func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {
 	}
 	if snapshot.FinalStatus.Confidence == nil || *snapshot.FinalStatus.Confidence != 0.93 {
 		t.Fatalf("expected final confidence 0.93, got %#v", snapshot.FinalStatus.Confidence)
+	}
+	if snapshot.FinalStatus.NextFocus == nil || *snapshot.FinalStatus.NextFocus != "monitor integration failure drift" {
+		t.Fatalf("expected final next_focus to be preserved, got %#v", snapshot.FinalStatus.NextFocus)
 	}
 }
 

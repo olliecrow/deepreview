@@ -77,7 +77,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case workerResultMsg:
 		m.done = true
 		m.workerErr = msg.err
-		return m, nil
+		return m, tea.Quit
 	case tickMsg:
 		if m.done {
 			return m, nil
@@ -416,7 +416,7 @@ func (m tuiModel) View() string {
 	headerInnerWidth := panelInnerWidth(headerStyle, panelWidth)
 	rightHintText := "ctrl+c to cancel"
 	if m.done {
-		rightHintText = "finished - press any key to exit"
+		rightHintText = "finishing..."
 	}
 	rightHint := subtleStyle.Render(rightHintText)
 	headerLine := joinHeaderWithRightHint(topPlain, rightHint, headerInnerWidth)
