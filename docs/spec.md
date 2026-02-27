@@ -44,7 +44,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
 - final delivery push is allowed only after round execution completes and no blocking verification failures are reported.
 - default delivery mode is `pr` and must not push source branch directly.
-- in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a detailed final PR description body and updates the PR description with that generated body.
+- in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
@@ -90,6 +90,7 @@ Helper command behavior:
 - delivery branch prefix: `deepreview/`
 - local candidate branch prefix: `deepreview/candidate/`
 - PR title prefix: `deepreview:`
+- final PR title should be concise, human-readable, and explain what changed at a glance.
 
 ## Artifact contract
 Each run must produce:
@@ -131,12 +132,19 @@ PR bodies should include these sections in the final Codex-generated output:
 - final PR body text must pass privacy checks (no personal information, secrets, or private local machine paths)
 - if generated PR text exceeds GitHub PR body limits, deepreview must fall back to a compact body automatically
 
+## PR title contract (default PR mode)
+- final PR title is Codex-generated in post-delivery stage and then applied via `gh pr edit`.
+- final PR title must remain prefixed with `deepreview:`.
+- final PR title must be concise, concrete, and human-readable (not generic boilerplate).
+- final PR title text must pass privacy checks (no personal information, secrets, or private local machine paths).
+
 ## Prompt-template contract
 - Prompt templates are file-based and unversioned.
 - Prompt root directory is `prompts/`.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
 - PR mode uses one post-delivery description-enhancement template: `prompts/delivery/pr-description-summary.md`.
+- Post-delivery PR enhancement prompt should provide path-level context and let Codex inspect run artifacts/logs/repo directly; avoid injecting pre-digested round/file summary blocks.
 - Default execute queue order:
   - `01-consolidate-reviews.md`
   - `02-plan.md`

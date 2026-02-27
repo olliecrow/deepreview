@@ -352,28 +352,28 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Final PR descriptions must follow one structured Codex-generated format: summary, what changed and why, round outcomes, verification, risks/follow-ups, and final status.
+Final PR metadata must be Codex-generated and human-readable: concise PR title plus structured PR description sections (summary, what changed and why, round outcomes, verification, risks/follow-ups, final status).
 Context:
-Final PR output should consistently communicate what changed, what was verified, and what risks remain without requiring readers to parse raw artifact dumps.
+Final PR output should consistently communicate what changed, why it changed, what was verified, and what risks remain without requiring readers to parse raw artifact dumps.
 Rationale:
-A fixed section set improves readability and keeps reporting quality stable across runs.
+A fixed title/body contract improves readability and keeps reporting quality stable across runs.
 Trade-offs:
-Relies on Codex quality and may require prompt tuning if structure drifts.
+Relies on Codex quality and may require prompt tuning if title/body quality drifts.
 Enforcement:
-The delivery prompt template defines the required section structure and integration tests assert key section presence.
+The delivery prompt template defines required title/body outputs and section structure; integration tests assert title artifacts and key body section presence.
 References:
 `docs/spec.md`, `prompts/delivery/pr-description-summary.md`, `internal/deepreview/integration_test.go`
 
 Decision:
-In PR mode, run one fresh post-delivery Codex call to generate the final PR description body and replace the PR body with that generated output.
+In PR mode, run one fresh post-delivery Codex call to generate final PR title + description body and replace both via `gh pr edit`.
 Context:
-Large deterministic artifact-heavy PR bodies can exceed GitHub limits and cause `gh pr create` failures; users also want a cleaner narrative-first final PR.
+Large deterministic artifact-heavy PR bodies can exceed GitHub limits and cause `gh pr create` failures; users also need clearer human-readable PR metadata than static generic titles.
 Rationale:
-Using one detailed Codex-generated final body keeps PRs readable, reduces size pressure, and avoids exposing unnecessary internal artifact detail.
+Using one Codex-generated final title/body pair keeps PRs readable, improves scannability, reduces size pressure, and avoids exposing unnecessary internal artifact detail.
 Trade-offs:
 Raw artifact detail is not embedded in final PR body and must be read from run artifacts when needed.
 Enforcement:
-Delivery flow creates PR with a compact base body, runs dedicated delivery summary template in a fresh Codex context, writes final `pr-body.md` from generated output only, and updates PR description via `gh pr edit`.
+Delivery flow creates PR with base title/body, runs dedicated delivery metadata template in a fresh Codex context, provides path-level context (run root + managed repo path) without injected digest blocks, writes final `pr-title.txt`/`pr-body.md` from generated output, and updates PR title/body via `gh pr edit`.
 References:
 `internal/deepreview/orchestrator.go`, `prompts/delivery/pr-description-summary.md`, `docs/spec.md`, `docs/architecture.md`
 

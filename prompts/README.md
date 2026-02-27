@@ -13,7 +13,8 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - Treat independent reviews as strong inputs, not gospel, and require independent consolidation.
 - Keep execution no-regret and high-conviction: defer low-confidence items.
 - Require end-to-end plan and execute behavior, including local verification and docs/decision upkeep.
-- In PR mode, generate a detailed post-delivery Codex PR description body and use it as the final PR body.
+- In PR mode, generate a detailed post-delivery Codex PR title and PR description body, then apply both as final PR metadata.
+- Post-delivery PR metadata quality should come from Codex reading run artifacts/logs/repo context directly, not injected pre-digested summary blocks.
 
 ## Layout
 - `prompts/review/independent-review.md`: template used by every independent-review worker.
@@ -22,7 +23,7 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - `prompts/execute/02-plan.md`
 - `prompts/execute/03-execute-verify.md`
 - `prompts/execute/04-cleanup-summary-commit.md`
-- `prompts/delivery/pr-description-summary.md`: post-PR template used to generate the final PR description body.
+- `prompts/delivery/pr-description-summary.md`: post-PR template used to generate the final PR title and description body.
 
 ## Rendering notes
 - Templates are rendered with run- and round-specific template variables (for example `{{ROUND_NUMBER}}`).
