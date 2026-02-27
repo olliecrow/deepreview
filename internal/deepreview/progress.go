@@ -187,12 +187,22 @@ func roundEqual(a, b *int) bool {
 func (r *TUIProgressReporter) StageProgress(stageName, message string, roundNumber *int) {
 	r.state.mu.Lock()
 	defer r.state.mu.Unlock()
+	matchedCompleted := -1
 	for i := len(r.state.stages) - 1; i >= 0; i-- {
 		stage := &r.state.stages[i]
-		if stage.Name == stageName && roundEqual(stage.RoundNumber, roundNumber) && stage.Status == "running" {
-			stage.Message = message
-			return
+		if stage.Name == stageName && roundEqual(stage.RoundNumber, roundNumber) {
+			if stage.Status == "running" {
+				stage.Message = message
+				return
+			}
+			if matchedCompleted == -1 {
+				matchedCompleted = i
+			}
 		}
+	}
+	if matchedCompleted >= 0 {
+		r.state.stages[matchedCompleted].Message = message
+		return
 	}
 	var rn *int
 	if roundNumber != nil {
