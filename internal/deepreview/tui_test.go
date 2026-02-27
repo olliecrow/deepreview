@@ -419,11 +419,14 @@ func TestTUICtrlCRequestsCancelWithoutImmediateQuit(t *testing.T) {
 	}
 }
 
-func TestTUIWorkerCompletionWaitsForKeypress(t *testing.T) {
+func TestTUIWorkerCompletionAutoQuits(t *testing.T) {
 	model := newTUIModel(NewSharedProgressState(), make(chan error), nil, 100, 30)
 	updated, cmd := model.Update(workerResultMsg{err: nil})
-	if cmd != nil {
-		t.Fatalf("expected no auto-quit command after worker completion")
+	if cmd == nil {
+		t.Fatalf("expected auto-quit command after worker completion")
+	}
+	if _, isQuit := cmd().(tea.QuitMsg); !isQuit {
+		t.Fatalf("expected tea.QuitMsg after worker completion")
 	}
 	next, ok := updated.(tuiModel)
 	if !ok {
@@ -480,7 +483,7 @@ func TestTUIViewShowsDoneExitHint(t *testing.T) {
 	model := newTUIModel(state, make(chan error), nil, 120, 30)
 	model.done = true
 	view := model.View()
-	if !strings.Contains(view, "finished - press any key to exit") {
+	if !strings.Contains(view, "finishing...") {
 		t.Fatalf("expected done-state exit hint, got:\n%s", view)
 	}
 }
