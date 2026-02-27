@@ -108,9 +108,9 @@ var (
 
 const (
 	ansiReset            = "\x1b[0m"
-	viewportRightGutter  = 6
-	viewportBottomGutter = 1
-	timelineSafetyGutter = 2
+	viewportRightGutter  = 1
+	viewportBottomGutter = 0
+	timelineSafetyGutter = 0
 	defaultContentWidth  = 72
 	sectionSeparator     = "\n"
 )
@@ -164,6 +164,7 @@ func joinChipsWithinWidth(chips []string, width int) string {
 		return ""
 	}
 	line := ""
+	visibleCount := 0
 	for _, c := range chips {
 		candidate := c
 		if line != "" {
@@ -173,11 +174,34 @@ func joinChipsWithinWidth(chips []string, width int) string {
 			break
 		}
 		line = candidate
+		visibleCount++
 	}
+	hiddenCount := len(chips) - visibleCount
+	if hiddenCount <= 0 {
+		if line == "" {
+			return truncateANSIWithMarker(chips[0], width)
+		}
+		return line
+	}
+
+	overflowHint := fmt.Sprintf(" [+%d more]", hiddenCount)
 	if line == "" {
-		return chips[0]
+		return truncateANSIWithMarker(overflowHint, width)
 	}
-	return line
+	candidate := line + overflowHint
+	if lipgloss.Width(candidate) <= width {
+		return candidate
+	}
+
+	availableForLine := width - lipgloss.Width(overflowHint)
+	if availableForLine <= 0 {
+		return truncateANSIWithMarker(overflowHint, width)
+	}
+	trimmed := strings.TrimRight(truncateANSIWithMarker(line, availableForLine), " ")
+	if trimmed == "" {
+		return truncateANSIWithMarker(overflowHint, width)
+	}
+	return truncateANSIWithMarker(trimmed+overflowHint, width)
 }
 
 func renderPanelTitle(label string) string {
@@ -631,7 +655,7 @@ func clampViewWidth(view string, viewportWidth int) string {
 	changed := false
 	for i, line := range lines {
 		if ansi.StringWidth(line) > safeWidth {
-			lines[i] = ansi.Truncate(line, safeWidth, "")
+			lines[i] = truncateANSIWithMarker(line, safeWidth)
 			changed = true
 		}
 	}
@@ -671,7 +695,7 @@ func stabilizeFrame(view string, viewportWidth, viewportHeight int) string {
 	}
 	out := make([]string, 0, capHint)
 	for _, line := range lines {
-		out = append(out, padDisplayWidth(ansi.Truncate(line, safeFrameWidth, ""), safeFrameWidth))
+		out = append(out, padDisplayWidth(truncateANSIWithMarker(line, safeFrameWidth), safeFrameWidth))
 	}
 	if frameHeight > 0 {
 		blank := strings.Repeat(" ", safeFrameWidth)
@@ -741,6 +765,17 @@ func fit(text string, width int) string {
 		return runewidth.Truncate(text, width, "")
 	}
 	return runewidth.Truncate(text, width, "...")
+}
+
+func truncateANSIWithMarker(text string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	tail := ""
+	if width >= 4 {
+		tail = "..."
+	}
+	return ansi.Truncate(text, width, tail)
 }
 
 func clamp(v, minV, maxV int) int {
