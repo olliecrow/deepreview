@@ -171,6 +171,22 @@ func TestJoinChipsWithinWidthBounds(t *testing.T) {
 	}
 }
 
+func TestJoinChipsWithinWidthShowsOverflowHint(t *testing.T) {
+	chips := []string{
+		chip(chipBaseStyle.Foreground(lipgloss.Color("231")).Background(lipgloss.Color("24")), "RUNNING"),
+		chip(chipBaseStyle.Foreground(lipgloss.Color("231")).Background(lipgloss.Color("62")), "STAGES 12"),
+		chip(chipBaseStyle.Foreground(lipgloss.Color("16")).Background(lipgloss.Color("228")), "RUNNING 1"),
+		chip(chipBaseStyle.Foreground(lipgloss.Color("22")).Background(lipgloss.Color("120")), "DONE 2"),
+	}
+	line := joinChipsWithinWidth(chips, 24)
+	if !strings.Contains(line, "[+") || !strings.Contains(line, "more]") {
+		t.Fatalf("expected explicit overflow hint when chips are hidden, got: %q", line)
+	}
+	if lipgloss.Width(line) > 24 {
+		t.Fatalf("overflow hint line should fit width: got %d", lipgloss.Width(line))
+	}
+}
+
 func TestTUIViewRespectsWidthInStandardLayout(t *testing.T) {
 	model := seededTUIModelForViewTests(120, 40)
 	view := model.View()
@@ -302,8 +318,8 @@ func TestTUIViewLeavesRightEdgeGutterAcrossRange(t *testing.T) {
 }
 
 func TestEffectiveContentWidth(t *testing.T) {
-	if got := effectiveContentWidth(120); got != 114 {
-		t.Fatalf("expected 114 content width for viewport 120, got %d", got)
+	if got := effectiveContentWidth(120); got != 119 {
+		t.Fatalf("expected 119 content width for viewport 120, got %d", got)
 	}
 	if got := effectiveContentWidth(1); got != 1 {
 		t.Fatalf("expected minimum width 1, got %d", got)
@@ -323,8 +339,8 @@ func TestEffectiveFrameHeight(t *testing.T) {
 	if got := effectiveFrameHeight(2); got != 2 {
 		t.Fatalf("expected no gutter collapse for height 2, got %d", got)
 	}
-	if got := effectiveFrameHeight(20); got != 19 {
-		t.Fatalf("expected one-row vertical gutter for height 20, got %d", got)
+	if got := effectiveFrameHeight(20); got != 20 {
+		t.Fatalf("expected full-height frame for height 20, got %d", got)
 	}
 }
 
@@ -596,6 +612,14 @@ func TestClampViewWidthUsesSafeGutter(t *testing.T) {
 	}
 }
 
+func TestClampViewWidthShowsTruncationMarkerWhenPossible(t *testing.T) {
+	line := strings.Repeat("x", 200)
+	out := clampViewWidth(line, 24)
+	if !strings.Contains(out, "...") {
+		t.Fatalf("expected explicit truncation marker, got: %q", out)
+	}
+}
+
 func TestTUIViewRespectsHeightAcrossRange(t *testing.T) {
 	for width := 1; width <= 200; width++ {
 		for _, height := range []int{1, 2, 4, 8, 10, 12, 14, 16, 18, 20, 24, 30, 40, 60} {
@@ -608,13 +632,13 @@ func TestTUIViewRespectsHeightAcrossRange(t *testing.T) {
 	}
 }
 
-func TestTUIViewLeavesBottomEdgeGutterAcrossRange(t *testing.T) {
+func TestTUIViewUsesFullHeightAcrossRange(t *testing.T) {
 	for width := 2; width <= 200; width++ {
 		for _, height := range []int{3, 4, 8, 10, 12, 14, 16, 18, 20, 24, 30, 40, 60} {
 			model := seededTUIModelForViewTests(width, height)
 			view := model.View()
-			if got := renderedViewRows(view, width); got >= height {
-				t.Fatalf("width=%d height=%d rows=%d should leave a bottom gutter row", width, height, got)
+			if got := renderedViewRows(view, width); got != height {
+				t.Fatalf("width=%d height=%d rows=%d should use full frame height", width, height, got)
 			}
 		}
 	}

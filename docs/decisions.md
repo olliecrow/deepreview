@@ -318,6 +318,21 @@ Rationale:
 Allowing local checkpoint commits improves recoverability and encourages incremental progress while still keeping pushes constrained to the final delivery step.
 Trade-offs:
 Potentially noisier local history than strict single-commit-per-round policy.
+
+Decision:
+Prefer full-viewport TUI usage with explicit overflow signaling.
+Context:
+The progress TUI previously reserved wide/right and bottom gutters and silently dropped/truncated some rendered elements.
+Rationale:
+Using available viewport space improves readability, while explicit `+N more` and truncation markers reduce ambiguity about hidden content.
+Trade-offs:
+Slightly denser rendering at large terminal sizes; one-column anti-wrap safety margin is still retained.
+Enforcement:
+- TUI width/height targeting minimizes reserved gutter space and fills the available frame height.
+- Header chip overflow renders an explicit hidden-count hint.
+- ANSI-aware width clamping uses visible truncation markers when width permits.
+References:
+`internal/deepreview/tui.go`, `internal/deepreview/tui_test.go`
 Enforcement:
 Spec/architecture/prompt contracts allow local commits during rounds and require no empty commits.
 References:
