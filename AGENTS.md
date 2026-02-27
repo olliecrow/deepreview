@@ -69,3 +69,8 @@
 - Do not rewrite history unless explicitly requested.
 - Do not revert unrelated user changes.
 - Keep worktree isolation strict when running review fanout.
+
+## Dictation-Aware Input Handling
+- The user often dictates prompts, so minor transcription errors and homophone substitutions are expected.
+- Infer intent from local context and repository state; ask a concise clarification only when ambiguity changes execution risk.
+- Keep explicit typo dictionaries at workspace level (do not duplicate repo-local typo maps).
