@@ -144,7 +144,7 @@ func TestRunCLIUnsupportedCommandShowsRawUserInput(t *testing.T) {
 		t.Fatalf("pipe create failed: %v", err)
 	}
 	os.Stderr = w
-	code := RunCLI([]string{"/Users/oc/private-command"})
+	code := RunCLI([]string{"/Users/YOU/private-command"})
 	_ = w.Close()
 	os.Stderr = originalStderr
 
@@ -158,7 +158,7 @@ func TestRunCLIUnsupportedCommandShowsRawUserInput(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("expected exit code 1 for unsupported command, got %d", code)
 	}
-	if !strings.Contains(output, "unsupported command: /Users/oc/private-command") {
+	if !strings.Contains(output, "unsupported command: /Users/YOU/private-command") {
 		t.Fatalf("expected unsupported-command output to keep original token, got:\n%s", output)
 	}
 }

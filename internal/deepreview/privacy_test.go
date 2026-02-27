@@ -8,7 +8,7 @@ import (
 )
 
 func TestSanitizePublicTextRedactsSensitivePatterns(t *testing.T) {
-	input := "email alice@corp.com path /Users/alice/private token ghp_abcdefghijklmnopqrstuvwxyz1234567890 ssn 123-45-6789 phone 415-555-1234 placeholder deepreview@example.com"
+	input := "email alice@corp.com path /Users/YOU/private key -----BEGIN PRIVATE KEY----- ssn 123-45-6789 phone 415-555-1234 placeholder deepreview@example.com"
 	out := sanitizePublicText(input)
 
 	expectContains := []string{
@@ -26,15 +26,15 @@ func TestSanitizePublicTextRedactsSensitivePatterns(t *testing.T) {
 	if strings.Contains(out, "alice@corp.com") {
 		t.Fatalf("expected disallowed email to be redacted, got: %s", out)
 	}
-	if strings.Contains(out, "/Users/alice/private") {
+	if strings.Contains(out, "/Users/YOU/private") {
 		t.Fatalf("expected local path to be redacted, got: %s", out)
 	}
 }
 
 func TestSanitizePublicTextRedactsGhBodyFilePath(t *testing.T) {
-	input := "command failed: gh pr create --repo owner/repo --body-file /Users/oc/deepreview/runs/run-123/pr-body.md"
+	input := "command failed: gh pr create --repo owner/repo --body-file /Users/YOU/deepreview/runs/run-123/pr-body.md"
 	out := sanitizePublicText(input)
-	if strings.Contains(out, "/Users/oc/deepreview/runs/run-123/pr-body.md") {
+	if strings.Contains(out, "/Users/YOU/deepreview/runs/run-123/pr-body.md") {
 		t.Fatalf("expected gh --body-file local path to be redacted, got: %s", out)
 	}
 	if !strings.Contains(out, "--body-file [redacted-path]") {

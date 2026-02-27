@@ -31,13 +31,13 @@ func TestProgressMessageFallsBackToErrorText(t *testing.T) {
 
 func TestProgressMessageKeepsLocalPathInCommandFailure(t *testing.T) {
 	err := &CommandExecutionError{
-		Message: "command failed: gh pr create --body-file /Users/oc/deepreview/runs/run-123/pr-body.md",
+		Message: "command failed: gh pr create --body-file /Users/YOU/deepreview/runs/run-123/pr-body.md",
 		Command: []string{"gh", "pr", "create"},
 		Code:    1,
 		Stderr:  "exit status 1",
 	}
 	msg := progressMessage(err)
-	if !strings.Contains(msg, "/Users/oc/deepreview/runs/run-123/pr-body.md") {
+	if !strings.Contains(msg, "/Users/YOU/deepreview/runs/run-123/pr-body.md") {
 		t.Fatalf("expected local path in progress message: %s", msg)
 	}
 }
