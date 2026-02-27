@@ -727,3 +727,16 @@ Enforcement:
 Final PR body is generated in post-delivery Codex stage, validated with privacy checks, and capped with compact fallback when body size approaches GitHub limits.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
+
+Decision:
+Emit periodic stage heartbeat progress updates while long-running worker/prompt execution is in flight.
+Context:
+Some independent-review and execute steps can run for extended periods with no stdout updates, which looks stalled in the TUI even when progress is healthy.
+Rationale:
+Heartbeat updates keep operator confidence high and reduce false "hung run" assumptions without changing execution semantics.
+Trade-offs:
+Adds periodic progress-message noise (bounded cadence) in stage logs.
+Enforcement:
+Orchestrator emits stage progress heartbeats on a fixed interval during worker fanout waits and long prompt runs; tests cover stage-progress state updates so completed stages are updated in-place instead of reopening duplicate rows.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/progress.go`, `internal/deepreview/progress_test.go`, `internal/deepreview/tui.go`
