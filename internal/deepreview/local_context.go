@@ -164,6 +164,34 @@ func inferSourceBranchFromState(state *LocalGitHubRepoState) (string, error) {
 	return state.CurrentBranch, nil
 }
 
+func ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, explicitBranch string, cwdState *LocalGitHubRepoState) error {
+	branch := strings.TrimSpace(explicitBranch)
+	if branch == "" {
+		return nil
+	}
+
+	stateForBranch := (*LocalGitHubRepoState)(nil)
+	if cwdState != nil && repoLocatorMatchesState(resolvedRepo, cwdState) {
+		stateForBranch = cwdState
+	} else {
+		state, err := detectGitHubRepoState(gitBin, resolvedRepo)
+		if err != nil {
+			return err
+		}
+		stateForBranch = state
+	}
+	if stateForBranch == nil {
+		return nil
+	}
+	if strings.TrimSpace(stateForBranch.CurrentBranch) == "" {
+		return nil
+	}
+	if stateForBranch.CurrentBranch != branch {
+		return nil
+	}
+	return ensureBranchReadyForRemoteReview(gitBin, stateForBranch, branch)
+}
+
 func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState, branch string) error {
 	if state == nil {
 		return NewDeepReviewError("unable to validate local branch readiness: no local repository context")
@@ -265,6 +293,9 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 	}
 
 	if strings.TrimSpace(sourceBranch) != "" {
+		if err := ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch, cwdState); err != nil {
+			return "", "", err
+		}
 		return resolvedRepo, sourceBranch, nil
 	}
 

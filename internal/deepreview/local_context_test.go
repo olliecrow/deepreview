@@ -93,6 +93,60 @@ func TestInferRepoAndBranchRejectsAheadOfRemote(t *testing.T) {
 	})
 }
 
+func TestInferRepoAndBranchExplicitSourceBranchRejectsTrackedUncommittedChanges(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		_, _, err := inferRepoAndBranch("git", "", "feature/test")
+		if err == nil {
+			t.Fatalf("expected tracked-change error for explicit source branch")
+		}
+		if !strings.Contains(err.Error(), "local tracked changes are present") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestInferRepoAndBranchExplicitSourceBranchRejectsAheadOfRemote(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("next\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitCommand(t, repo, "add", "README.md")
+		runGitCommand(t, repo, "commit", "-m", "ahead")
+		_, _, err := inferRepoAndBranch("git", "", "feature/test")
+		if err == nil {
+			t.Fatalf("expected ahead-of-remote error for explicit source branch")
+		}
+		if !strings.Contains(err.Error(), "not synchronized") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestInferRepoAndBranchExplicitDifferentBranchSkipsCurrentBranchReadinessCheck(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "feature/other")
+		if err != nil {
+			t.Fatalf("expected explicit non-current branch to bypass current-branch readiness check, got: %v", err)
+		}
+		repoAbs := canonicalPath(t, repo)
+		if resolvedRepo != repoAbs {
+			t.Fatalf("expected repo %s, got %s", repoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/other" {
+			t.Fatalf("expected explicit branch feature/other, got %s", resolvedBranch)
+		}
+	})
+}
+
 func TestInferRepoAndBranchFromProvidedLocalRepoPath(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	td := t.TempDir()
