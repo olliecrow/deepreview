@@ -5,6 +5,10 @@ It runs parallel Codex reviews, consolidates them, executes fixes, verifies outc
 
 <img width="1209" height="594" alt="image" src="https://github.com/user-attachments/assets/0fc6b1f5-28e2-4d4e-b061-cc24202e6515" />
 
+## Current status
+
+This project is actively maintained and intended for real repository review loops.
+
 ## What this project is trying to achieve
 
 Give you a reliable review loop that finds issues, applies fixes safely, and delivers one final result to GitHub.
@@ -22,6 +26,13 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 9. In default mode, it then runs one post-delivery Codex pass to generate the final PR description.
 10. The final PR body is a detailed Codex-generated summary with round outcomes and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 11. In yolo mode, it pushes directly to your source branch.
+
+## Requirements
+
+- `git`
+- `codex`
+- `gh` for default pull request mode
+- authenticated local sessions for required tools
 
 ## Safety and isolation
 
