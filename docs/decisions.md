@@ -259,6 +259,32 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
+When TUI mode is enabled, deepreview keeps the final completion frame visible until user keypress, then exits TUI and prints the normal completion summary in terminal text.
+Context:
+Auto-exiting the TUI immediately after completion made the terminal state hard to read and easy to miss.
+Rationale:
+Holding the completed frame provides a clear end-of-run signal without changing existing completion summary output behavior.
+Trade-offs:
+TUI users must press a key to return to shell output; non-TUI mode remains unchanged.
+Enforcement:
+TUI update loop exits only on keypress after worker completion; tests assert no auto-quit on completion tick and presence of done-state exit hint.
+References:
+`internal/deepreview/tui.go`, `internal/deepreview/tui_test.go`, `docs/spec.md`
+
+Decision:
+Apply local readiness checks to explicit `--source-branch` runs when the explicit branch matches the current local branch context.
+Context:
+deepreview reviews remote branch state; if local branch is dirty or diverged and the same branch is targeted explicitly, reviews can miss newest local work.
+Rationale:
+Explicit branch selection should not bypass local safety checks for the same active local branch.
+Trade-offs:
+Adds preflight strictness for explicit-branch invocations; explicit branches that do not match the current local branch are not blocked by current-branch readiness.
+Enforcement:
+`inferRepoAndBranch` now runs local tracked-change and local/upstream sync checks for explicit matching-branch context; tests cover explicit tracked-change and ahead-of-remote rejection.
+References:
+`internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `docs/spec.md`
+
+Decision:
 Execute prompts must apply a high-conviction consolidation workflow: reviews are inputs, not gospel; only independently validated items move forward.
 Context:
 Independent review workers can disagree or contain false positives; execution quality depends on careful consolidation before changes.

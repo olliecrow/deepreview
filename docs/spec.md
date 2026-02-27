@@ -20,7 +20,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview must not operate in the user's own active checkout.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
-- inferred source branch requires local readiness checks: no tracked local changes and exact local/upstream synchronization.
+- source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization.
 - deepreview keeps orchestration simple: no automatic retry/backoff/self-healing loops for failed stages.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; interrupt path must run lock/worktree cleanup before process exit.
@@ -67,6 +67,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - `--mode <pr|yolo>` default `pr` (case-insensitive value parsing)
   - `--yolo` alias for `--mode yolo` (legacy `--YOLO` accepted)
   - full-screen terminal UI is enabled by default when terminal capabilities are valid
+  - when TUI is enabled, the completed final frame remains visible until a keypress exits the UI
   - `--no-tui` force structured text progress logs
 
 Helper command behavior:
