@@ -633,6 +633,29 @@ func TestRunFailsWhenMaxRoundsPreventsRequiredPostChangeReview(t *testing.T) {
 	if !strings.Contains(out, "requires at least one additional review round after code changes") {
 		t.Fatalf("expected max-rounds enforcement error, got: %s", out)
 	}
+	if !strings.Contains(out, "deepreview failure summary:") {
+		t.Fatalf("expected failure summary output, got: %s", out)
+	}
+	if !strings.Contains(out, "review rounds completed before exit: 1") {
+		t.Fatalf("expected progress context in failure summary, got: %s", out)
+	}
+	if !strings.Contains(out, "run exited before delivery; no push or PR was created.") {
+		t.Fatalf("expected delivery guidance in failure summary, got: %s", out)
+	}
+	if !strings.Contains(out, "inspect these paths to review what deepreview produced:") {
+		t.Fatalf("expected self-serve artifact guidance in failure summary, got: %s", out)
+	}
+	for _, want := range []string{
+		"run artifacts:",
+		"logs:",
+		"reviews:",
+		"round artifacts:",
+		"round status files:",
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("expected failure summary to include %q, got: %s", want, out)
+		}
+	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")

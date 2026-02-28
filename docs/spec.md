@@ -118,6 +118,7 @@ Cleanup policy:
 - if execute verification fails, fail the run and do not deliver.
 - if `pr` mode delivery fails after final round succeeds, emit remediation guidance and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.
+- if run fails because execute changed code in the final allowed round (`--max-rounds` limit reached before required post-change review round), print a self-serve failure summary with completed run context and artifact/log/review paths.
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)
