@@ -43,6 +43,9 @@ This document defines the canonical runtime and product contract for `deepreview
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
 - final delivery push is allowed only after round execution completes and no blocking verification failures are reported.
+- before delivery, deepreview must run repository quality gates and block delivery on failures:
+  - run `pre-commit run --all-files` when `.pre-commit-config.yaml` exists
+  - run `./setup_env.sh` when `setup_env.sh` exists
 - default delivery mode is `pr` and must not push source branch directly.
 - in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.
 - `yolo` mode is optional opt-in for direct push to source branch.
@@ -118,6 +121,7 @@ Cleanup policy:
 - if execute verification fails, fail the run and do not deliver.
 - if `pr` mode delivery fails after final round succeeds, emit remediation guidance and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.
+- if privacy scan fails due local absolute paths in changed docs files (`docs/*.md|*.txt|*.rst|*.adoc`), deepreview should auto-sanitize those paths to `/path/to/project`, commit the redaction, and re-run delivery scans once.
 - if run fails because execute changed code in the final allowed round (`--max-rounds` limit reached before required post-change review round), print a self-serve failure summary with completed run context and artifact/log/review paths.
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 

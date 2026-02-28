@@ -781,3 +781,16 @@ Enforcement:
 Orchestrator emits stage progress heartbeats on a fixed interval during worker fanout waits and long prompt runs; tests cover stage-progress state updates so completed stages are updated in-place instead of reopening duplicate rows.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/progress.go`, `internal/deepreview/progress_test.go`, `internal/deepreview/tui.go`
+
+Decision:
+Block delivery unless repository quality gates pass, and auto-remediate docs-only local-path privacy violations before final failure.
+Context:
+Runs could reach delivery with failing repository pre-commit hooks, and privacy scans could fail late on machine-local absolute paths inside changed docs files even when remediation was straightforward.
+Rationale:
+Hard-gating delivery on repo-local quality checks prevents deepreview from opening PRs that are already known-bad on mandatory local checks. Auto-remediating docs local-path violations keeps the fail-closed privacy posture while avoiding unnecessary manual reruns for a deterministic redaction case.
+Trade-offs:
+Delivery can take longer when `setup_env.sh` exists, and some runs now fail earlier on quality-gate violations that were previously deferred to PR CI. Auto-remediation is intentionally narrow (docs text formats only) to avoid mutating code paths.
+Enforcement:
+Delivery stage runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and runs `./setup_env.sh` when present; non-zero exit blocks delivery. On `privacy scan failed: local path pattern matched in <file>`, deepreview attempts one docs-only redaction pass (`/path/to/project` placeholder), commits the fix, then reruns delivery scans once before failing.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`

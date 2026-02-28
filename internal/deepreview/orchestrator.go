@@ -387,6 +387,36 @@ func (o *Orchestrator) Run() error {
 		return err
 	}
 	if err := o.secretHygieneScan(candidateBranch); err != nil {
+		remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(candidateBranch, err)
+		if remediationErr != nil {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(remediationErr))
+			finalErr = remediationErr
+			return remediationErr
+		}
+		if !remediated {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+			finalErr = err
+			return err
+		}
+		o.reporter.StageProgress("delivery", "auto-remediated local path privacy violation in docs; re-running delivery checks", nil)
+		changedFiles, err = o.validateDeliveryFiles(candidateBranch)
+		if err != nil {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+			finalErr = err
+			return err
+		}
+		if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+			finalErr = err
+			return err
+		}
+		if err := o.secretHygieneScan(candidateBranch); err != nil {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+			finalErr = err
+			return err
+		}
+	}
+	if err := o.runDeliveryQualityChecks(); err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 		finalErr = err
 		return err
@@ -1193,6 +1223,151 @@ func (o *Orchestrator) secretHygieneScan(candidateBranch string) error {
 				return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
 			}
 		}
+	}
+	return nil
+}
+
+const localPathScanFailurePrefix = "privacy scan failed: local path pattern matched in "
+
+func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(candidateBranch string, scanErr error) (bool, error) {
+	relPath, ok := extractLocalPathScanFailurePath(scanErr)
+	if !ok {
+		return false, nil
+	}
+	if !isAutoSanitizableDocPath(relPath) {
+		return false, nil
+	}
+	targetPath := filepath.Join(o.managedRepoPath, relPath)
+	content, err := os.ReadFile(targetPath)
+	if err != nil {
+		return false, err
+	}
+	sanitized := replaceLocalPathsWithPlaceholder(string(content))
+	if sanitized == string(content) {
+		return false, nil
+	}
+	if err := os.WriteFile(targetPath, []byte(sanitized), 0o644); err != nil {
+		return false, err
+	}
+	if err := CommitAllChanges(o.managedRepoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan"); err != nil {
+		return false, err
+	}
+	if err := o.validateNoInternalArtifactChanges("origin/"+o.config.SourceBranch, candidateBranch); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+func extractLocalPathScanFailurePath(scanErr error) (string, bool) {
+	if scanErr == nil {
+		return "", false
+	}
+	message := strings.TrimSpace(scanErr.Error())
+	if !strings.HasPrefix(message, localPathScanFailurePrefix) {
+		return "", false
+	}
+	relPath := strings.TrimSpace(strings.TrimPrefix(message, localPathScanFailurePrefix))
+	if relPath == "" {
+		return "", false
+	}
+	return relPath, true
+}
+
+func isAutoSanitizableDocPath(relPath string) bool {
+	normalized := filepath.ToSlash(strings.TrimSpace(relPath))
+	if !strings.HasPrefix(normalized, "docs/") {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(normalized))
+	switch ext {
+	case ".md", ".markdown", ".txt", ".rst", ".adoc":
+		return true
+	default:
+		return false
+	}
+}
+
+func replaceLocalPathsWithPlaceholder(text string) string {
+	sanitized := text
+	for _, pattern := range privatePathPatterns {
+		sanitized = pattern.ReplaceAllString(sanitized, "/path/to/project")
+	}
+	return sanitized
+}
+
+func (o *Orchestrator) runDeliveryQualityChecks() error {
+	if err := o.runPreCommitAllFilesIfConfigured(); err != nil {
+		return err
+	}
+	if err := o.runSetupEnvIfPresent(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (o *Orchestrator) runPreCommitAllFilesIfConfigured() error {
+	configPath := filepath.Join(o.managedRepoPath, ".pre-commit-config.yaml")
+	st, err := os.Stat(configPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if st.IsDir() {
+		return nil
+	}
+	available, err := which("pre-commit")
+	if err != nil {
+		return err
+	}
+	if !available {
+		return NewDeepReviewError("delivery blocked: `.pre-commit-config.yaml` present but `pre-commit` not found in PATH")
+	}
+	o.reporter.StageProgress("delivery", "running pre-commit --all-files before delivery", nil)
+	completed, err := RunCommand([]string{"pre-commit", "run", "--all-files"}, o.managedRepoPath, "", false, 0)
+	if err != nil {
+		return err
+	}
+	if completed.ReturnCode != 0 {
+		detail := strings.TrimSpace(firstNonEmptyLine(completed.Stderr))
+		if detail == "" {
+			detail = strings.TrimSpace(firstNonEmptyLine(completed.Stdout))
+		}
+		if detail != "" {
+			detail = ": " + trimForDisplay(sanitizePublicText(detail), 180)
+		}
+		return NewDeepReviewError("delivery blocked: pre-commit checks failed%s", detail)
+	}
+	return nil
+}
+
+func (o *Orchestrator) runSetupEnvIfPresent() error {
+	scriptPath := filepath.Join(o.managedRepoPath, "setup_env.sh")
+	st, err := os.Stat(scriptPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if st.IsDir() {
+		return nil
+	}
+	o.reporter.StageProgress("delivery", "running repository CI gate `./setup_env.sh` before delivery", nil)
+	completed, err := RunCommand([]string{"/usr/bin/env", "bash", "./setup_env.sh"}, o.managedRepoPath, "", false, 0)
+	if err != nil {
+		return err
+	}
+	if completed.ReturnCode != 0 {
+		detail := strings.TrimSpace(firstNonEmptyLine(completed.Stderr))
+		if detail == "" {
+			detail = strings.TrimSpace(firstNonEmptyLine(completed.Stdout))
+		}
+		if detail != "" {
+			detail = ": " + trimForDisplay(sanitizePublicText(detail), 180)
+		}
+		return NewDeepReviewError("delivery blocked: setup_env.sh failed%s", detail)
 	}
 	return nil
 }
