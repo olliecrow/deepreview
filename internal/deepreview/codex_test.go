@@ -17,6 +17,7 @@ func TestCodexRunnerBuildCommandNewThread(t *testing.T) {
 		"exec",
 		"--model", "gpt-5.3-codex",
 		"-c", `model_reasoning_effort="xhigh"`,
+		"--skip-git-repo-check",
 		"--full-auto", "--json", "-",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -38,6 +39,7 @@ func TestCodexRunnerBuildCommandResumeThread(t *testing.T) {
 		"resume", "thread-123",
 		"--model", "gpt-5.3-codex",
 		"-c", `model_reasoning_effort="xhigh"`,
+		"--skip-git-repo-check",
 		"--full-auto", "--json", "-",
 	}
 	if !reflect.DeepEqual(got, want) {
@@ -57,6 +59,7 @@ func TestCodexRunnerBuildCommandForcesPinnedModelAndReasoning(t *testing.T) {
 		"exec",
 		"--model", "gpt-5.3-codex",
 		"-c", `model_reasoning_effort="xhigh"`,
+		"--skip-git-repo-check",
 		"--full-auto", "--json", "-",
 	}
 	if !reflect.DeepEqual(got, want) {

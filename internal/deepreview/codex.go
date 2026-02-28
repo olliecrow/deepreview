@@ -34,6 +34,8 @@ func (c *CodexRunner) buildCommand(threadID *string) []string {
 	command = append(command,
 		"--model", forcedCodexModel,
 		"-c", reasoningConfig,
+		// deepreview may run codex from non-repo run directories during delivery.
+		"--skip-git-repo-check",
 		"--full-auto", "--json", "-",
 	)
 	return command

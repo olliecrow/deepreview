@@ -258,6 +258,15 @@ func sleepForPrompt(prompt string) {
 	}
 }
 
+func hasArg(args []string, target string) bool {
+	for _, arg := range args {
+		if arg == target {
+			return true
+		}
+	}
+	return false
+}
+
 func main() {
 	promptBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -269,6 +278,10 @@ func main() {
 
 	threadID := randomID()
 	args := os.Args[1:]
+	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK")) != "" && !hasArg(args, "--skip-git-repo-check") {
+		fmt.Fprintln(os.Stderr, "missing required --skip-git-repo-check")
+		os.Exit(1)
+	}
 	if len(args) >= 3 && args[0] == "exec" && args[1] == "resume" {
 		threadID = args[2]
 	}
