@@ -20,15 +20,15 @@ This document maps the user-provided project description to canonical requiremen
 | R-07 | Independent review concurrency is configurable; default is 4. | `docs/spec.md`, `docs/architecture.md` |
 | R-08 | Independent reviews run independently in separate worktrees (one worktree per review). | `docs/spec.md`, `docs/architecture.md` |
 | R-09 | Run Codex independent reviews concurrently, one run per worktree. | `docs/spec.md`, `docs/architecture.md` |
-| R-10 | Each independent-review worker must emit one markdown review report. | `docs/spec.md` (artifact contract), `docs/architecture.md` |
-| R-11 | Wait for all independent review runs in a round and then clean up independent-review worktrees. | `docs/spec.md`, `docs/architecture.md` |
+| R-10 | Each successful independent-review worker must emit one markdown review report. | `docs/spec.md` (artifact contract), `docs/architecture.md` |
+| R-11 | Independent review requires full worker coverage; deepreview monitors worker activity and performs bounded inactivity restarts before failing the stage, then cleans up independent-review worktrees. | `docs/spec.md`, `docs/architecture.md` |
 | R-12 | Each execute pass uses a fresh worktree from current candidate head. | `docs/spec.md`, `docs/architecture.md` |
 | R-13 | Execute ingests independent review reports, applies selected changes, and verifies heavily. | `docs/spec.md`, `docs/architecture.md` |
 | R-14 | Default delivery opens PR from a new branch into the original source branch. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-15 | Optional `yolo` mode may commit/push directly to original source branch. | `docs/spec.md`, `docs/architecture.md` |
 | R-16 | Use local Codex CLI session/subscription; do not require repository-stored API keys for core flow. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-17 | Reuse compatible patterns internally but do not reference external inspiration projects in committed deepreview artifacts. | `docs/spec.md`, `AGENTS.md`, `docs/decisions.md` |
-| R-18 | Keep orchestration simple; no automatic retry mechanisms/backoff/self-healing orchestration. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
+| R-18 | Keep orchestration simple: avoid unbounded retries; allow only bounded inactivity restarts with explicit caps. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-19 | Run iterative deepreview loops with configurable max rounds (default 5). | `docs/spec.md`, `docs/architecture.md` |
 | R-20 | Codex is trusted as the main judge and may stop early via round status flag file. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-21 | Do not push in intermediate rounds; perform one push only at final delivery step. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |

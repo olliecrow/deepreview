@@ -21,15 +21,17 @@ This document defines the canonical runtime and product contract for `deepreview
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization.
-- deepreview keeps orchestration simple: no automatic retry/backoff/self-healing loops for failed stages.
+- deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; interrupt path must run lock/worktree cleanup before process exit.
 - round loop runs up to `--max-rounds` (default `5`) and may stop early.
 - independent reviews run in independent worktrees.
 - independent review concurrency defaults to `4` and is configurable.
-- each independent-review worker must emit one markdown review report.
+- each successful independent-review worker must emit one markdown review report.
+- independent review rounds require full worker coverage: required successful workers = `concurrency`.
 - independent-review reports prioritize critical/high issues first; they may include a small optional section of obvious non-blocking improvements only when high-confidence, low-risk, and non-behavior-changing.
-- independent review completion waits for all workers in that round.
+- independent-review and execute/delivery Codex workers are monitored for activity signals (stdout/stderr output plus filesystem/git-change evidence).
+- if a worker is inactive for the configured timeout, deepreview cancels and restarts that worker up to the configured restart cap.
 - each execute pass runs in a fresh worktree.
 - independent-review workers use one shared independent-review prompt template.
 - each execute pass runs an ordered multi-prompt queue in one Codex chat context.
@@ -73,6 +75,10 @@ This document defines the canonical runtime and product contract for `deepreview
   - when TUI is enabled, deepreview exits the UI automatically on completion and prints the text summary immediately
   - before printing the completion summary after a TUI run, deepreview clears the terminal and prints summary text from the top-left cursor position
   - `--no-tui` force structured text progress logs
+- worker-activity resilience env knobs (applies to all Codex workers):
+  - `DEEPREVIEW_REVIEW_INACTIVITY_SECONDS` default `600` (10 minutes; `0` disables inactivity restarts)
+  - `DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS` default `15`
+  - `DEEPREVIEW_REVIEW_MAX_RESTARTS` default `1`
 
 Helper command behavior:
 - `doctor` runs non-mutating preflight checks for local tools, auth state, prompt assets, and remote source-branch reachability.
@@ -117,7 +123,8 @@ Cleanup policy:
 - fail fast on verification failures.
 
 ## Failure-handling contract
-- if any independent-review worker fails or required report is missing in a round, fail the run (no automatic retries).
+- if any independent-review worker does not complete successfully after bounded inactivity restarts, fail the run.
+- deepreview does not continue with partial independent-review coverage; all configured workers must succeed.
 - if execute verification fails, fail the run and do not deliver.
 - if `pr` mode delivery fails after final round succeeds, emit remediation guidance and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.

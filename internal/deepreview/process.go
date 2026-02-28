@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -14,6 +16,11 @@ type CompletedProcess struct {
 	Stdout     string
 	Stderr     string
 	ReturnCode int
+}
+
+type CommandStreamCallbacks struct {
+	OnStdoutChunk func(chunk []byte)
+	OnStderrChunk func(chunk []byte)
 }
 
 var (
@@ -46,10 +53,22 @@ func currentRunCommandContext() context.Context {
 }
 
 func RunCommand(command []string, cwd string, input string, check bool, timeout time.Duration) (CompletedProcess, error) {
-	return RunCommandContext(currentRunCommandContext(), command, cwd, input, check, timeout)
+	return RunCommandContextWithCallbacks(currentRunCommandContext(), command, cwd, input, check, timeout, nil)
 }
 
 func RunCommandContext(parent context.Context, command []string, cwd string, input string, check bool, timeout time.Duration) (CompletedProcess, error) {
+	return RunCommandContextWithCallbacks(parent, command, cwd, input, check, timeout, nil)
+}
+
+func RunCommandContextWithCallbacks(
+	parent context.Context,
+	command []string,
+	cwd string,
+	input string,
+	check bool,
+	timeout time.Duration,
+	callbacks *CommandStreamCallbacks,
+) (CompletedProcess, error) {
 	if len(command) == 0 {
 		return CompletedProcess{}, NewDeepReviewError("empty command")
 	}
@@ -78,8 +97,14 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return CompletedProcess{}, err
+	}
+	stderrPipe, err := cmd.StderrPipe()
+	if err != nil {
+		return CompletedProcess{}, err
+	}
 
 	if err := cmd.Start(); err != nil {
 		return CompletedProcess{}, err
@@ -87,18 +112,45 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 	registerActiveCommand(cmd)
 	defer unregisterActiveCommand(cmd)
 
+	stdoutDone := make(chan error, 1)
+	stderrDone := make(chan error, 1)
+	go func() {
+		writer := &streamCaptureWriter{
+			buffer:  &stdout,
+			onChunk: nil,
+		}
+		if callbacks != nil {
+			writer.onChunk = callbacks.OnStdoutChunk
+		}
+		_, copyErr := io.Copy(writer, stdoutPipe)
+		stdoutDone <- copyErr
+	}()
+	go func() {
+		writer := &streamCaptureWriter{
+			buffer:  &stderr,
+			onChunk: nil,
+		}
+		if callbacks != nil {
+			writer.onChunk = callbacks.OnStderrChunk
+		}
+		_, copyErr := io.Copy(writer, stderrPipe)
+		stderrDone <- copyErr
+	}()
+
 	waitCh := make(chan error, 1)
 	go func() {
 		waitCh <- cmd.Wait()
 	}()
 
-	var err error
+	var waitErr error
 	select {
-	case err = <-waitCh:
+	case waitErr = <-waitCh:
 	case <-ctx.Done():
 		terminateCommandProcessTree(cmd)
-		err = <-waitCh
+		waitErr = <-waitCh
 	}
+	stdoutErr := <-stdoutDone
+	stderrErr := <-stderrDone
 	code := 0
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
@@ -110,7 +162,14 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 		ReturnCode: code,
 	}
 
-	if err == nil {
+	if stdoutErr != nil && !isIgnorableStreamCopyError(stdoutErr) {
+		return completed, stdoutErr
+	}
+	if stderrErr != nil && !isIgnorableStreamCopyError(stderrErr) {
+		return completed, stderrErr
+	}
+
+	if waitErr == nil {
 		return completed, nil
 	}
 
@@ -136,6 +195,39 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 	}
 
 	return completed, nil
+}
+
+type streamCaptureWriter struct {
+	buffer  *bytes.Buffer
+	onChunk func(chunk []byte)
+}
+
+func (w *streamCaptureWriter) Write(p []byte) (int, error) {
+	if w == nil || w.buffer == nil {
+		return len(p), nil
+	}
+	n, err := w.buffer.Write(p)
+	if n > 0 && w.onChunk != nil {
+		w.onChunk(p[:n])
+	}
+	return n, err
+}
+
+func isIgnorableStreamCopyError(err error) bool {
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, os.ErrClosed) {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(err.Error()))
+	if strings.Contains(lower, "file already closed") {
+		return true
+	}
+	if strings.Contains(lower, "use of closed file") {
+		return true
+	}
+	return false
 }
 
 func registerActiveCommand(cmd *exec.Cmd) {

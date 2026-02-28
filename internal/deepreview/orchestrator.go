@@ -1,9 +1,11 @@
 package deepreview
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
@@ -56,6 +59,12 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	managedRepoPath := filepath.Join(workspaceRoot, "repos", repoIdentity.Owner, repoIdentity.Name)
 	if config.CodexTimeout <= 0 {
 		config.CodexTimeout = time.Duration(config.CodexTimeoutSeconds) * time.Second
+	}
+	if config.ReviewInactivity <= 0 && config.ReviewInactivitySec > 0 {
+		config.ReviewInactivity = time.Duration(config.ReviewInactivitySec) * time.Second
+	}
+	if config.ReviewActivityPoll <= 0 && config.ReviewActivityPollS > 0 {
+		config.ReviewActivityPoll = time.Duration(config.ReviewActivityPollS) * time.Second
 	}
 	// Enforce globally pinned Codex settings regardless of caller-supplied config.
 	config.CodexModel = forcedCodexModel
@@ -617,6 +626,283 @@ func roundPtr(round int) *int {
 	return &v
 }
 
+type promptWatchdogPolicy struct {
+	inactivity   time.Duration
+	pollInterval time.Duration
+	maxRestarts  int
+}
+
+func (o *Orchestrator) promptWatchdogPolicy() promptWatchdogPolicy {
+	inactivity := o.config.ReviewInactivity
+	if inactivity < 0 {
+		inactivity = 0
+	}
+	pollInterval := o.config.ReviewActivityPoll
+	if pollInterval <= 0 {
+		pollInterval = stageHeartbeatInterval
+	}
+	if inactivity > 0 && pollInterval > inactivity {
+		pollInterval = inactivity
+	}
+	maxRestarts := o.config.ReviewMaxRestarts
+	if maxRestarts < 0 {
+		maxRestarts = 0
+	}
+	return promptWatchdogPolicy{
+		inactivity:   inactivity,
+		pollInterval: pollInterval,
+		maxRestarts:  maxRestarts,
+	}
+}
+
+type promptInactivityError struct {
+	inactivity time.Duration
+	silence    time.Duration
+}
+
+func (e *promptInactivityError) Error() string {
+	inactivity := e.inactivity.Round(time.Second)
+	silence := e.silence.Round(time.Second)
+	if inactivity <= 0 {
+		return fmt.Sprintf("prompt stalled with %s of inactivity", silence)
+	}
+	return fmt.Sprintf("prompt stalled with %s of inactivity (limit %s)", silence, inactivity)
+}
+
+type monitoredPromptRequest struct {
+	label          string
+	cwd            string
+	prompt         string
+	threadID       *string
+	logPrefix      string
+	useGitStatus   bool
+	monitoredPaths []string
+}
+
+type monitoredPromptCallbacks struct {
+	onHeartbeat func(elapsed, silence time.Duration)
+	onRestart   func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError)
+}
+
+func (o *Orchestrator) runPromptWithWatchdog(
+	parent context.Context,
+	request monitoredPromptRequest,
+	callbacks monitoredPromptCallbacks,
+) (CodexRunResult, int, error) {
+	policy := o.promptWatchdogPolicy()
+	maxAttempts := policy.maxRestarts + 1
+	restarts := 0
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		result, err := o.runPromptAttemptWithWatchdog(parent, request, policy, callbacks.onHeartbeat)
+		if err == nil {
+			return result, restarts, nil
+		}
+		var inactivityErr *promptInactivityError
+		if !errors.As(err, &inactivityErr) {
+			return CodexRunResult{}, restarts, err
+		}
+		if attempt >= maxAttempts {
+			return CodexRunResult{}, restarts, NewDeepReviewError(
+				"%s stalled after %d attempt(s): %s",
+				request.label,
+				maxAttempts,
+				inactivityErr.Error(),
+			)
+		}
+		restarts++
+		if callbacks.onRestart != nil {
+			callbacks.onRestart(attempt+1, maxAttempts, inactivityErr)
+		}
+	}
+	return CodexRunResult{}, restarts, NewDeepReviewError("%s failed unexpectedly", request.label)
+}
+
+func (o *Orchestrator) runPromptAttemptWithWatchdog(
+	parent context.Context,
+	request monitoredPromptRequest,
+	policy promptWatchdogPolicy,
+	onHeartbeat func(elapsed, silence time.Duration),
+) (CodexRunResult, error) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	start := time.Now()
+	tracker := newPromptActivityTracker(start)
+	lastGitSignature := ""
+	if request.useGitStatus {
+		if sig, ok := o.gitStatusActivitySignature(parent, request.cwd); ok {
+			lastGitSignature = sig
+		}
+	}
+	lastPathSignature := pathsActivitySignature(request.monitoredPaths)
+
+	attemptCtx, cancelAttempt := context.WithCancel(parent)
+	defer cancelAttempt()
+
+	type runOutcome struct {
+		result CodexRunResult
+		err    error
+	}
+	resultCh := make(chan runOutcome, 1)
+	go func() {
+		result, err := o.codexRunner.RunPromptWithHooks(
+			request.cwd,
+			request.prompt,
+			request.threadID,
+			request.logPrefix,
+			&CodexRunHooks{
+				Context: attemptCtx,
+				OnStdoutChunk: func(_ []byte) {
+					tracker.Mark()
+				},
+				OnStderrChunk: func(_ []byte) {
+					tracker.Mark()
+				},
+			},
+		)
+		resultCh <- runOutcome{result: result, err: err}
+	}()
+
+	pollTicker := time.NewTicker(policy.pollInterval)
+	defer pollTicker.Stop()
+	var heartbeatTicker *time.Ticker
+	var heartbeatCh <-chan time.Time
+	if onHeartbeat != nil {
+		heartbeatTicker = time.NewTicker(stageHeartbeatInterval)
+		defer heartbeatTicker.Stop()
+		heartbeatCh = heartbeatTicker.C
+	}
+
+	for {
+		select {
+		case outcome := <-resultCh:
+			return outcome.result, outcome.err
+		case <-pollTicker.C:
+			if request.useGitStatus {
+				if sig, ok := o.gitStatusActivitySignature(attemptCtx, request.cwd); ok && sig != lastGitSignature {
+					lastGitSignature = sig
+					tracker.Mark()
+				}
+			}
+			pathSignature := pathsActivitySignature(request.monitoredPaths)
+			if pathSignature != lastPathSignature {
+				lastPathSignature = pathSignature
+				tracker.Mark()
+			}
+			silence := tracker.Silence()
+			if policy.inactivity > 0 && silence >= policy.inactivity {
+				cancelAttempt()
+				outcome := <-resultCh
+				if outcome.err == nil {
+					return outcome.result, nil
+				}
+				return CodexRunResult{}, &promptInactivityError{
+					inactivity: policy.inactivity,
+					silence:    silence,
+				}
+			}
+		case <-heartbeatCh:
+			onHeartbeat(time.Since(start), tracker.Silence())
+		}
+	}
+}
+
+type promptActivityTracker struct {
+	mu           sync.Mutex
+	lastActivity time.Time
+}
+
+func newPromptActivityTracker(initial time.Time) *promptActivityTracker {
+	return &promptActivityTracker{lastActivity: initial}
+}
+
+func (t *promptActivityTracker) Mark() {
+	t.mu.Lock()
+	t.lastActivity = time.Now()
+	t.mu.Unlock()
+}
+
+func (t *promptActivityTracker) Silence() time.Duration {
+	t.mu.Lock()
+	last := t.lastActivity
+	t.mu.Unlock()
+	silence := time.Since(last)
+	if silence < 0 {
+		return 0
+	}
+	return silence
+}
+
+func (o *Orchestrator) gitStatusActivitySignature(parent context.Context, cwd string) (string, bool) {
+	completed, err := RunCommandContext(
+		parent,
+		[]string{o.config.GitBin, "-C", cwd, "status", "--porcelain", "--untracked-files=all"},
+		"",
+		"",
+		false,
+		10*time.Second,
+	)
+	if err != nil {
+		return "", false
+	}
+	if completed.ReturnCode != 0 {
+		return "", false
+	}
+	return completed.Stdout, true
+}
+
+func pathsActivitySignature(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	parts := make([]string, 0, len(paths))
+	for _, path := range paths {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" {
+			continue
+		}
+		parts = append(parts, trimmed+"="+pathActivitySignature(trimmed))
+	}
+	sort.Strings(parts)
+	return strings.Join(parts, "|")
+}
+
+func pathActivitySignature(path string) string {
+	st, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "missing"
+		}
+		return "error:" + sanitizePublicText(err.Error())
+	}
+	if !st.IsDir() {
+		return fmt.Sprintf("file:%d:%d", st.Size(), st.ModTime().UnixNano())
+	}
+	entries := make([]string, 0, 16)
+	walkErr := filepath.WalkDir(path, func(current string, d fs.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			entries = append(entries, fmt.Sprintf("%s:error:%s", current, sanitizePublicText(walkErr.Error())))
+			return nil
+		}
+		info, err := d.Info()
+		if err != nil {
+			entries = append(entries, fmt.Sprintf("%s:error:%s", current, sanitizePublicText(err.Error())))
+			return nil
+		}
+		rel := current
+		if relValue, relErr := filepath.Rel(path, current); relErr == nil {
+			rel = relValue
+		}
+		entries = append(entries, fmt.Sprintf("%s:%t:%d:%d", rel, d.IsDir(), info.Size(), info.ModTime().UnixNano()))
+		return nil
+	})
+	if walkErr != nil {
+		return "walk-error:" + sanitizePublicText(walkErr.Error())
+	}
+	sort.Strings(entries)
+	return strings.Join(entries, ";")
+}
+
 func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaultBranch string) ([]string, error) {
 	o.reporter.StageStarted("independent review stage", roundPtr(round), "launching independent reviewers in parallel")
 	reviewDir := filepath.Join(roundDir, "review")
@@ -630,10 +916,37 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 		return nil, err
 	}
+	policy := o.promptWatchdogPolicy()
+	policyMessage := fmt.Sprintf(
+		"worker policy: require %d/%d successes; inactivity timeout %s; poll interval %s; max restarts %d",
+		o.config.Concurrency,
+		o.config.Concurrency,
+		policy.inactivity.Round(time.Second),
+		policy.pollInterval.Round(time.Second),
+		policy.maxRestarts,
+	)
+	if policy.inactivity <= 0 {
+		policyMessage = fmt.Sprintf(
+			"worker policy: require %d/%d successes; inactivity restart disabled; poll interval %s; max restarts %d",
+			o.config.Concurrency,
+			o.config.Concurrency,
+			policy.pollInterval.Round(time.Second),
+			policy.maxRestarts,
+		)
+	}
+	o.reporter.StageProgress("independent review stage", policyMessage, roundPtr(round))
+
+	stageCtx, cancelStage := context.WithCancel(currentRunCommandContext())
+	restoreCommandContext := setRunCommandContext(stageCtx)
+	defer func() {
+		cancelStage()
+		restoreCommandContext()
+	}()
 
 	worktrees := make([]string, 0, o.config.Concurrency)
 	reviewPaths := make([]string, 0, o.config.Concurrency)
 	workerReviewPaths := make([]string, 0, o.config.Concurrency)
+	workerNotesPaths := make([]string, 0, o.config.Concurrency)
 	defer func() {
 		for _, worktree := range worktrees {
 			_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktree)
@@ -645,6 +958,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		worktreePath := filepath.Join(workerDir, "worktree")
 		reviewPath := filepath.Join(roundDir, fmt.Sprintf("review-%02d.md", workerID))
 		workerReviewPath := filepath.Join(worktreePath, ".deepreview", fmt.Sprintf("review-%02d.md", workerID))
+		workerNotesPath := filepath.Join(worktreePath, ".deepreview", fmt.Sprintf("review-%02d.notes.md", workerID))
 		if err := os.MkdirAll(workerDir, 0o755); err != nil {
 			return nil, err
 		}
@@ -657,10 +971,12 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		worktrees = append(worktrees, worktreePath)
 		reviewPaths = append(reviewPaths, reviewPath)
 		workerReviewPaths = append(workerReviewPaths, workerReviewPath)
+		workerNotesPaths = append(workerNotesPaths, workerNotesPath)
 	}
 
 	type reviewWorkerResult struct {
 		workerID int
+		restarts int
 		err      error
 	}
 	resultsCh := make(chan reviewWorkerResult, o.config.Concurrency)
@@ -670,6 +986,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 			workerID := i + 1
 			worktreePath := worktrees[i]
 			workerReviewRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID)))
+			workerNotesRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.notes.md", workerID)))
 			variables := map[string]string{
 				"REPO_SLUG":          o.repoIdentity.Slug(),
 				"SOURCE_BRANCH":      o.config.SourceBranch,
@@ -678,6 +995,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 				"CONCURRENCY":        fmt.Sprintf("%d", o.config.Concurrency),
 				"WORKTREE_PATH":      ".",
 				"OUTPUT_REVIEW_PATH": workerReviewRelPath,
+				"WORKER_NOTES_PATH":  workerNotesRelPath,
 			}
 			prompt, err := RenderTemplate(templateText, variables)
 			if err != nil {
@@ -685,49 +1003,88 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 				return
 			}
 			logPrefix := filepath.Join(reviewDir, fmt.Sprintf("worker-%02d", workerID), "codex")
-			if _, err := o.codexRunner.RunPrompt(worktreePath, prompt, nil, logPrefix); err != nil {
-				resultsCh <- reviewWorkerResult{
-					workerID: workerID,
-					err:      NewDeepReviewError("independent review worker-%02d failed: %v", workerID, err),
-				}
-				return
-			}
-			resultsCh <- reviewWorkerResult{workerID: workerID}
+			_, restarts, err := o.runPromptWithWatchdog(
+				stageCtx,
+				monitoredPromptRequest{
+					label:        fmt.Sprintf("worker-%02d", workerID),
+					cwd:          worktreePath,
+					prompt:       prompt,
+					threadID:     nil,
+					logPrefix:    logPrefix,
+					useGitStatus: true,
+					monitoredPaths: []string{
+						workerReviewPaths[i],
+						workerNotesPaths[i],
+						logPrefix + ".stdout.jsonl",
+						logPrefix + ".stderr.log",
+					},
+				},
+				monitoredPromptCallbacks{
+					onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
+						o.reporter.StageProgress(
+							"independent review stage",
+							fmt.Sprintf(
+								"worker-%02d inactive for %s; restarting attempt %d/%d",
+								workerID,
+								inactivityErr.silence.Round(time.Second),
+								nextAttempt,
+								maxAttempts,
+							),
+							roundPtr(round),
+						)
+					},
+				},
+			)
+			resultsCh <- reviewWorkerResult{workerID: workerID, restarts: restarts, err: err}
 		}(idx)
 	}
 
-	completedCount := 0
+	successCount := 0
+	totalRestarts := 0
 	heartbeatStart := time.Now()
 	heartbeatTicker := time.NewTicker(stageHeartbeatInterval)
 	defer heartbeatTicker.Stop()
-	for completedCount < o.config.Concurrency {
+	for successCount < o.config.Concurrency {
+		pendingCount := o.config.Concurrency - successCount
 		select {
 		case result := <-resultsCh:
 			if result.err != nil {
-				o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(result.err))
-				return nil, result.err
+				cancelStage()
+				err := NewDeepReviewError("independent review stage failed: worker-%02d error: %v", result.workerID, result.err)
+				o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
+				return nil, err
 			}
-			completedCount++
+			successCount++
+			totalRestarts += result.restarts
 			o.reporter.StageProgress(
 				"independent review stage",
-				fmt.Sprintf("completed reviewer worker-%02d (%d/%d)", result.workerID, completedCount, o.config.Concurrency),
+				fmt.Sprintf(
+					"completed reviewer worker-%02d (%d/%d complete, %d total restarts)",
+					result.workerID,
+					successCount,
+					o.config.Concurrency,
+					totalRestarts,
+				),
 				roundPtr(round),
 			)
 		case <-heartbeatTicker.C:
-			if completedCount < o.config.Concurrency {
-				o.reporter.StageProgress(
-					"independent review stage",
-					stageHeartbeatMessage(
-						fmt.Sprintf("waiting on reviewer workers: %d/%d complete", completedCount, o.config.Concurrency),
-						heartbeatStart,
-					),
-					roundPtr(round),
+			if pendingCount > 0 {
+				waitingMessage := fmt.Sprintf(
+					"waiting on reviewer workers: %d/%d complete, %d pending, %d restarts",
+					successCount,
+					o.config.Concurrency,
+					pendingCount,
+					totalRestarts,
 				)
+				o.reporter.StageProgress("independent review stage", stageHeartbeatMessage(waitingMessage, heartbeatStart), roundPtr(round))
 			}
 		}
 	}
 
-	for idx, reviewPath := range reviewPaths {
+	selectedReviewPaths := make([]string, 0, o.config.Concurrency)
+	for workerID := 1; workerID <= o.config.Concurrency; workerID++ {
+		idx := workerID - 1
+		reviewPath := reviewPaths[idx]
 		candidates := []string{
 			workerReviewPaths[idx],
 			filepath.Join(worktrees[idx], fmt.Sprintf("review-%02d.md", idx+1)),
@@ -762,15 +1119,21 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 			o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 			return nil, err
 		}
+		selectedReviewPaths = append(selectedReviewPaths, reviewPath)
 	}
 
 	o.reporter.StageFinished(
 		"independent review stage",
 		roundPtr(round),
 		true,
-		fmt.Sprintf("generated %d independent review report(s)", len(reviewPaths)),
+		fmt.Sprintf(
+			"generated %d/%d independent review report(s); inactivity restarts: %d",
+			len(selectedReviewPaths),
+			o.config.Concurrency,
+			totalRestarts,
+		),
 	)
-	return reviewPaths, nil
+	return selectedReviewPaths, nil
 }
 
 func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, candidateHead, defaultBranch string, reviewReports []string) (RoundStatus, string, error) {
@@ -1020,32 +1383,64 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 	stageName, stageBaseMessage string,
 	parentStageName, parentStageBaseMessage string,
 ) (CodexRunResult, error) {
-	type runResult struct {
-		result CodexRunResult
-		err    error
+	policy := o.promptWatchdogPolicy()
+	result, _, err := o.runPromptWithWatchdog(
+		currentRunCommandContext(),
+		monitoredPromptRequest{
+			label:        stageName,
+			cwd:          cwd,
+			prompt:       prompt,
+			threadID:     threadID,
+			logPrefix:    logPrefix,
+			useGitStatus: true,
+			monitoredPaths: []string{
+				filepath.Join(cwd, ".deepreview"),
+				logPrefix + ".stdout.jsonl",
+				logPrefix + ".stderr.log",
+			},
+		},
+		monitoredPromptCallbacks{
+			onHeartbeat: func(elapsed, silence time.Duration) {
+				message := fmt.Sprintf("%s (elapsed %s)", stageBaseMessage, elapsed.Round(time.Second))
+				if policy.inactivity > 0 {
+					remaining := policy.inactivity - silence
+					if remaining < 0 {
+						remaining = 0
+					}
+					message = fmt.Sprintf("%s | inactivity timeout in %s", message, remaining.Round(time.Second))
+				}
+				o.reporter.StageProgress(stageName, message, roundPtr(round))
+				if parentStageName != "" {
+					parentMessage := fmt.Sprintf("%s (elapsed %s)", parentStageBaseMessage, elapsed.Round(time.Second))
+					if policy.inactivity > 0 {
+						remaining := policy.inactivity - silence
+						if remaining < 0 {
+							remaining = 0
+						}
+						parentMessage = fmt.Sprintf("%s | inactivity timeout in %s", parentMessage, remaining.Round(time.Second))
+					}
+					o.reporter.StageProgress(parentStageName, parentMessage, roundPtr(round))
+				}
+			},
+			onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
+				msg := fmt.Sprintf(
+					"%s inactive for %s; restarting attempt %d/%d",
+					stageName,
+					inactivityErr.silence.Round(time.Second),
+					nextAttempt,
+					maxAttempts,
+				)
+				o.reporter.StageProgress(stageName, msg, roundPtr(round))
+				if parentStageName != "" {
+					o.reporter.StageProgress(parentStageName, msg, roundPtr(round))
+				}
+			},
+		},
+	)
+	if err != nil {
+		return CodexRunResult{}, err
 	}
-
-	start := time.Now()
-	resultCh := make(chan runResult, 1)
-	go func() {
-		result, err := o.codexRunner.RunPrompt(cwd, prompt, threadID, logPrefix)
-		resultCh <- runResult{result: result, err: err}
-	}()
-
-	ticker := time.NewTicker(stageHeartbeatInterval)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case outcome := <-resultCh:
-			return outcome.result, outcome.err
-		case <-ticker.C:
-			o.reporter.StageProgress(stageName, stageHeartbeatMessage(stageBaseMessage, start), roundPtr(round))
-			if parentStageName != "" {
-				o.reporter.StageProgress(parentStageName, stageHeartbeatMessage(parentStageBaseMessage, start), roundPtr(round))
-			}
-		}
-	}
+	return result, nil
 }
 
 func ensureCanonicalArtifact(canonicalPath string, candidates []string) error {
@@ -1519,7 +1914,50 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 		return err
 	}
 	logPrefix := filepath.Join(o.runRoot, "logs", "delivery-pr-description")
-	if _, err := o.codexRunner.RunPrompt(o.runRoot, prompt, nil, logPrefix); err != nil {
+	_, _, err = o.runPromptWithWatchdog(
+		currentRunCommandContext(),
+		monitoredPromptRequest{
+			label:        "delivery/pr-description",
+			cwd:          o.runRoot,
+			prompt:       prompt,
+			threadID:     nil,
+			logPrefix:    logPrefix,
+			useGitStatus: false,
+			monitoredPaths: []string{
+				titleOutputPath,
+				summaryOutputPath,
+				logPrefix + ".stdout.jsonl",
+				logPrefix + ".stderr.log",
+			},
+		},
+		monitoredPromptCallbacks{
+			onHeartbeat: func(elapsed, silence time.Duration) {
+				message := fmt.Sprintf("running post-pr codex summary and updating pr title/body (elapsed %s)", elapsed.Round(time.Second))
+				policy := o.promptWatchdogPolicy()
+				if policy.inactivity > 0 {
+					remaining := policy.inactivity - silence
+					if remaining < 0 {
+						remaining = 0
+					}
+					message = fmt.Sprintf("%s | inactivity timeout in %s", message, remaining.Round(time.Second))
+				}
+				o.reporter.StageProgress("delivery", message, nil)
+			},
+			onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
+				o.reporter.StageProgress(
+					"delivery",
+					fmt.Sprintf(
+						"delivery codex summary inactive for %s; restarting attempt %d/%d",
+						inactivityErr.silence.Round(time.Second),
+						nextAttempt,
+						maxAttempts,
+					),
+					nil,
+				)
+			},
+		},
+	)
+	if err != nil {
 		return err
 	}
 
@@ -2026,10 +2464,29 @@ func trimForDisplay(text string, maxRunes int) string {
 
 func (o *Orchestrator) writeRunConfig() error {
 	payload := map[string]any{
-		"repo":                  sanitizePublicText(o.config.Repo),
-		"source_branch":         sanitizePublicText(o.config.SourceBranch),
-		"concurrency":           o.config.Concurrency,
-		"max_rounds":            o.config.MaxRounds,
+		"repo":          sanitizePublicText(o.config.Repo),
+		"source_branch": sanitizePublicText(o.config.SourceBranch),
+		"concurrency":   o.config.Concurrency,
+		"max_rounds":    o.config.MaxRounds,
+		"review_inactivity_seconds": func() int {
+			if o.config.ReviewInactivitySec > 0 {
+				return o.config.ReviewInactivitySec
+			}
+			if o.config.ReviewInactivity > 0 {
+				return int(o.config.ReviewInactivity / time.Second)
+			}
+			return 0
+		}(),
+		"review_activity_poll_seconds": func() int {
+			if o.config.ReviewActivityPollS > 0 {
+				return o.config.ReviewActivityPollS
+			}
+			if o.config.ReviewActivityPoll > 0 {
+				return int(o.config.ReviewActivityPoll / time.Second)
+			}
+			return 0
+		}(),
+		"review_max_restarts":   o.config.ReviewMaxRestarts,
 		"mode":                  o.config.Mode,
 		"workspace_root":        sanitizePublicText(o.workspaceRoot),
 		"run_id":                o.config.RunID,

@@ -39,6 +39,23 @@ func runCmd(t *testing.T, cwd string, env []string, cmd ...string) string {
 	return strings.TrimSpace(stdout.String())
 }
 
+func runCmdCapture(t *testing.T, cwd string, env []string, cmd ...string) (string, string) {
+	t.Helper()
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Dir = cwd
+	if env != nil {
+		c.Env = env
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+	if err := c.Run(); err != nil {
+		t.Fatalf("command failed: %v\ncmd=%v\nstdout=\n%s\nstderr=\n%s", err, cmd, stdout.String(), stderr.String())
+	}
+	return strings.TrimSpace(stdout.String()), strings.TrimSpace(stderr.String())
+}
+
 func runCmdExpectFailure(t *testing.T, cwd string, env []string, cmd ...string) string {
 	t.Helper()
 	c := exec.Command(cmd[0], cmd[1:]...)
@@ -252,7 +269,14 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	output := runCmd(t, root, env,
+	env = append(env,
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
+		"FAKE_CODEX_STALL_ONCE_CONTAINS=post-delivery PR description enhancement stage",
+		"FAKE_CODEX_STALL_ONCE_MS_MATCH=15000",
+	)
+	output, logs := runCmdCapture(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -264,6 +288,9 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	)
 	if !strings.Contains(output, "deepreview completed:") {
 		t.Fatalf("expected completion summary output, got: %s", output)
+	}
+	if !strings.Contains(logs, "delivery codex summary inactive for") {
+		t.Fatalf("expected delivery inactivity restart evidence in logs, got:\n%s", logs)
 	}
 	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
 		t.Fatalf("expected pr created summary output, got: %s", output)
@@ -511,6 +538,74 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	}
 }
 
+func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
+		"FAKE_CODEX_STALL_ONCE_MS_WORKER_2=15000",
+	)
+
+	output, logs := runCmdCapture(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "2",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
+	}
+	if !strings.Contains(logs, "worker-02 inactive for") {
+		t.Fatalf("expected worker-02 inactivity restart evidence in logs, got:\n%s", logs)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-01.md")); err != nil {
+		t.Fatalf("expected worker-01 review artifact, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-02.md")); err != nil {
+		t.Fatalf("expected worker-02 review artifact after restart, got: %v", err)
+	}
+}
+
 func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
@@ -542,8 +637,13 @@ func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *tes
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_DECISION=continue",
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
+		"FAKE_CODEX_STALL_ONCE_CONTAINS=prompt 2 of 4",
+		"FAKE_CODEX_STALL_ONCE_MS_MATCH=15000",
 	)
-	output := runCmd(t, root, env,
+	output, logs := runCmdCapture(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -555,6 +655,9 @@ func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *tes
 	)
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
 		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
+	}
+	if !strings.Contains(logs, "execute / plan inactive for") {
+		t.Fatalf("expected execute inactivity restart evidence in logs, got:\n%s", logs)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")

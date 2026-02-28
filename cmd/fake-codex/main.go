@@ -178,19 +178,94 @@ func handlePrompt(prompt string) (string, error) {
 	return "ok", nil
 }
 
-func main() {
-	if sleepRaw := strings.TrimSpace(os.Getenv("FAKE_CODEX_SLEEP_MS")); sleepRaw != "" {
-		if ms, err := strconv.Atoi(sleepRaw); err == nil && ms > 0 {
-			time.Sleep(time.Duration(ms) * time.Millisecond)
+func workerIDFromPrompt(prompt string) int {
+	raw := regexGet("Worker id: `([0-9]+)`", prompt)
+	if raw == "" {
+		return 0
+	}
+	id, err := strconv.Atoi(raw)
+	if err != nil || id < 1 {
+		return 0
+	}
+	return id
+}
+
+func sleepFromEnv(raw string) bool {
+	if strings.TrimSpace(raw) == "" {
+		return false
+	}
+	ms, err := strconv.Atoi(raw)
+	if err != nil || ms <= 0 {
+		return false
+	}
+	time.Sleep(time.Duration(ms) * time.Millisecond)
+	return true
+}
+
+func maybeSleepOnceByMarker(markerPath, sleepRaw string) bool {
+	if !sleepFromEnvValueEnabled(sleepRaw) {
+		return false
+	}
+	if _, err := os.Stat(markerPath); err == nil {
+		return false
+	}
+	if err := os.MkdirAll(filepath.Dir(markerPath), 0o755); err != nil {
+		return false
+	}
+	if err := os.WriteFile(markerPath, []byte(time.Now().UTC().Format(time.RFC3339Nano)+"\n"), 0o644); err != nil {
+		return false
+	}
+	return sleepFromEnv(sleepRaw)
+}
+
+func sleepFromEnvValueEnabled(raw string) bool {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return false
+	}
+	ms, err := strconv.Atoi(raw)
+	return err == nil && ms > 0
+}
+
+func sleepForPrompt(prompt string) {
+	if contains := strings.TrimSpace(os.Getenv("FAKE_CODEX_STALL_ONCE_CONTAINS")); contains != "" && strings.Contains(prompt, contains) {
+		matchSleepRaw := strings.TrimSpace(os.Getenv("FAKE_CODEX_STALL_ONCE_MS_MATCH"))
+		if matchSleepRaw == "" {
+			matchSleepRaw = os.Getenv("FAKE_CODEX_STALL_ONCE_MS")
+		}
+		if maybeSleepOnceByMarker(filepath.Join(".deepreview", "fake-codex-stall-once-match.marker"), matchSleepRaw) {
+			return
 		}
 	}
 
+	workerID := workerIDFromPrompt(prompt)
+	if workerID > 0 {
+		stallKey := fmt.Sprintf("FAKE_CODEX_STALL_ONCE_MS_WORKER_%d", workerID)
+		stallMarker := filepath.Join(".deepreview", fmt.Sprintf("fake-codex-stall-once-worker-%02d.marker", workerID))
+		if maybeSleepOnceByMarker(stallMarker, os.Getenv(stallKey)) {
+			return
+		}
+		key := fmt.Sprintf("FAKE_CODEX_SLEEP_MS_WORKER_%d", workerID)
+		if sleepFromEnv(os.Getenv(key)) {
+			return
+		}
+	}
+	if maybeSleepOnceByMarker(filepath.Join(".deepreview", "fake-codex-stall-once-global.marker"), os.Getenv("FAKE_CODEX_STALL_ONCE_MS")) {
+		return
+	}
+	if sleepFromEnv(os.Getenv("FAKE_CODEX_SLEEP_MS")) {
+		return
+	}
+}
+
+func main() {
 	promptBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 	prompt := string(promptBytes)
+	sleepForPrompt(prompt)
 
 	threadID := randomID()
 	args := os.Args[1:]

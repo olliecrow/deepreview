@@ -18,6 +18,9 @@ type ReviewConfig struct {
 	SourceBranch        string        `json:"source_branch"`
 	Concurrency         int           `json:"concurrency"`
 	MaxRounds           int           `json:"max_rounds"`
+	ReviewInactivitySec int           `json:"review_inactivity_seconds"`
+	ReviewActivityPollS int           `json:"review_activity_poll_seconds"`
+	ReviewMaxRestarts   int           `json:"review_max_restarts"`
 	Mode                string        `json:"mode"`
 	WorkspaceRoot       string        `json:"workspace_root"`
 	RunID               string        `json:"run_id"`
@@ -28,6 +31,8 @@ type ReviewConfig struct {
 	GhBin               string        `json:"gh_bin"`
 	CodexTimeoutSeconds int           `json:"codex_timeout_seconds"`
 	CodexTimeout        time.Duration `json:"-"`
+	ReviewInactivity    time.Duration `json:"-"`
+	ReviewActivityPoll  time.Duration `json:"-"`
 }
 
 type RepoIdentity struct {

@@ -17,7 +17,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 
 1. You run deepreview for a repository and source branch.
 2. It launches several independent review workers in parallel.
-3. Each worker writes a review markdown report.
+3. Each independent review worker must complete and write its review markdown report; deepreview monitors all Codex workers for activity and restarts stalled workers with bounded retries to avoid pipeline stalls.
 4. The execute stage combines reports, plans changes, applies fixes, and verifies results.
 5. It runs cleanup, summary, and commit steps in an isolated managed workspace.
 6. If execute changed code, deepreview runs another review round.

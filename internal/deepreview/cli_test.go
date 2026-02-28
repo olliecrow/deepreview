@@ -59,6 +59,15 @@ func TestParseReviewArgsDefaults(t *testing.T) {
 	if parsed.Config.CodexTimeoutSeconds != defaultCodexTimeoutSeconds {
 		t.Fatalf("expected codex timeout %d, got %d", defaultCodexTimeoutSeconds, parsed.Config.CodexTimeoutSeconds)
 	}
+	if parsed.Config.ReviewInactivitySec != defaultReviewInactivitySec {
+		t.Fatalf("expected review inactivity seconds %d, got %d", defaultReviewInactivitySec, parsed.Config.ReviewInactivitySec)
+	}
+	if parsed.Config.ReviewActivityPollS != defaultReviewActivityPollS {
+		t.Fatalf("expected review activity poll seconds %d, got %d", defaultReviewActivityPollS, parsed.Config.ReviewActivityPollS)
+	}
+	if parsed.Config.ReviewMaxRestarts != defaultReviewMaxRestarts {
+		t.Fatalf("expected review max restarts %d, got %d", defaultReviewMaxRestarts, parsed.Config.ReviewMaxRestarts)
+	}
 	if parsed.Config.CodexModel != forcedCodexModel {
 		t.Fatalf("expected codex model %s, got %s", forcedCodexModel, parsed.Config.CodexModel)
 	}
@@ -67,6 +76,42 @@ func TestParseReviewArgsDefaults(t *testing.T) {
 	}
 	if parsed.NoTUI {
 		t.Fatalf("expected --no-tui default to false")
+	}
+}
+
+func TestParseReviewArgsReviewPolicyEnvOverrides(t *testing.T) {
+	t.Setenv("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", "75")
+	t.Setenv("DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS", "7")
+	t.Setenv("DEEPREVIEW_REVIEW_MAX_RESTARTS", "3")
+	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature"}, time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatalf("ParseReviewArgs failed: %v", err)
+	}
+	if parsed.Config.ReviewInactivitySec != 75 {
+		t.Fatalf("expected review inactivity seconds 75, got %d", parsed.Config.ReviewInactivitySec)
+	}
+	if parsed.Config.ReviewActivityPollS != 7 {
+		t.Fatalf("expected review activity poll seconds 7, got %d", parsed.Config.ReviewActivityPollS)
+	}
+	if parsed.Config.ReviewMaxRestarts != 3 {
+		t.Fatalf("expected review max restarts 3, got %d", parsed.Config.ReviewMaxRestarts)
+	}
+	if parsed.Config.ReviewInactivity != 75*time.Second {
+		t.Fatalf("expected review inactivity 75s, got %s", parsed.Config.ReviewInactivity)
+	}
+	if parsed.Config.ReviewActivityPoll != 7*time.Second {
+		t.Fatalf("expected review activity poll 7s, got %s", parsed.Config.ReviewActivityPoll)
+	}
+}
+
+func TestParseReviewArgsRejectsInvalidReviewPolicyEnv(t *testing.T) {
+	t.Setenv("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", "-1")
+	_, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature"}, time.Unix(1700000000, 0))
+	if err == nil {
+		t.Fatalf("expected parse error for invalid review inactivity env")
+	}
+	if !strings.Contains(err.Error(), "DEEPREVIEW_REVIEW_INACTIVITY_SECONDS") {
+		t.Fatalf("expected review inactivity env in error, got: %v", err)
 	}
 }
 
@@ -104,6 +149,9 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"--mode <pr|yolo>      (default: pr)",
 		"DEEPREVIEW_WORKSPACE_ROOT",
 		"DEEPREVIEW_CALLER_CWD",
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS",
 		"If <repo> is omitted:",
 		"Troubleshooting:",
 		"press Ctrl+C once",

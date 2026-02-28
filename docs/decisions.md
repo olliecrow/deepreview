@@ -77,15 +77,15 @@ References:
 `AGENTS.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Use concurrent independent reviews (default 4, configurable) with one markdown output per review.
+Use concurrent independent reviews (default 4, configurable) with full-worker completion, plus bounded inactivity restarts to recover stalled workers.
 Context:
 deepreview quality depends on independent concurrent perspectives.
 Rationale:
-Parallel independent reviews increase coverage and reduce single-run blind spots.
+Parallel independent reviews increase coverage and reduce single-run blind spots. Bounded inactivity restarts prevent single-worker stalls from deadlocking the pipeline while preserving full coverage.
 Trade-offs:
-Higher local compute usage and more orchestration complexity.
+Higher local compute usage and more orchestration complexity due to activity monitoring and restart handling.
 Enforcement:
-Independent-review contract documented in spec/architecture/README; implementation and tests must assert one artifact per worker and configurable concurrency.
+Independent-review contract documented in spec/architecture/README; implementation and tests must assert configurable concurrency, inactivity policy, bounded restarts, and one artifact per worker.
 References:
 `README.md`, `docs/spec.md`, `docs/architecture.md`
 
@@ -168,15 +168,15 @@ References:
 `docs/alignment.md`, `docs/workflows.md`, `plan/current/alignment-status.md`
 
 Decision:
-Keep orchestration simple and fail-fast: no automatic retry/backoff/self-healing loops.
+Keep orchestration simple and fail-fast, with one narrow self-healing exception: bounded inactivity restarts for stalled Codex workers.
 Context:
 The initial user/operator model is small-scale and prioritizes clarity over production hardening.
 Rationale:
-A straightforward control flow reduces complexity and makes behavior easier to reason about during greenfield development.
+A straightforward control flow reduces complexity and makes behavior easier to reason about while still protecting runs from single-worker stalls.
 Trade-offs:
-Transient failures require manual reruns instead of automatic recovery.
+Transient non-stall failures still require manual reruns; stall recovery adds targeted orchestration complexity.
 Enforcement:
-Spec and architecture explicitly define no-retry behavior; run failures terminate with clear diagnostics.
+Spec and architecture define bounded inactivity restart behavior with explicit caps; run failures outside that scope terminate with clear diagnostics.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
@@ -794,3 +794,24 @@ Enforcement:
 Delivery stage runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and runs `./setup_env.sh` when present; non-zero exit blocks delivery. On `privacy scan failed: local path pattern matched in <file>`, deepreview attempts one docs-only redaction pass (`/path/to/project` placeholder), commits the fix, then reruns delivery scans once before failing.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
+
+Decision:
+Introduce bounded inactivity watchdog and restart handling for all Codex workers (independent review, execute prompts, and post-delivery prompt).
+Context:
+Operators observed runs where one worker could stall indefinitely and block the entire deepreview pipeline.
+Rationale:
+Activity-based monitoring plus bounded restarts preserves full review coverage while preventing single-worker stalls from holding the run hostage.
+Trade-offs:
+Adds monitoring/restart complexity and can restart workers that are genuinely quiet for too long; this is mitigated by generous timeout defaults and configurable knobs.
+Enforcement:
+- Review policy defaults:
+  - `DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=600` (10 minutes)
+  - `DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=15`
+  - `DEEPREVIEW_REVIEW_MAX_RESTARTS=1`
+- Worker activity evidence includes stdout/stderr output and filesystem/git-change signals.
+- On inactivity timeout, deepreview cancels and restarts the worker up to configured max restarts.
+- Independent review stage requires full worker coverage; stage fails if any worker cannot complete within bounded restart policy.
+- Run config snapshot records effective review policy settings.
+- Integration and unit tests assert inactivity restart behavior and policy clamping behavior; restart-path integration assertions should prefer deterministic log evidence over strict wall-time thresholds to reduce flake risk.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`
