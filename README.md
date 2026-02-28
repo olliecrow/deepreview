@@ -27,6 +27,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 10. The final PR title/body are Codex-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 11. In yolo mode, it pushes directly to your source branch.
 12. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
+13. If a run stops because `--max-rounds` was reached before the required post-change review round, deepreview prints a failure summary that tells you what completed and where to inspect logs, reviews, and round artifacts yourself.
 
 ## Requirements
 

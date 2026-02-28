@@ -685,7 +685,7 @@ Forcing a fresh independent review after modifications increases confidence in f
 Trade-offs:
 Runs can require additional rounds; if `--max-rounds` is too low to allow the required post-change review round, the run fails and operator must rerun with a higher max round setting.
 Enforcement:
-Round loop checks candidate branch HEAD before/after execute stage; when changed, it forces another round regardless of status decision. If that would exceed `--max-rounds`, run exits with a clear error and no delivery.
+Round loop checks candidate branch HEAD before/after execute stage; when changed, it forces another round regardless of status decision. If that would exceed `--max-rounds`, run exits with a clear error, prints a self-serve failure summary (completed progress + artifact/log/review paths), and performs no delivery.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `README.md`
 

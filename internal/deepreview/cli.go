@@ -555,6 +555,9 @@ func runReviewCommand(args []string) int {
 			return 130
 		}
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
+		if shouldPrintFailureArtifactSummary(err) {
+			printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
+		}
 		return 1
 	}
 	if interruptCount.Load() > 0 {
@@ -870,6 +873,55 @@ func isInterruptError(err error) bool {
 		return true
 	}
 	return false
+}
+
+func shouldPrintFailureArtifactSummary(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "requires at least one additional review round after code changes")
+}
+
+func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, config ReviewConfig) {
+	if out == nil || orchestrator == nil {
+		return
+	}
+	runRoot := orchestrator.RunRoot()
+	if strings.TrimSpace(runRoot) == "" {
+		runRoot = filepath.Join(config.WorkspaceRoot, "runs", config.RunID)
+	}
+	logsPath := filepath.Join(runRoot, "logs")
+	repoSlug := strings.TrimSpace(orchestrator.RepoSlug())
+	if strings.Trim(repoSlug, "/") == "" {
+		repoSlug = ""
+	}
+	if repoSlug == "" {
+		repoSlug = strings.TrimSpace(config.Repo)
+	}
+	reviewSnapshot := readCompletionReviewSnapshot(runRoot)
+
+	_, _ = fmt.Fprintln(out, "deepreview failure summary:")
+	_, _ = fmt.Fprintf(out, "run: `%s`\n", config.RunID)
+	if repoSlug != "" {
+		_, _ = fmt.Fprintf(out, "repository reviewed: `%s`\n", repoSlug)
+	}
+	_, _ = fmt.Fprintf(out, "source branch reviewed: `%s`\n", config.SourceBranch)
+	if reviewSnapshot.CompletedRounds > 0 {
+		_, _ = fmt.Fprintf(out, "review rounds completed before exit: %d\n", reviewSnapshot.CompletedRounds)
+	}
+	if reviewSnapshot.HasFinalStatus {
+		_, _ = fmt.Fprintf(out, "latest review decision: %s\n", formatFinalReviewStatus(reviewSnapshot.FinalStatus))
+		if reason := formatFinalReviewReason(reviewSnapshot.FinalStatus); reason != "" {
+			_, _ = fmt.Fprintf(out, "latest review summary: %s\n", reason)
+		}
+	}
+	_, _ = fmt.Fprintln(out, "run exited before delivery; no push or PR was created.")
+	_, _ = fmt.Fprintln(out, "inspect these paths to review what deepreview produced:")
+	_, _ = fmt.Fprintf(out, "run artifacts: %s\n", runRoot)
+	_, _ = fmt.Fprintf(out, "logs: %s\n", logsPath)
+	_, _ = fmt.Fprintf(out, "reviews: %s\n", filepath.Join(runRoot, "round-*", "review-*.md"))
+	_, _ = fmt.Fprintf(out, "round artifacts: %s\n", filepath.Join(runRoot, "round-*", "round-*.md"))
+	_, _ = fmt.Fprintf(out, "round status files: %s\n", filepath.Join(runRoot, "round-*", "round-status.json"))
 }
 
 func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {

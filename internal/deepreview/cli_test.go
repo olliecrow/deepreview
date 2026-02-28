@@ -318,6 +318,51 @@ func TestIsInterruptError(t *testing.T) {
 	}
 }
 
+func TestShouldPrintFailureArtifactSummary(t *testing.T) {
+	if shouldPrintFailureArtifactSummary(nil) {
+		t.Fatalf("nil error should not request failure summary")
+	}
+	if shouldPrintFailureArtifactSummary(errors.New("different failure")) {
+		t.Fatalf("unexpected summary flag for unrelated errors")
+	}
+	if !shouldPrintFailureArtifactSummary(errors.New("deepreview requires at least one additional review round after code changes")) {
+		t.Fatalf("expected summary flag for max-rounds post-change review failure")
+	}
+}
+
+func TestPrintFailureArtifactSummary(t *testing.T) {
+	var out strings.Builder
+	config := ReviewConfig{
+		WorkspaceRoot: t.TempDir(),
+		RunID:         "20260228T002535Z-39dab37e",
+		Repo:          "owner/repo",
+		SourceBranch:  "main",
+	}
+	orchestrator := &Orchestrator{
+		runRoot: filepath.Join(config.WorkspaceRoot, "runs", config.RunID),
+	}
+
+	printFailureArtifactSummary(&out, orchestrator, config)
+	text := out.String()
+	for _, want := range []string{
+		"deepreview failure summary:\n",
+		"run: `20260228T002535Z-39dab37e`\n",
+		"repository reviewed: `owner/repo`\n",
+		"source branch reviewed: `main`\n",
+		"run exited before delivery; no push or PR was created.\n",
+		"inspect these paths to review what deepreview produced:\n",
+		"run artifacts: ",
+		"logs: ",
+		"reviews: ",
+		"round artifacts: ",
+		"round status files: ",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected failure summary to include %q, got:\n%s", want, text)
+		}
+	}
+}
+
 func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {
 	runRoot := t.TempDir()
 	round1 := filepath.Join(runRoot, "round-01")
