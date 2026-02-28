@@ -255,3 +255,78 @@ func TestBasePRTitleFromChangesHandlesRootOnlyChanges(t *testing.T) {
 		t.Fatalf("unexpected base title for root-only changes: %q", title)
 	}
 }
+
+func TestRunPreCommitAllFilesIfConfiguredPasses(t *testing.T) {
+	td := t.TempDir()
+	repoPath := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, ".pre-commit-config.yaml"), []byte("repos: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(td, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	preCommitPath := filepath.Join(binDir, "pre-commit")
+	if err := os.WriteFile(preCommitPath, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	o := &Orchestrator{managedRepoPath: repoPath, reporter: &NullProgressReporter{}}
+	if err := o.runPreCommitAllFilesIfConfigured(); err != nil {
+		t.Fatalf("expected pre-commit gate to pass, got: %v", err)
+	}
+}
+
+func TestRunPreCommitAllFilesIfConfiguredFailsOnHookFailure(t *testing.T) {
+	td := t.TempDir()
+	repoPath := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, ".pre-commit-config.yaml"), []byte("repos: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	binDir := filepath.Join(td, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	preCommitPath := filepath.Join(binDir, "pre-commit")
+	if err := os.WriteFile(preCommitPath, []byte("#!/usr/bin/env bash\necho 'hook failed' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	o := &Orchestrator{managedRepoPath: repoPath, reporter: &NullProgressReporter{}}
+	err := o.runPreCommitAllFilesIfConfigured()
+	if err == nil {
+		t.Fatalf("expected pre-commit gate failure")
+	}
+	if !strings.Contains(err.Error(), "delivery blocked: pre-commit checks failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunSetupEnvIfPresentFailsWhenScriptFails(t *testing.T) {
+	td := t.TempDir()
+	repoPath := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(repoPath, "setup_env.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/usr/bin/env bash\necho 'tests failed' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{managedRepoPath: repoPath, reporter: &NullProgressReporter{}}
+	err := o.runSetupEnvIfPresent()
+	if err == nil {
+		t.Fatalf("expected setup_env gate failure")
+	}
+	if !strings.Contains(err.Error(), "delivery blocked: setup_env.sh failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
