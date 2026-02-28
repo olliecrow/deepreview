@@ -1,11 +1,13 @@
 package deepreview
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -14,6 +16,12 @@ type CodexRunner struct {
 	CodexModel string
 	Reasoning  string
 	Timeout    time.Duration
+}
+
+type CodexRunHooks struct {
+	Context       context.Context
+	OnStdoutChunk func(chunk []byte)
+	OnStderrChunk func(chunk []byte)
 }
 
 func (c *CodexRunner) buildCommand(threadID *string) []string {
@@ -32,26 +40,76 @@ func (c *CodexRunner) buildCommand(threadID *string) []string {
 }
 
 func (c *CodexRunner) RunPrompt(cwd, prompt string, threadID *string, logPrefixPath string) (CodexRunResult, error) {
+	return c.RunPromptWithHooks(cwd, prompt, threadID, logPrefixPath, nil)
+}
+
+func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, logPrefixPath string, hooks *CodexRunHooks) (CodexRunResult, error) {
 	if strings.TrimSpace(c.CodexBin) == "" {
 		return CodexRunResult{}, NewDeepReviewError("codex binary must be configured")
 	}
 	command := c.buildCommand(threadID)
-
-	completed, err := RunCommand(command, cwd, prompt, true, c.Timeout)
-	if err != nil {
-		return CodexRunResult{}, err
-	}
 
 	stdoutPath := logPrefixPath + ".stdout.jsonl"
 	stderrPath := logPrefixPath + ".stderr.log"
 	if err := os.MkdirAll(filepath.Dir(stdoutPath), 0o755); err != nil {
 		return CodexRunResult{}, err
 	}
-	if err := os.WriteFile(stdoutPath, []byte(completed.Stdout), 0o644); err != nil {
+	stdoutFile, err := os.Create(stdoutPath)
+	if err != nil {
 		return CodexRunResult{}, err
 	}
-	if err := os.WriteFile(stderrPath, []byte(completed.Stderr), 0o644); err != nil {
+	defer stdoutFile.Close()
+	stderrFile, err := os.Create(stderrPath)
+	if err != nil {
 		return CodexRunResult{}, err
+	}
+	defer stderrFile.Close()
+
+	var streamMu sync.Mutex
+	var streamErr error
+	setStreamErr := func(err error) {
+		if err == nil {
+			return
+		}
+		streamMu.Lock()
+		if streamErr == nil {
+			streamErr = err
+		}
+		streamMu.Unlock()
+	}
+	streamCallbacks := &CommandStreamCallbacks{
+		OnStdoutChunk: func(chunk []byte) {
+			streamMu.Lock()
+			_, err := stdoutFile.Write(chunk)
+			streamMu.Unlock()
+			setStreamErr(err)
+			if hooks != nil && hooks.OnStdoutChunk != nil {
+				hooks.OnStdoutChunk(chunk)
+			}
+		},
+		OnStderrChunk: func(chunk []byte) {
+			streamMu.Lock()
+			_, err := stderrFile.Write(chunk)
+			streamMu.Unlock()
+			setStreamErr(err)
+			if hooks != nil && hooks.OnStderrChunk != nil {
+				hooks.OnStderrChunk(chunk)
+			}
+		},
+	}
+	parentCtx := context.Background()
+	if hooks != nil && hooks.Context != nil {
+		parentCtx = hooks.Context
+	}
+	completed, err := RunCommandContextWithCallbacks(parentCtx, command, cwd, prompt, true, c.Timeout, streamCallbacks)
+	if err != nil {
+		return CodexRunResult{}, err
+	}
+	streamMu.Lock()
+	capturedStreamErr := streamErr
+	streamMu.Unlock()
+	if capturedStreamErr != nil {
+		return CodexRunResult{}, capturedStreamErr
 	}
 
 	discoveredThreadID := ""

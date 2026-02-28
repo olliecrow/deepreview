@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -29,6 +30,9 @@ const (
 	defaultConcurrency         = 4
 	defaultMaxRounds           = 5
 	defaultCodexTimeoutSeconds = 3600
+	defaultReviewInactivitySec = 600
+	defaultReviewActivityPollS = 15
+	defaultReviewMaxRestarts   = 1
 	forcedCodexModel           = "gpt-5.3-codex"
 	forcedCodexReasoningEffort = "xhigh"
 )
@@ -82,6 +86,18 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 	if *maxRounds < 1 {
 		return ParsedArgs{}, NewDeepReviewError("--max-rounds must be >= 1")
 	}
+	reviewInactivitySec, err := envNonNegativeInt("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", defaultReviewInactivitySec)
+	if err != nil {
+		return ParsedArgs{}, err
+	}
+	reviewActivityPollS, err := envNonNegativeInt("DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS", defaultReviewActivityPollS)
+	if err != nil {
+		return ParsedArgs{}, err
+	}
+	reviewMaxRestarts, err := envNonNegativeInt("DEEPREVIEW_REVIEW_MAX_RESTARTS", defaultReviewMaxRestarts)
+	if err != nil {
+		return ParsedArgs{}, err
+	}
 
 	workspaceRoot, err := WorkspaceRootFromEnv()
 	if err != nil {
@@ -103,6 +119,9 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		SourceBranch:        resolvedBranch,
 		Concurrency:         *concurrency,
 		MaxRounds:           *maxRounds,
+		ReviewInactivitySec: reviewInactivitySec,
+		ReviewActivityPollS: reviewActivityPollS,
+		ReviewMaxRestarts:   reviewMaxRestarts,
 		Mode:                finalMode,
 		WorkspaceRoot:       workspaceRoot,
 		RunID:               runID,
@@ -113,6 +132,8 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		GhBin:               envOrDefault("DEEPREVIEW_GH_BIN", "gh"),
 		CodexTimeoutSeconds: defaultCodexTimeoutSeconds,
 		CodexTimeout:        defaultCodexTimeoutSeconds * time.Second,
+		ReviewInactivity:    time.Duration(reviewInactivitySec) * time.Second,
+		ReviewActivityPoll:  time.Duration(reviewActivityPollS) * time.Second,
 	}
 
 	return ParsedArgs{Config: cfg, NoTUI: *noTUI}, nil
@@ -137,6 +158,21 @@ func envOrDefault(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+func envNonNegativeInt(key string, fallback int) (int, error) {
+	raw := strings.TrimSpace(os.Getenv(key))
+	if raw == "" {
+		return fallback, nil
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil {
+		return 0, NewDeepReviewError("%s must be a non-negative integer, got %q", key, raw)
+	}
+	if value < 0 {
+		return 0, NewDeepReviewError("%s must be >= 0, got %d", key, value)
+	}
+	return value, nil
 }
 
 func MainHelpText() string {
@@ -234,7 +270,7 @@ Optional flags:
     Force structured text progress logs (disables full-screen terminal user interface).
     Default behavior enables terminal user interface when terminal capabilities are valid.
 
-Environment overrides:
+	Environment overrides:
   DEEPREVIEW_WORKSPACE_ROOT   (default: ~/deepreview)
     Root for managed repos + run artifacts.
 
@@ -246,6 +282,16 @@ Environment overrides:
   DEEPREVIEW_CODEX_BIN        (default: codex)
   DEEPREVIEW_GH_BIN           (default: gh)
     Tool binary overrides (name or absolute path).
+
+  DEEPREVIEW_REVIEW_INACTIVITY_SECONDS (default: %d)
+    Maximum time a worker can run with no evidence of activity before it is restarted.
+    Set to 0 to disable inactivity restarts.
+
+  DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS (default: %d)
+    Poll interval for activity signals (stdout/stderr output plus filesystem/git-change evidence).
+
+  DEEPREVIEW_REVIEW_MAX_RESTARTS (default: %d)
+    Maximum inactivity-triggered restarts per worker before the stage fails.
 
 Operational defaults:
   Codex model: %s
@@ -267,7 +313,7 @@ Troubleshooting:
   - Terminal rendering issues: pass --no-tui for stable text logs.
   - To stop a run safely at any time, press Ctrl+C once (deepreview cancels and runs cleanup).
   - Invalid mode: allowed values are only pr or yolo (case-insensitive).
-`, defaultConcurrency, defaultMaxRounds, ModePR, forcedCodexModel, forcedCodexReasoningEffort, defaultCodexTimeoutSeconds)
+`, defaultConcurrency, defaultMaxRounds, ModePR, defaultReviewInactivitySec, defaultReviewActivityPollS, defaultReviewMaxRestarts, forcedCodexModel, forcedCodexReasoningEffort, defaultCodexTimeoutSeconds)
 }
 
 func DoctorHelpText() string {

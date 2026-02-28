@@ -34,8 +34,8 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 3. Round loop (`round = 1..max_rounds`):
 - create `N` independent review worktrees from current candidate head
 - run `N` concurrent Codex independent reviews using one shared independent-review prompt template
-- require one markdown review artifact per worker
-- wait for all independent-review workers
+- require all review workers to complete successfully and emit one markdown review artifact each
+- monitor worker activity (stdout/stderr + filesystem/git-change evidence); cancel and restart inactive workers with bounded retries
 - collect report artifacts needed for execute prompts
 - aggressively remove independent-review worktrees
 - create fresh execute worktree from current candidate head
@@ -44,6 +44,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - prompt 2: plan (high-conviction, end-to-end implementation and verification plan; no code edits)
   - prompt 3: execute/verify (apply approved changes and run codex-led verification with evidence output)
   - prompt 4: cleanup/summary/commit (docs/decision upkeep, round status flag write, ensure changed work is committed locally)
+- apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
 - allow local checkpoint commits throughout execution; never push during rounds
 - Codex writes round status file at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - aggressively remove execute worktree and transient per-round artifacts
@@ -76,7 +77,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - verification execution is codex-led (tests, pre-commit checks, locally runnable CI-like checks when available) with explicit evidence in round/final summaries.
 
 ## Simplicity model
-- no automatic retry/backoff/self-healing loops.
+- no unbounded retry/backoff/self-healing loops; only bounded inactivity restarts with explicit per-worker caps.
 - fail fast on failed stages, then report clearly.
 - prioritize straightforward control flow over production-hardening complexity.
 - keep CLI controls minimal; prefer sensible defaults over large option surfaces.

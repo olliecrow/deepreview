@@ -60,6 +60,46 @@ func TestResolveRepoIdentityLocalPathUsesOriginRemoteAsCloneSource(t *testing.T)
 	}
 }
 
+func TestPromptWatchdogPolicyClampsToSafeValues(t *testing.T) {
+	o := &Orchestrator{
+		config: ReviewConfig{
+			ReviewInactivity:   30 * time.Second,
+			ReviewActivityPoll: 90 * time.Second,
+			ReviewMaxRestarts:  3,
+		},
+	}
+	policy := o.promptWatchdogPolicy()
+	if policy.inactivity != 30*time.Second {
+		t.Fatalf("expected inactivity 30s, got %s", policy.inactivity)
+	}
+	if policy.pollInterval != 30*time.Second {
+		t.Fatalf("expected poll interval clamped to inactivity (30s), got %s", policy.pollInterval)
+	}
+	if policy.maxRestarts != 3 {
+		t.Fatalf("expected max restarts 3, got %d", policy.maxRestarts)
+	}
+}
+
+func TestPromptWatchdogPolicyRejectsNegativeValues(t *testing.T) {
+	o := &Orchestrator{
+		config: ReviewConfig{
+			ReviewInactivity:   -5 * time.Second,
+			ReviewActivityPoll: -2 * time.Second,
+			ReviewMaxRestarts:  -4,
+		},
+	}
+	policy := o.promptWatchdogPolicy()
+	if policy.inactivity != 0 {
+		t.Fatalf("expected non-negative inactivity, got %s", policy.inactivity)
+	}
+	if policy.pollInterval != stageHeartbeatInterval {
+		t.Fatalf("expected default poll interval %s, got %s", stageHeartbeatInterval, policy.pollInterval)
+	}
+	if policy.maxRestarts != 0 {
+		t.Fatalf("expected non-negative max restarts, got %d", policy.maxRestarts)
+	}
+}
+
 func TestExecutePromptLabel(t *testing.T) {
 	cases := []struct {
 		templateName string
