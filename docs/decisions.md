@@ -324,6 +324,19 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `prompts/execute/01-consolidate-reviews.md`
 
 Decision:
+Prompt templates for machine-validated artifacts should include explicit output schemas and concrete examples.
+Context:
+Codex output quality improves when formatting constraints are concrete; vague "include X" guidance leads to occasional drift.
+Rationale:
+Providing strict shape examples increases consistency, reduces parser/validator failures, and keeps runs autonomous.
+Trade-offs:
+Slightly longer prompt templates and tighter formatting expectations.
+Enforcement:
+Execute and review prompts include explicit markdown/json shape examples for triage, verification, and summary artifacts.
+References:
+`prompts/execute/01-consolidate-reviews.md`, `prompts/execute/03-execute-verify.md`, `prompts/execute/04-cleanup-summary-commit.md`, `prompts/review/independent-review.md`, `prompts/README.md`
+
+Decision:
 Encourage local commits throughout execution; require changed work to be committed locally before round completion, with no empty commits.
 Context:
 Round-based progression should preserve progress safely while avoiding remote churn until final delivery.
