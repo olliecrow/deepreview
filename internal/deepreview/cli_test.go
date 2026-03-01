@@ -370,8 +370,8 @@ func TestShouldPrintFailureArtifactSummary(t *testing.T) {
 	if shouldPrintFailureArtifactSummary(nil) {
 		t.Fatalf("nil error should not request failure summary")
 	}
-	if shouldPrintFailureArtifactSummary(errors.New("different failure")) {
-		t.Fatalf("unexpected summary flag for unrelated errors")
+	if !shouldPrintFailureArtifactSummary(errors.New("different failure")) {
+		t.Fatalf("expected summary flag for any run error")
 	}
 	if !shouldPrintFailureArtifactSummary(errors.New("deepreview requires at least one additional review round after code changes")) {
 		t.Fatalf("expected summary flag for max-rounds post-change review failure")

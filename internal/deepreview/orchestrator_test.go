@@ -125,6 +125,69 @@ func TestExecutePromptLabel(t *testing.T) {
 	}
 }
 
+func TestTriagePolicyViolationsAcceptRequiresCriticalOrHighWithHighConfidence(t *testing.T) {
+	markdown := `# Round Triage
+
+### item A
+- disposition: accept
+- severity: medium
+- confidence: high
+
+### item B
+- disposition: accept
+- severity: high
+- confidence: medium
+
+### item C
+- disposition: reject
+- severity: low
+- confidence: low
+`
+	violations := triagePolicyViolations(markdown)
+	if len(violations) != 2 {
+		t.Fatalf("expected 2 violations, got %d: %v", len(violations), violations)
+	}
+	if !strings.Contains(strings.Join(violations, " | "), "item A has disallowed severity \"medium\"") {
+		t.Fatalf("expected severity violation for item A, got: %v", violations)
+	}
+	if !strings.Contains(strings.Join(violations, " | "), "item B has disallowed confidence \"medium\"") {
+		t.Fatalf("expected confidence violation for item B, got: %v", violations)
+	}
+}
+
+func TestTriagePolicyViolationsAllowsAcceptedCriticalHighConfidence(t *testing.T) {
+	markdown := `# Round Triage
+
+### fix unsafe branch behavior
+- disposition: accept
+- severity: critical
+- confidence: high
+`
+	violations := triagePolicyViolations(markdown)
+	if len(violations) != 0 {
+		t.Fatalf("expected no violations, got: %v", violations)
+	}
+}
+
+func TestTriagePolicyViolationsRequiresTagsForAcceptedItems(t *testing.T) {
+	markdown := `# Round Triage
+
+### missing tags
+- disposition: accept
+`
+	violations := triagePolicyViolations(markdown)
+	if len(violations) != 2 {
+		t.Fatalf("expected 2 violations for missing tags, got %d: %v", len(violations), violations)
+	}
+	joined := strings.Join(violations, " | ")
+	if !strings.Contains(joined, "missing tags missing severity tag") {
+		t.Fatalf("expected missing severity tag violation, got: %v", violations)
+	}
+	if !strings.Contains(joined, "missing tags missing confidence tag") {
+		t.Fatalf("expected missing confidence tag violation, got: %v", violations)
+	}
+}
+
 func TestAcquireRepoRunLockPreventsConcurrentSameRepo(t *testing.T) {
 	td := t.TempDir()
 	shared := Orchestrator{

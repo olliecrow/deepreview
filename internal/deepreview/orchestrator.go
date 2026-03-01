@@ -1301,6 +1301,10 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
+	if err := validateRoundTriagePolicy(roundTriagePath); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
 	if err := ensureCanonicalArtifact(roundPlanPath, []string{
 		roundPlanWorktreePath,
 		filepath.Join(executeWorktree, "round-plan.md"),
@@ -1460,6 +1464,98 @@ func ensureCanonicalArtifact(canonicalPath string, candidates []string) error {
 		}
 	}
 	return os.ErrNotExist
+}
+
+var (
+	triageDispositionRegex = regexp.MustCompile(`(?i)\bdisposition\b[^a-z0-9]*(accept|reject|defer)\b`)
+	triageSeverityRegex    = regexp.MustCompile(`(?i)\bseverity\b[^a-z0-9]*(critical|high|medium|low)\b`)
+	triageConfidenceRegex  = regexp.MustCompile(`(?i)\bconfidence\b[^a-z0-9]*(high|medium|low)\b`)
+	triageHeadingRegex     = regexp.MustCompile(`(?m)^###\s+(.+)$`)
+)
+
+func validateRoundTriagePolicy(path string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	violations := triagePolicyViolations(string(body))
+	if len(violations) == 0 {
+		return nil
+	}
+	return NewDeepReviewError(
+		"round triage validation failed: accepted items must be severity critical/high with high confidence: %s",
+		strings.Join(violations, "; "),
+	)
+}
+
+func triagePolicyViolations(markdown string) []string {
+	dispositions := triageDispositionRegex.FindAllStringSubmatchIndex(markdown, -1)
+	if len(dispositions) == 0 {
+		return nil
+	}
+	violations := make([]string, 0)
+	for _, match := range dispositions {
+		if len(match) < 4 {
+			continue
+		}
+		disposition := strings.ToLower(markdown[match[2]:match[3]])
+		if disposition != "accept" {
+			continue
+		}
+		heading, section := triageSectionAt(markdown, match[0])
+		severityMatch := triageSeverityRegex.FindStringSubmatch(section)
+		if len(severityMatch) < 2 {
+			violations = append(violations, fmt.Sprintf("%s missing severity tag", heading))
+		} else {
+			severity := strings.ToLower(strings.TrimSpace(severityMatch[1]))
+			if severity != "critical" && severity != "high" {
+				violations = append(violations, fmt.Sprintf("%s has disallowed severity %q", heading, severity))
+			}
+		}
+
+		confidenceMatch := triageConfidenceRegex.FindStringSubmatch(section)
+		if len(confidenceMatch) < 2 {
+			violations = append(violations, fmt.Sprintf("%s missing confidence tag", heading))
+		} else {
+			confidence := strings.ToLower(strings.TrimSpace(confidenceMatch[1]))
+			if confidence != "high" {
+				violations = append(violations, fmt.Sprintf("%s has disallowed confidence %q", heading, confidence))
+			}
+		}
+	}
+	return violations
+}
+
+func triageSectionAt(markdown string, offset int) (string, string) {
+	if offset < 0 {
+		offset = 0
+	}
+	if offset > len(markdown) {
+		offset = len(markdown)
+	}
+	headings := triageHeadingRegex.FindAllStringSubmatchIndex(markdown, -1)
+	if len(headings) == 0 {
+		return "accepted item", markdown
+	}
+	for idx, match := range headings {
+		if len(match) < 4 {
+			continue
+		}
+		start := match[0]
+		end := len(markdown)
+		if idx+1 < len(headings) {
+			end = headings[idx+1][0]
+		}
+		if offset < start || offset >= end {
+			continue
+		}
+		heading := strings.TrimSpace(markdown[match[2]:match[3]])
+		if heading == "" {
+			heading = "accepted item"
+		}
+		return heading, markdown[start:end]
+	}
+	return "accepted item", markdown
 }
 
 func isInternalArtifactPath(path string) bool {
