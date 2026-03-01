@@ -27,12 +27,13 @@ Process:
 6. Validate each finding by inspecting code and relevant context, including boundary/integration code.
 7. Investigate candidate items one by one and perform a "no-regret" check before accepting.
 8. Label each item as `accept`, `reject`, or `defer`.
-9. For each `accept`, define intended outcome, constraints, and why this is high confidence and high conviction.
-10. For each `reject`/`defer`, capture concise reason with evidence.
-11. Keep only high-conviction items that are worth implementation effort this round.
-12. Use a high acceptance threshold: if confidence is not clearly high, reject/defer.
-13. Explicitly look for high-value simplification opportunities (remove code, remove duplication, reduce complexity, improve maintainability/perf/memory).
-14. Do not accept speculative robustness work for rare edge cases unless impact is clearly material.
+9. Only `accept` items that are both: (a) severity `critical` or `high`, and (b) high confidence/high conviction with clear material impact.
+10. For each `accept`, define intended outcome, constraints, and why this is high confidence and high conviction.
+11. For each `reject`/`defer`, capture concise reason with evidence.
+12. Keep only high-conviction items that are worth implementation effort this round.
+13. Use a strict acceptance threshold: if confidence is not clearly high, reject/defer.
+14. Reject/defer all low/medium severity and non-blocking suggestions in this workflow.
+15. Do not accept speculative robustness work for rare edge cases unless impact is clearly material.
 
 Rules:
 - Do not modify code in this prompt.
@@ -49,4 +50,5 @@ Output:
 - For each item, include: source reviewers, commonality count, disposition (`accept|reject|defer`), evidence summary, and rationale.
 - End with a compact, prioritized list of accepted items that should drive the implementation plan.
 - If there are no accepted items, state explicitly: `No execute items selected for this round.`
+- Accepted items must each include explicit severity (`critical|high`) and confidence (`high`) tags.
 - For accepted items, include expected net effect on code complexity/size (`reduce`, `neutral`, or `increase`) with justification.

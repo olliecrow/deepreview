@@ -20,14 +20,16 @@ Process:
 8. Identify required docs/notes/decision updates.
 9. Call out risks and mitigations before execution.
 10. Ensure each planned task is justified by evidence and expected impact.
-11. Prefer plans that simplify the codebase where possible (remove redundancy, reduce complexity, improve clarity and resource efficiency).
-12. Avoid over-engineering; do not add low-value robustness for rare edge cases in greenfield/fast-iteration contexts.
-13. If confidence/conviction for a task is not high, do not include it in the executable plan.
+11. Every planned task must trace to an accepted `critical|high` item and remain strictly in that scope.
+12. Prefer plans that simplify the codebase where possible (remove redundancy, reduce complexity, improve clarity and resource efficiency) only when directly required to resolve accepted critical/high items.
+13. Avoid over-engineering; do not add low-value robustness for rare edge cases.
+14. If confidence/conviction for a task is not high, do not include it in the executable plan.
 
 Rules:
 - No code edits in this prompt.
 - Keep the plan specific enough to execute directly.
 - Scope tightly to accepted items; avoid speculative extra work.
+- Do not add low/medium severity cleanup or optional improvements in this workflow.
 - You may use multiple sub-agents or staged analysis inside this prompt if useful.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.

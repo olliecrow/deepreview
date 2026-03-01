@@ -29,13 +29,14 @@ This document defines the canonical runtime and product contract for `deepreview
 - independent review concurrency defaults to `4` and is configurable.
 - each successful independent-review worker must emit one markdown review report.
 - independent review rounds require full worker coverage: required successful workers = `concurrency`.
-- independent-review reports prioritize critical/high issues first; they may include a small optional section of obvious non-blocking improvements only when high-confidence, low-risk, and non-behavior-changing.
+- independent-review reports are strictly severity-first and include only high-confidence `critical|high` merge-relevant issues.
 - independent-review and execute/delivery Codex workers are monitored for activity signals (stdout/stderr output plus filesystem/git-change evidence).
 - if a worker is inactive for the configured timeout, deepreview cancels and restarts that worker up to the configured restart cap.
 - each execute pass runs in a fresh worktree.
 - independent-review workers use one shared independent-review prompt template.
 - each execute pass runs an ordered multi-prompt queue in one Codex chat context.
-- execute prompt-1 (consolidate reviews) treats independent reviews as inputs, not gospel, and only accepts high-conviction items after independent validation.
+- execute prompt-1 (consolidate reviews) treats independent reviews as inputs, not gospel, and only accepts independently-validated, high-confidence `critical|high` items.
+- execute stage validates `round-triage.md` and fails the round if any `accept` item is missing severity/confidence tags or does not satisfy `severity in {critical, high}` and `confidence=high`.
 - execute prompt-2 (plan) must produce an end-to-end, execution-ready plan and defer low-confidence items.
 - execute prompt-3 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
 - execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and ensure changed work is committed locally.
@@ -77,7 +78,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - before printing the completion summary after a TUI run, deepreview clears the terminal and prints summary text from the top-left cursor position
   - `--no-tui` force structured text progress logs
 - worker-activity resilience env knobs (applies to all Codex workers):
-  - `DEEPREVIEW_REVIEW_INACTIVITY_SECONDS` default `600` (10 minutes; `0` disables inactivity restarts)
+  - `DEEPREVIEW_REVIEW_INACTIVITY_SECONDS` default `300` (5 minutes; `0` disables inactivity restarts)
   - `DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS` default `15`
   - `DEEPREVIEW_REVIEW_MAX_RESTARTS` default `1`
 

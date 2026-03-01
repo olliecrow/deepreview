@@ -22,6 +22,7 @@ Process:
 - implemented changes
 - verification evidence overview
 - residual risks
+  - strict-scope statement confirming accepted work remained critical/high only
 6. Decide round status with high confidence (informational metadata for artifact traceability):
 - `stop` when quality is sufficient or no further meaningful changes are needed
 - `continue` when another round is likely to materially improve quality
