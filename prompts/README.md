@@ -9,6 +9,7 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - Keep prompts self-contained so they work on machines without local skill packs.
 - Emphasize severity-first review quality: critical red flags and serious issues first.
 - Keep review output strictly focused on high-confidence `critical|high` merge-relevant issues.
+- Prefer explicit output schemas with concrete examples so Codex formatting is consistent and machine-validated contracts are reliably satisfied.
 - Emphasize proactive/autonomous execution and evidence-backed decisions.
 - Treat independent reviews as strong inputs, not gospel, and require independent consolidation.
 - Keep execution no-regret and high-conviction: defer low-confidence items and reject low/medium severity work in this workflow.

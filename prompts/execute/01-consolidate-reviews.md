@@ -52,3 +52,34 @@ Output:
 - If there are no accepted items, state explicitly: `No execute items selected for this round.`
 - Accepted items must each include explicit severity (`critical|high`) and confidence (`high`) tags.
 - For accepted items, include expected net effect on code complexity/size (`reduce`, `neutral`, or `increase`) with justification.
+
+Required output shape (example):
+
+```markdown
+# Round Triage
+
+## Consolidated Findings
+
+### missing input validation in cache key path
+- source_reviewers: reviewer-01, reviewer-03
+- commonality_count: 2
+- disposition: accept
+- severity: high
+- confidence: high
+- evidence_summary: direct code-path inspection shows unchecked null path on request boundary.
+- rationale: merge-relevant correctness risk with clear repro; fix is bounded and low-regret.
+- intended_outcome: reject invalid input before key construction.
+- constraints: avoid behavior changes outside invalid-input path.
+- complexity_size_effect: neutral
+- complexity_size_justification: adds explicit guard without widening flow.
+
+### speculative micro-optimization in metrics formatting
+- source_reviewers: reviewer-02
+- commonality_count: 1
+- disposition: reject
+- evidence_summary: no measured bottleneck; only stylistic/perf speculation.
+- rationale: non-blocking and low impact for this workflow.
+
+## Accepted Items (Prioritized)
+1. missing input validation in cache key path
+```

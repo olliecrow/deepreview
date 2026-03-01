@@ -44,3 +44,26 @@ Output:
   - checks skipped with reason
   - unresolved failures or blockers
   - residual risks
+
+Recommended output shape (example):
+
+```markdown
+# Round Verification
+
+## Commands Attempted
+- `go test ./...`
+- `pre-commit run --all-files`
+
+## Outcomes
+- `go test ./...`: pass
+- `pre-commit run --all-files`: pass
+
+## Skipped Checks
+- `<none>` or `<check>: <reason>`
+
+## Unresolved Failures / Blockers
+- `<none>` or `<failure>: <impact + next action>`
+
+## Residual Risks
+- `<none>` or `<risk>: <why + mitigation>`
+```

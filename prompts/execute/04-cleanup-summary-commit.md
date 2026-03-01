@@ -22,7 +22,7 @@ Process:
 - implemented changes
 - verification evidence overview
 - residual risks
-  - strict-scope statement confirming accepted work remained critical/high only
+- strict-scope statement confirming accepted work remained critical/high only
 6. Decide round status with high confidence (informational metadata for artifact traceability):
 - `stop` when quality is sufficient or no further meaningful changes are needed
 - `continue` when another round is likely to materially improve quality
@@ -49,3 +49,30 @@ Rules:
 - Keep round decision conservative and evidence-backed.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - Do not recommend speculative robustness work for rare edge cases without clear material impact.
+
+Recommended `{{ROUND_SUMMARY_PATH}}` shape (example):
+
+```markdown
+# Round Summary
+
+## Triage Outcomes
+- accepted: <n>
+- rejected: <n>
+- deferred: <n>
+
+## Implemented Changes
+- <change 1>
+- <change 2>
+
+## Verification Evidence Overview
+- <command>: pass|fail
+
+## Residual Risks
+- <none>|<risk + mitigation>
+
+## Scope Statement
+- All accepted and implemented work in this round remained strictly high-confidence `critical|high` scope.
+
+## Complexity/Size Impact
+- reduced|neutral|increased: <brief justification>
+```

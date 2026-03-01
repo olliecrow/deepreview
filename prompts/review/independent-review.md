@@ -75,3 +75,14 @@ If no critical red flags or serious issues exist, still create the report and cl
 - `critical_flags_found: no`
 - `merge_readiness: ready`
 - `No critical red flags or serious issues were found.`
+
+Example issue entry:
+
+```markdown
+### [severity: high] missing bounds validation in request parsing
+- Location: `src/api/parse.go:118`
+- Why it matters: malformed inputs can trigger incorrect branch behavior and violate API contract.
+- Evidence: parser accepts negative window size; downstream logic assumes non-negative and bypasses guard.
+- Recommendation: reject invalid bounds at parse boundary and add regression test.
+- Confidence: high
+```

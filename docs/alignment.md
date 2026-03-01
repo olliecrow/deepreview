@@ -66,6 +66,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-53 | In TUI mode, completion must not block on keypress; deepreview exits UI automatically, clears terminal, and then prints text completion summary. | `internal/deepreview/tui.go`, `internal/deepreview/cli.go`, `internal/deepreview/tui_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md` |
 | R-54 | Delivery quality gates must execute against a detached worktree snapshot of candidate branch HEAD so pre-delivery checks match the exact deliverable content. | `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md` |
 | R-55 | Execute triage accepts are policy-gated at runtime: accepted items must be severity `critical|high` and confidence `high`, otherwise the round fails fast. | `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/decisions.md`, `prompts/execute/01-consolidate-reviews.md` |
+| R-56 | Prompt templates for machine-validated artifacts include explicit output schemas and examples to improve formatting reliability. | `prompts/execute/01-consolidate-reviews.md`, `prompts/execute/03-execute-verify.md`, `prompts/execute/04-cleanup-summary-commit.md`, `prompts/review/independent-review.md`, `prompts/README.md`, `docs/decisions.md` |
 
 ## Alignment gate
 For each requirement touched by a change, evidence must be captured for:
