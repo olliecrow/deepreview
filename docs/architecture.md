@@ -53,6 +53,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 4. Final delivery (single push point):
 - require completed round execution and no blocking verification failures
+- run delivery quality gates (`pre-commit --all-files`, optional `./setup_env.sh`) in a detached worktree at candidate HEAD so gating matches deliverable branch content
 - `pr` mode (default): create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`
 - `yolo` mode: push committed candidate state directly to source branch
 

@@ -48,6 +48,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - before delivery, deepreview must run repository quality gates and block delivery on failures:
   - run `pre-commit run --all-files` when `.pre-commit-config.yaml` exists
   - run `./setup_env.sh` when `setup_env.sh` exists
+  - run both gates in an isolated detached worktree created at the candidate branch HEAD to match the exact content being delivered
 - default delivery mode is `pr` and must not push source branch directly.
 - in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.
 - `yolo` mode is optional opt-in for direct push to source branch.

@@ -791,7 +791,7 @@ Hard-gating delivery on repo-local quality checks prevents deepreview from openi
 Trade-offs:
 Delivery can take longer when `setup_env.sh` exists, and some runs now fail earlier on quality-gate violations that were previously deferred to PR CI. Auto-remediation is intentionally narrow (docs text formats only) to avoid mutating code paths.
 Enforcement:
-Delivery stage runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and runs `./setup_env.sh` when present; non-zero exit blocks delivery. On `privacy scan failed: local path pattern matched in <file>`, deepreview attempts one docs-only redaction pass (`/path/to/project` placeholder), commits the fix, then reruns delivery scans once before failing.
+Delivery stage resolves the candidate branch HEAD and creates a detached `delivery/quality-worktree` snapshot from that commit, then runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and `./setup_env.sh` when present inside that snapshot; non-zero exit blocks delivery. The quality worktree is removed after checks (success or failure). On `privacy scan failed: local path pattern matched in <file>`, deepreview attempts one docs-only redaction pass (`/path/to/project` placeholder), commits the fix, then reruns delivery scans once before failing.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
 
