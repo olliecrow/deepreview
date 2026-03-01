@@ -425,7 +425,7 @@ func (o *Orchestrator) Run() error {
 			return err
 		}
 	}
-	if err := o.runDeliveryQualityChecks(); err != nil {
+	if err := o.runDeliveryQualityChecks(candidateBranch); err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 		finalErr = err
 		return err
@@ -1690,18 +1690,37 @@ func replaceLocalPathsWithPlaceholder(text string) string {
 	return sanitized
 }
 
-func (o *Orchestrator) runDeliveryQualityChecks() error {
-	if err := o.runPreCommitAllFilesIfConfigured(); err != nil {
+func (o *Orchestrator) runDeliveryQualityChecks(candidateBranch string) error {
+	deliveryDir := filepath.Join(o.runRoot, "delivery")
+	if err := os.MkdirAll(deliveryDir, 0o755); err != nil {
 		return err
 	}
-	if err := o.runSetupEnvIfPresent(); err != nil {
+
+	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return err
+	}
+	qualityWorktreePath := filepath.Join(deliveryDir, "quality-worktree")
+	// Run quality gates in an isolated snapshot of the candidate tip so checks
+	// mirror the branch content that will be delivered.
+	if err := AddDetachedWorktree(o.managedRepoPath, o.config.GitBin, qualityWorktreePath, candidateHead); err != nil {
+		return err
+	}
+	defer func() {
+		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, qualityWorktreePath)
+	}()
+
+	if err := o.runPreCommitAllFilesIfConfigured(qualityWorktreePath); err != nil {
+		return err
+	}
+	if err := o.runSetupEnvIfPresent(qualityWorktreePath); err != nil {
 		return err
 	}
 	return nil
 }
 
-func (o *Orchestrator) runPreCommitAllFilesIfConfigured() error {
-	configPath := filepath.Join(o.managedRepoPath, ".pre-commit-config.yaml")
+func (o *Orchestrator) runPreCommitAllFilesIfConfigured(repoPath string) error {
+	configPath := filepath.Join(repoPath, ".pre-commit-config.yaml")
 	st, err := os.Stat(configPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1720,7 +1739,7 @@ func (o *Orchestrator) runPreCommitAllFilesIfConfigured() error {
 		return NewDeepReviewError("delivery blocked: `.pre-commit-config.yaml` present but `pre-commit` not found in PATH")
 	}
 	o.reporter.StageProgress("delivery", "running pre-commit --all-files before delivery", nil)
-	completed, err := RunCommand([]string{"pre-commit", "run", "--all-files"}, o.managedRepoPath, "", false, 0)
+	completed, err := RunCommand([]string{"pre-commit", "run", "--all-files"}, repoPath, "", false, 0)
 	if err != nil {
 		return err
 	}
@@ -1737,8 +1756,8 @@ func (o *Orchestrator) runPreCommitAllFilesIfConfigured() error {
 	return nil
 }
 
-func (o *Orchestrator) runSetupEnvIfPresent() error {
-	scriptPath := filepath.Join(o.managedRepoPath, "setup_env.sh")
+func (o *Orchestrator) runSetupEnvIfPresent(repoPath string) error {
+	scriptPath := filepath.Join(repoPath, "setup_env.sh")
 	st, err := os.Stat(scriptPath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -1750,7 +1769,7 @@ func (o *Orchestrator) runSetupEnvIfPresent() error {
 		return nil
 	}
 	o.reporter.StageProgress("delivery", "running repository CI gate `./setup_env.sh` before delivery", nil)
-	completed, err := RunCommand([]string{"/usr/bin/env", "bash", "./setup_env.sh"}, o.managedRepoPath, "", false, 0)
+	completed, err := RunCommand([]string{"/usr/bin/env", "bash", "./setup_env.sh"}, repoPath, "", false, 0)
 	if err != nil {
 		return err
 	}
