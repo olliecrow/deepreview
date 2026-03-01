@@ -316,7 +316,7 @@ func TestRunPreCommitAllFilesIfConfiguredPasses(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	o := &Orchestrator{managedRepoPath: repoPath, reporter: &NullProgressReporter{}}
-	if err := o.runPreCommitAllFilesIfConfigured(); err != nil {
+	if err := o.runPreCommitAllFilesIfConfigured(repoPath); err != nil {
 		t.Fatalf("expected pre-commit gate to pass, got: %v", err)
 	}
 }
@@ -341,7 +341,7 @@ func TestRunPreCommitAllFilesIfConfiguredFailsOnHookFailure(t *testing.T) {
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 
 	o := &Orchestrator{managedRepoPath: repoPath, reporter: &NullProgressReporter{}}
-	err := o.runPreCommitAllFilesIfConfigured()
+	err := o.runPreCommitAllFilesIfConfigured(repoPath)
 	if err == nil {
 		t.Fatalf("expected pre-commit gate failure")
 	}
@@ -362,11 +362,147 @@ func TestRunSetupEnvIfPresentFailsWhenScriptFails(t *testing.T) {
 	}
 
 	o := &Orchestrator{managedRepoPath: repoPath, reporter: &NullProgressReporter{}}
-	err := o.runSetupEnvIfPresent()
+	err := o.runSetupEnvIfPresent(repoPath)
 	if err == nil {
 		t.Fatalf("expected setup_env gate failure")
 	}
 	if !strings.Contains(err.Error(), "delivery blocked: setup_env.sh failed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestRunDeliveryQualityChecksRunsAgainstCandidateWorktree(t *testing.T) {
+	td := t.TempDir()
+	repoPath := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	git := func(args ...string) {
+		t.Helper()
+		cmd := append([]string{"git", "-C", repoPath}, args...)
+		if _, err := RunCommand(cmd, "", "", true, 0); err != nil {
+			t.Fatalf("git command failed: %v\nargs=%v", err, args)
+		}
+	}
+
+	git("init", "-b", "main")
+	git("config", "user.name", "deepreview-test")
+	git("config", "user.email", "deepreview-test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repoPath, ".pre-commit-config.yaml"), []byte("repos: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "branch-marker.txt"), []byte("main\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	setupEnvPath := filepath.Join(repoPath, "setup_env.sh")
+	setupScript := "#!/usr/bin/env bash\nset -euo pipefail\nif grep -q '^candidate$' branch-marker.txt; then\n  exit 0\nfi\necho 'setup_env ran on wrong branch content' >&2\nexit 1\n"
+	if err := os.WriteFile(setupEnvPath, []byte(setupScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-m", "main commit")
+
+	git("branch", "candidate")
+	git("checkout", "candidate")
+	if err := os.WriteFile(filepath.Join(repoPath, "branch-marker.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "branch-marker.txt")
+	git("commit", "-m", "candidate marker")
+	git("checkout", "main")
+
+	binDir := filepath.Join(td, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	preCommitPath := filepath.Join(binDir, "pre-commit")
+	preCommitScript := "#!/usr/bin/env bash\nset -euo pipefail\nif grep -q '^candidate$' branch-marker.txt; then\n  exit 0\nfi\necho 'pre-commit ran on wrong branch content' >&2\nexit 1\n"
+	if err := os.WriteFile(preCommitPath, []byte(preCommitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	runRoot := filepath.Join(td, "run")
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o := &Orchestrator{
+		config: ReviewConfig{
+			GitBin: "git",
+		},
+		managedRepoPath: repoPath,
+		runRoot:         runRoot,
+		reporter:        &NullProgressReporter{},
+	}
+	if err := o.runDeliveryQualityChecks("candidate"); err != nil {
+		t.Fatalf("expected delivery quality checks to pass on candidate worktree, got: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runRoot, "delivery", "quality-worktree")); !os.IsNotExist(err) {
+		t.Fatalf("expected delivery quality worktree cleanup, stat err=%v", err)
+	}
+}
+
+func TestRunDeliveryQualityChecksCleansUpWorktreeOnFailure(t *testing.T) {
+	td := t.TempDir()
+	repoPath := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repoPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	git := func(args ...string) {
+		t.Helper()
+		cmd := append([]string{"git", "-C", repoPath}, args...)
+		if _, err := RunCommand(cmd, "", "", true, 0); err != nil {
+			t.Fatalf("git command failed: %v\nargs=%v", err, args)
+		}
+	}
+
+	git("init", "-b", "main")
+	git("config", "user.name", "deepreview-test")
+	git("config", "user.email", "deepreview-test@example.com")
+
+	if err := os.WriteFile(filepath.Join(repoPath, ".pre-commit-config.yaml"), []byte("repos: []\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(repoPath, "branch-marker.txt"), []byte("candidate\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	git("add", "-A")
+	git("commit", "-m", "candidate commit")
+
+	binDir := filepath.Join(td, "bin")
+	if err := os.MkdirAll(binDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	preCommitPath := filepath.Join(binDir, "pre-commit")
+	preCommitScript := "#!/usr/bin/env bash\necho 'intentional failure' >&2\nexit 1\n"
+	if err := os.WriteFile(preCommitPath, []byte(preCommitScript), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+
+	runRoot := filepath.Join(td, "run")
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	o := &Orchestrator{
+		config: ReviewConfig{
+			GitBin: "git",
+		},
+		managedRepoPath: repoPath,
+		runRoot:         runRoot,
+		reporter:        &NullProgressReporter{},
+	}
+	err := o.runDeliveryQualityChecks("main")
+	if err == nil {
+		t.Fatalf("expected delivery quality checks to fail")
+	}
+	if !strings.Contains(err.Error(), "delivery blocked: pre-commit checks failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(runRoot, "delivery", "quality-worktree")); !os.IsNotExist(statErr) {
+		t.Fatalf("expected delivery quality worktree cleanup after failure, stat err=%v", statErr)
 	}
 }
