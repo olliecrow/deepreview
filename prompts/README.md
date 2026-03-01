@@ -8,10 +8,10 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - Use an ordered execute prompt queue that runs in a single Codex chat context per round.
 - Keep prompts self-contained so they work on machines without local skill packs.
 - Emphasize severity-first review quality: critical red flags and serious issues first.
-- Allow only optional, obvious, low-risk non-blocking improvement notes as a secondary review output.
+- Keep review output strictly focused on high-confidence `critical|high` merge-relevant issues.
 - Emphasize proactive/autonomous execution and evidence-backed decisions.
 - Treat independent reviews as strong inputs, not gospel, and require independent consolidation.
-- Keep execution no-regret and high-conviction: defer low-confidence items.
+- Keep execution no-regret and high-conviction: defer low-confidence items and reject low/medium severity work in this workflow.
 - Require end-to-end plan and execute behavior, including local verification and docs/decision upkeep.
 - In PR mode, generate a detailed post-delivery Codex PR title and PR description body, then apply both as final PR metadata.
 - Post-delivery PR metadata quality should come from Codex reading run artifacts/logs/repo context directly, not injected pre-digested summary blocks.

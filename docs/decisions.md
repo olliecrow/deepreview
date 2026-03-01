@@ -298,17 +298,30 @@ References:
 `prompts/execute/01-consolidate-reviews.md`, `prompts/execute/02-plan.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Independent review outputs stay severity-first, but may include an optional non-blocking section for obvious low-risk no-brainer improvements.
+Independent review and execute consolidation are strict: only high-confidence `critical|high` merge-relevant issues are in scope; low/medium severity or optional improvements are out of scope for this workflow.
 Context:
-Review quality is primarily judged on finding critical/high issues, but reviewers can also notice clear simplification/robustness/performance/memory wins during the same pass.
+Long runs can accrue non-blocking cleanup/perf suggestions that still produce file changes and force additional review rounds without materially improving merge safety.
 Rationale:
-Capturing only obvious no-regret improvements increases practical value without diluting merge-blocker focus or encouraging speculative churn.
+Keeping scope strictly on critical/high, high-confidence items preserves review rigor, limits churn, and reduces unnecessary rounds while maintaining strong isolation and verification standards.
 Trade-offs:
-Adds minor report verbosity and introduces some reviewer judgment on what counts as "obvious"; requires clear guardrails.
+Some useful but non-critical cleanups/perf improvements are deferred to separate scoped runs.
 Enforcement:
-Independent-review prompt requires critical/high issues as primary output and limits optional improvements to high-confidence, low-risk, non-behavior-changing items.
+Independent-review template excludes optional/non-blocking sections; execute triage accepts only `critical|high` items with high confidence and rejects/defers low/medium severity work.
 References:
-`prompts/review/independent-review.md`, `docs/spec.md`, `prompts/README.md`, `docs/alignment.md`
+`prompts/review/independent-review.md`, `prompts/execute/01-consolidate-reviews.md`, `docs/spec.md`, `prompts/README.md`
+
+Decision:
+Validate execute triage artifacts in orchestrator: any `accept` disposition must carry severity `critical|high` and confidence `high`, or the round fails before commit/delivery.
+Context:
+Prompt contracts can drift in output shape/quality; without runtime guards, low/medium or low-confidence accepts can still pass through and create unnecessary churn.
+Rationale:
+A lightweight validator preserves Codex discretion on what to accept while enforcing the policy boundary that accepted work must be critical/high and high-confidence.
+Trade-offs:
+If triage output is malformed or omits tags, runs fail fast and require prompt/output correction.
+Enforcement:
+Execute stage validates canonical `round-triage.md` before round commit/status handling and fails with explicit diagnostics on violations.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `prompts/execute/01-consolidate-reviews.md`
 
 Decision:
 Encourage local commits throughout execution; require changed work to be committed locally before round completion, with no empty commits.
@@ -318,6 +331,10 @@ Rationale:
 Allowing local checkpoint commits improves recoverability and encourages incremental progress while still keeping pushes constrained to the final delivery step.
 Trade-offs:
 Potentially noisier local history than strict single-commit-per-round policy.
+Enforcement:
+Spec/architecture/prompt contracts allow local commits during rounds and require no empty commits.
+References:
+`docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Prefer full-viewport TUI usage with explicit overflow signaling.
@@ -333,10 +350,6 @@ Enforcement:
 - ANSI-aware width clamping uses visible truncation markers when width permits.
 References:
 `internal/deepreview/tui.go`, `internal/deepreview/tui_test.go`
-Enforcement:
-Spec/architecture/prompt contracts allow local commits during rounds and require no empty commits.
-References:
-`docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Use local candidate branch naming `deepreview/candidate/<source-branch>/<run-id>`.
@@ -805,7 +818,7 @@ Trade-offs:
 Adds monitoring/restart complexity and can restart workers that are genuinely quiet for too long; this is mitigated by generous timeout defaults and configurable knobs.
 Enforcement:
 - Review policy defaults:
-  - `DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=600` (10 minutes)
+  - `DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=300` (5 minutes)
   - `DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=15`
   - `DEEPREVIEW_REVIEW_MAX_RESTARTS=1`
 - Worker activity evidence includes stdout/stderr output and filesystem/git-change signals.

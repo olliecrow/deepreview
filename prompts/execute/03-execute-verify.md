@@ -15,16 +15,17 @@ Execution requirements:
 3. Apply all approved code/doc changes.
 4. Keep changes scoped to accepted triage items.
 5. Prioritize fixes for critical/high-severity accepted items first.
-6. Keep implementation simple and pragmatic; avoid speculative over-engineering.
-7. Maintain a high no-regret bar while implementing; if confidence drops materially, stop and document instead of forcing changes.
-8. Prefer simplification outcomes where possible (remove/merge redundant code paths, reduce complexity, improve maintainability/perf/memory).
-9. Run codex-led verification:
+6. Execute only accepted `critical|high` items; do not add low/medium severity cleanup or optional improvements.
+7. Keep implementation simple and pragmatic; avoid speculative over-engineering.
+8. Maintain a high no-regret bar while implementing; if confidence drops materially, stop and document instead of forcing changes.
+9. Prefer simplification outcomes only when they are directly required for accepted critical/high fixes.
+10. Run codex-led verification:
    - run relevant tests when available
    - run pre-commit checks when available
    - run locally runnable CI-like checks when available
-10. Add quick empirical checks (for changed behavior) when feasible and not long-running.
-11. Capture command-level evidence and outcomes.
-12. If verification fails, stop and report failures clearly with actionable context.
+11. Add quick empirical checks (for changed behavior) when feasible and not long-running.
+12. Capture command-level evidence and outcomes.
+13. If verification fails, stop and report failures clearly with actionable context.
 
 Rules:
 - Do not push.

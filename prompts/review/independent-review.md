@@ -25,7 +25,7 @@ Rules:
 13. Use a high bar for recommending change: high confidence, high conviction, no-regret only.
 14. Do not be trigger-happy with changes; investigate repeatedly until confidence is strong.
 15. Keep primary focus on critical red flags and serious merge-blocking issues.
-16. As a strictly secondary pass, note only obvious no-brainer improvements when they are high-confidence, low-risk, and non-behavior-changing.
+16. Do not include optional/non-blocking improvement suggestions; keep output focused on critical/high, merge-relevant issues only.
 17. Avoid speculative hardening, rare-edge-case complexity, or broad refactors unless impact is demonstrably material and urgent.
 18. Optional: keep lightweight, useful working notes in `{{WORKER_NOTES_PATH}}` while investigating.
 19. Notes are scratch artifacts only; do not pad them for heartbeat or busywork.
@@ -43,7 +43,7 @@ Minimum process:
 7. Keep critical red flags and serious issues as the primary output with high confidence.
 8. If you detect a serious issue outside direct branch diffs but tightly related to changed behavior, include it.
 9. If confidence is low, investigate further or drop the item; do not keep speculative findings.
-10. Secondarily, capture only obvious non-blocking improvements (simplicity, robustness, performance, memory) that are no-regret and low-risk.
+10. Exclude non-blocking suggestions; if an issue is not critical/high with high confidence, drop it.
 
 ## Report requirements
 Write a markdown file to `{{OUTPUT_REVIEW_PATH}}` using this structure:
@@ -54,7 +54,6 @@ Write a markdown file to `{{OUTPUT_REVIEW_PATH}}` using this structure:
 ## Verdict
 - `critical_flags_found: yes|no`
 - `merge_readiness: ready|needs_fixes`
-- `obvious_improvements_noted: yes|no`
 - `merge_readiness` must be based on critical/high findings only (not minor improvements).
 - If `no`, explicitly say the branch appears ready/mergeable based on this review.
 
@@ -68,20 +67,6 @@ Write a markdown file to `{{OUTPUT_REVIEW_PATH}}` using this structure:
 
 (repeat for each finding)
 
-## Obvious Low-Hanging Improvements (Optional, Non-Blocking)
-- Include only clear no-brainer items with high confidence and low implementation risk.
-- Do not include anything that would alter intended functionality.
-- Keep this section concise (prefer up to 3 items).
-
-### [impact: low|medium] <short title>
-- Location: <file path + line(s) when possible>
-- Why this is a no-brainer: <clear rationale, non-speculative>
-- Expected benefit: <simplicity|robustness|performance|memory>
-- Recommendation: <specific, low-risk direction>
-- Confidence: <high|medium|low>
-
-(repeat for each optional item)
-
 ## Verification ideas
 - Concrete checks/tests that should be run if fixes are applied.
 ```
@@ -90,4 +75,3 @@ If no critical red flags or serious issues exist, still create the report and cl
 - `critical_flags_found: no`
 - `merge_readiness: ready`
 - `No critical red flags or serious issues were found.`
-- You may still include non-blocking obvious improvements in the optional section when applicable.
