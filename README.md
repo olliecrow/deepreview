@@ -28,7 +28,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 11. In yolo mode, it pushes directly to your source branch.
 12. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
 13. If a run stops because `--max-rounds` was reached before the required post-change review round, deepreview prints a failure summary that tells you what completed and where to inspect logs, reviews, and round artifacts yourself.
-14. Before delivery, deepreview blocks on repository quality gates (`pre-commit run --all-files` when configured, plus `./setup_env.sh` when present), and it auto-sanitizes local absolute paths in changed docs files when privacy scan failures are limited to that issue.
+14. Before delivery, deepreview resolves candidate branch HEAD, runs repository quality gates in a detached worktree snapshot of that candidate (`pre-commit run --all-files` when configured, plus `./setup_env.sh` when present), and auto-sanitizes local absolute paths in changed docs files when privacy scan failures are limited to that issue.
 
 ## Requirements
 

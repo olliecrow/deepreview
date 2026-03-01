@@ -27,6 +27,7 @@ This document defines how work is tracked so progress compounds without context 
 - Keep orchestration simple: avoid unbounded retries; only bounded inactivity restarts are allowed.
 - Encourage local commits throughout rounds; never push during intermediate rounds.
 - Push only once at final delivery; do not push intermediate-round commits.
+- Run delivery quality gates in a detached worktree snapshot of candidate HEAD so gate results match the exact branch content being delivered.
 - Aggressively clean stale worktrees/transient artifacts after each round.
 
 ## Parallel and subagent workflows
