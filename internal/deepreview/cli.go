@@ -30,7 +30,7 @@ const (
 	defaultConcurrency         = 4
 	defaultMaxRounds           = 5
 	defaultCodexTimeoutSeconds = 3600
-	defaultReviewInactivitySec = 600
+	defaultReviewInactivitySec = 300
 	defaultReviewActivityPollS = 15
 	defaultReviewMaxRestarts   = 1
 	forcedCodexModel           = "gpt-5.3-codex"
@@ -541,8 +541,8 @@ func runReviewCommand(args []string) int {
 					requestCancel()
 					continue
 				}
-				_, _ = fmt.Fprintln(os.Stderr, "deepreview: forcing immediate exit")
-				os.Exit(130)
+				_, _ = fmt.Fprintln(os.Stderr, "deepreview: cancellation already requested; waiting for cleanup...")
+				requestCancel()
 			case <-interruptWatcherDone:
 				return
 			}
@@ -597,6 +597,7 @@ func runReviewCommand(args []string) int {
 	}
 	if err != nil {
 		if isInterruptError(err) || interruptCount.Load() > 0 {
+			printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
 			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 			return 130
 		}
@@ -922,10 +923,7 @@ func isInterruptError(err error) bool {
 }
 
 func shouldPrintFailureArtifactSummary(err error) bool {
-	if err == nil {
-		return false
-	}
-	return strings.Contains(err.Error(), "requires at least one additional review round after code changes")
+	return err != nil
 }
 
 func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, config ReviewConfig) {

@@ -500,6 +500,12 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	if !strings.Contains(stderr, "run canceled by user; cleanup completed") {
 		t.Fatalf("expected cancellation completion message, stderr:\n%s", stderr)
 	}
+	if !strings.Contains(stderr, "deepreview failure summary:") {
+		t.Fatalf("expected artifact summary on interrupt, stderr:\n%s", stderr)
+	}
+	if !strings.Contains(stderr, "run exited before delivery; no push or PR was created.") {
+		t.Fatalf("expected delivery guidance in interrupt summary, stderr:\n%s", stderr)
+	}
 	if strings.Contains(stdout, "deepreview completed:") {
 		t.Fatalf("run should not report successful completion after interrupt")
 	}
