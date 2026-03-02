@@ -67,6 +67,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-54 | Delivery quality gates must execute against a detached worktree snapshot of candidate branch HEAD so pre-delivery checks match the exact deliverable content. | `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `README.md` |
 | R-55 | Execute triage accepts are policy-gated at runtime: accepted items must be severity `critical|high` and confidence `high`, otherwise the round fails fast. | `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/decisions.md`, `prompts/execute/01-consolidate-reviews.md` |
 | R-56 | Prompt templates for machine-validated artifacts include explicit output schemas and examples to improve formatting reliability. | `prompts/execute/01-consolidate-reviews.md`, `prompts/execute/03-execute-verify.md`, `prompts/execute/04-cleanup-summary-commit.md`, `prompts/review/independent-review.md`, `prompts/README.md`, `docs/decisions.md` |
+| R-57 | On user interrupt (`Ctrl+C`), deepreview must terminate active worker commands immediately, then perform cleanup and exit with cancel status. | `internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/process_unix.go`, `internal/deepreview/process_windows.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/decisions.md` |
 
 ## Alignment gate
 For each requirement touched by a change, evidence must be captured for:
