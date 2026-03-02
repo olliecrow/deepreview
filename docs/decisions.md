@@ -560,15 +560,15 @@ References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/cli.go`, `README.md`
 
 Decision:
-Treat user interrupt (`Ctrl+C`) as graceful cancellation, not abrupt termination: cancel run, cleanup worktrees/locks, then exit.
+Treat user interrupt (`Ctrl+C`) as immediate worker termination plus cleanup: hard-stop active worker commands immediately, then cleanup worktrees/locks and exit.
 Context:
-Long-running review runs need a predictable operator escape hatch. Abrupt process termination can leave stale worktrees/locks and block subsequent runs.
+Long-running review runs need a predictable operator escape hatch that does not continue spending Codex tokens after user cancellation. Pure abrupt process termination can leave stale worktrees/locks and block subsequent runs.
 Rationale:
-Graceful cancellation preserves operator control while maintaining workspace hygiene and lock correctness.
+Immediate hard-stop preserves operator control/token budget while still maintaining workspace hygiene and lock correctness via cleanup.
 Trade-offs:
-Adds interrupt orchestration and cancellation-aware command execution plumbing.
+Adds interrupt orchestration and aggressive process teardown behavior.
 Enforcement:
-Review command now captures interrupts, cancels in-flight commands, shows a TUI cancel hint, and returns exit code `130`; unix integration tests verify interrupt-triggered cleanup of locks/worktrees and source-branch non-mutation, cross-platform unit tests cover cancellation classification, and unix-only unit tests cover command teardown behavior.
+Review command captures interrupts, cancels run context, and force-terminates active command/process trees immediately (`SIGKILL` on unix, `Kill` on windows), then returns exit code `130` after cleanup; tests verify cancellation classification, command teardown behavior, and interrupt-triggered cleanup/source-branch non-mutation.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/tui.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/gitops.go`
 

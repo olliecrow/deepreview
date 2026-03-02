@@ -23,7 +23,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization.
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
-- deepreview runs must be interruptible via `Ctrl+C` at any point; interrupt path must run lock/worktree cleanup before process exit.
+- deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, then lock/worktree cleanup runs before process exit.
 - round loop runs up to `--max-rounds` (default `5`) and may stop early.
 - independent reviews run in independent worktrees.
 - independent review concurrency defaults to `4` and is configurable.
