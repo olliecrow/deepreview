@@ -768,15 +768,15 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `README.md`, `docs/spec.md`
 
 Decision:
-Apply strict privacy guardrails across all outward-facing deepreview surfaces and fail closed when disallowed sensitive content is detected.
+Apply strict privacy guardrails across outward-facing deepreview surfaces, with bounded pre-delivery remediation in PR mode.
 Context:
 Runs can generate or relay text into PR titles/descriptions, summaries, logs, and commit messages across both public and private repositories; these surfaces must never leak personal information or secrets.
 Rationale:
 Centralized sanitization plus pre-delivery scans provide consistent protection while preserving normal execution flow when content is safe.
 Trade-offs:
-Conservative pattern-based blocking can reject some edge-case content that resembles sensitive data.
+Conservative pattern-based blocking can reject some edge-case content that resembles sensitive data, while bounded PR-mode remediation can still allow residual findings after max attempts.
 Enforcement:
-Runtime sanitizes PR/summary delivery content, validates generated public text before delivery writes, scans changed files for secret/personal/path patterns, and scans delivery commit messages before push/PR creation. Local CLI/TUI/text progress output remains literal for operator visibility and debugging.
+Runtime sanitizes PR/summary delivery content, validates generated public text before delivery writes, and in PR mode runs bounded scans/remediation over changed files and delivery commit messages before push/PR creation. Local CLI/TUI/text progress output remains literal for operator visibility and debugging.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`
 
@@ -835,15 +835,15 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/progress.go`, `internal/deepreview/progress_test.go`, `internal/deepreview/tui.go`
 
 Decision:
-Block delivery unless repository quality gates pass, and auto-remediate docs-only local-path privacy violations before final failure.
+Block delivery unless repository quality gates pass, and keep docs local-path remediation as a built-in step within PR-mode privacy remediation attempts.
 Context:
 Runs could reach delivery with failing repository pre-commit hooks, and privacy scans could fail late on machine-local absolute paths inside changed docs files even when remediation was straightforward.
 Rationale:
-Hard-gating delivery on repo-local quality checks prevents deepreview from opening PRs that are already known-bad on mandatory local checks. Auto-remediating docs local-path violations keeps the fail-closed privacy posture while avoiding unnecessary manual reruns for a deterministic redaction case.
+Hard-gating delivery on repo-local quality checks prevents deepreview from opening PRs that are already known-bad on mandatory local checks. Auto-remediating docs local-path violations keeps deterministic redaction built in while reducing unnecessary manual reruns.
 Trade-offs:
 Delivery can take longer when `setup_env.sh` exists, and some runs now fail earlier on quality-gate violations that were previously deferred to PR CI. Auto-remediation is intentionally narrow (docs text formats only) to avoid mutating code paths.
 Enforcement:
-Delivery stage resolves the candidate branch HEAD and creates a detached `delivery/quality-worktree` snapshot from that commit, then runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and `./setup_env.sh` when present inside that snapshot; non-zero exit blocks delivery. The quality worktree is removed after checks (success or failure). On `privacy scan failed: local path pattern matched in <file>`, deepreview attempts one docs-only redaction pass (`/path/to/project` placeholder), commits the fix, then reruns delivery scans once before failing.
+Delivery stage resolves the candidate branch HEAD and creates a detached `delivery/quality-worktree` snapshot from that commit, then runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and `./setup_env.sh` when present inside that snapshot; non-zero exit blocks delivery. The quality worktree is removed after checks (success or failure). In PR mode, privacy remediation attempts include a built-in docs-only local-path redaction pass (`/path/to/project` placeholder) before optional Codex remediation within each bounded attempt.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
 
