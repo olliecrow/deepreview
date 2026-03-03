@@ -545,6 +545,81 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	}
 }
 
+func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice@corp.com",
+		"FAKE_CODEX_PRIVACY_DECISION=continue",
+	)
+	output, logs := runCmdCapture(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "deepreview completed:") {
+		t.Fatalf("expected completion summary output, got: %s", output)
+	}
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected PR creation despite unresolved privacy scan findings, got: %s", output)
+	}
+	if !strings.Contains(logs, "privacy fix gate reached max attempts (3); proceeding with delivery by policy") {
+		t.Fatalf("expected max-attempt privacy policy log, got:\n%s", logs)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	for _, attempt := range []string{"attempt-01", "attempt-02", "attempt-03"} {
+		statusPath := filepath.Join(runDir, "delivery", "privacy-fix", attempt, "privacy-status.json")
+		if _, err := os.Stat(statusPath); err != nil {
+			t.Fatalf("missing privacy status artifact %s: %v", statusPath, err)
+		}
+	}
+}
+
 func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)

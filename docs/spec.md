@@ -51,6 +51,9 @@ This document defines the canonical runtime and product contract for `deepreview
   - run `./setup_env.sh` when `setup_env.sh` exists
   - run both gates in an isolated detached worktree created at the candidate branch HEAD to match the exact content being delivered
 - default delivery mode is `pr` and must not push source branch directly.
+- in `pr` mode, run a bounded pre-delivery privacy remediation loop (up to 3 Codex-guided attempts) that inspects delivery commit messages and changed files for sensitive patterns.
+- in `pr` mode, privacy remediation attempts may stop early when Codex reports `stop`; otherwise proceed automatically after the configured max attempts.
+- in `pr` mode, privacy remediation is a fix gate (attempted remediation + scan feedback), not a hard terminal blocker after max attempts.
 - in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
@@ -120,7 +123,7 @@ Cleanup policy:
 - never commit tokens, credentials, or private keys.
 - never emit personal information in public delivery surfaces (PR title/body, commit messages, delivery summaries, comments, or committed code/docs).
 - treat committed docs/artifacts as potentially public.
-- run privacy-hygiene checks before final delivery actions, including changed-file scans and delivery commit-message scans.
+- in PR mode, run privacy-hygiene scans and Codex remediation attempts before final delivery actions, including changed-file scans and delivery commit-message scans.
 - keep local terminal progress/error output literal for operator debugging; privacy redaction is enforced at delivery/public surfaces.
 - fail fast on verification failures.
 
@@ -130,7 +133,8 @@ Cleanup policy:
 - if execute verification fails, fail the run and do not deliver.
 - if `pr` mode delivery fails after final round succeeds, emit remediation guidance and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.
-- if privacy scan fails due local absolute paths in changed docs files (`docs/*.md|*.txt|*.rst|*.adoc`), deepreview should auto-sanitize those paths to `/path/to/project`, commit the redaction, and re-run delivery scans once.
+- in PR mode, deepreview should run at most 3 bounded privacy remediation attempts before delivery; each attempt can apply built-in local-path doc sanitization and/or Codex-guided fixes, then re-scan.
+- in PR mode, after bounded privacy attempts complete, delivery proceeds by policy (privacy findings no longer hard-block delivery).
 - if run fails because execute changed code in the final allowed round (`--max-rounds` limit reached before required post-change review round), print a self-serve failure summary with completed run context and artifact/log/review paths.
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
@@ -157,6 +161,7 @@ PR bodies should include these sections in the final Codex-generated output:
 - Prompt root directory is `prompts/`.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
+- PR mode uses one pre-delivery privacy remediation template: `prompts/delivery/privacy-fix.md`.
 - PR mode uses one post-delivery description-enhancement template: `prompts/delivery/pr-description-summary.md`.
 - Post-delivery PR enhancement prompt should provide path-level context and let Codex inspect run artifacts/logs/repo directly; avoid injecting pre-digested round/file summary blocks.
 - Default execute queue order:

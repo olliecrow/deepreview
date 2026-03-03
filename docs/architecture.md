@@ -54,7 +54,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 4. Final delivery (single push point):
 - require completed round execution and no blocking verification failures
 - run delivery quality gates (`pre-commit --all-files`, optional `./setup_env.sh`) in a detached worktree at candidate HEAD so gating matches deliverable branch content
-- `pr` mode (default): create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`
+- `pr` mode (default): run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes), then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`
 - `yolo` mode: push committed candidate state directly to source branch
 
 5. Finalization:
@@ -72,8 +72,9 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - default mode is `pr` and must not push source branch directly.
 - `yolo` mode is explicit opt-in.
 - no pushes occur during intermediate rounds.
-- verification and secret-hygiene checks gate final delivery.
-- privacy guardrails are enforced on delivery/public surfaces (PR title/body, delivery summaries, delivery commit messages, and changed files).
+- verification quality gates block final delivery.
+- in PR mode, privacy remediation runs as a bounded pre-delivery Codex loop (up to 3 attempts) over delivery commit messages and changed files, then delivery proceeds by policy.
+- privacy guardrails remain enforced on delivery/public text surfaces (PR title/body and delivery summaries).
 - local terminal progress/error output is intentionally literal and unredacted for operator debugging.
 - verification execution is codex-led (tests, pre-commit checks, locally runnable CI-like checks when available) with explicit evidence in round/final summaries.
 

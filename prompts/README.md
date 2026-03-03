@@ -15,6 +15,7 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - Keep execution no-regret and high-conviction: defer low-confidence items and reject low/medium severity work in this workflow.
 - Require end-to-end plan and execute behavior, including local verification and docs/decision upkeep.
 - In PR mode, generate a detailed post-delivery Codex PR title and PR description body, then apply both as final PR metadata.
+- In PR mode, run a bounded pre-delivery privacy-remediation Codex stage before final push/PR actions.
 - Post-delivery PR metadata quality should come from Codex reading run artifacts/logs/repo context directly, not injected pre-digested summary blocks.
 
 ## Layout
@@ -24,6 +25,7 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - `prompts/execute/02-plan.md`
 - `prompts/execute/03-execute-verify.md`
 - `prompts/execute/04-cleanup-summary-commit.md`
+- `prompts/delivery/privacy-fix.md`: pre-delivery privacy remediation template (PR mode only, bounded attempts).
 - `prompts/delivery/pr-description-summary.md`: post-PR template used to generate the final PR title and description body.
 
 ## Rendering notes

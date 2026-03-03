@@ -876,10 +876,12 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintln(out, "   - if execute changed repository files, run another review round")
 	fmt.Fprintln(out, "   - if execute made no repository changes, stop additional rounds")
 	fmt.Fprintln(out, "5. delivery stage")
-	fmt.Fprintln(out, "   - validate delivery files and run secret hygiene scan")
 	if cfg.Mode == ModePR {
+		fmt.Fprintln(out, "   - validate delivery files")
+		fmt.Fprintln(out, "   - run bounded privacy remediation attempts (up to 3) before delivery")
 		fmt.Fprintln(out, "   - push candidate branch and open one pull request into source branch")
 	} else {
+		fmt.Fprintln(out, "   - validate delivery files")
 		fmt.Fprintln(out, "   - push final changes directly to source branch")
 	}
 	fmt.Fprintln(out, "6. write final summary and print completion output")

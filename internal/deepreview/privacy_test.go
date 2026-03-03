@@ -52,6 +52,20 @@ func TestAssertPublicTextSafeRejectsDisallowedSensitiveContent(t *testing.T) {
 	}
 }
 
+func TestAssertPublicTextSafeAllowsShellPathExpansionFragments(t *testing.T) {
+	text := `export PATH="\${VIRTUAL_ENV}/bin:\${PATH}"`
+	if err := assertPublicTextSafe(text, "test surface"); err != nil {
+		t.Fatalf("expected shell path expansion fragment to pass, got: %v", err)
+	}
+}
+
+func TestAssertPublicTextSafeRejectsWindowsAbsolutePath(t *testing.T) {
+	windowsPath := "path " + "C:" + `\` + `Users\alice\secret.txt`
+	if err := assertPublicTextSafe(windowsPath, "test surface"); err == nil {
+		t.Fatalf("expected windows local path to be rejected")
+	}
+}
+
 func TestDeliveryCommitMessageScanRejectsSensitiveContent(t *testing.T) {
 	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
 	repoParent := filepath.Dir(repoPath)
@@ -108,6 +122,32 @@ func TestSecretHygieneScanRejectsPersonalInfoInChangedFiles(t *testing.T) {
 	}
 }
 
+func TestSecretHygieneScanRejectsSecretPatternInChangedFiles(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	previousSecretPatterns := secretRiskyPatterns
+	secretRiskyPatterns = []*regexp.Regexp{regexp.MustCompile(`SECRETTOKEN123`)}
+	defer func() {
+		secretRiskyPatterns = previousSecretPatterns
+	}()
+
+	if err := os.WriteFile(filepath.Join(repoPath, "secret.txt"), []byte("key SECRETTOKEN123\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add secret pattern")
+
+	err := o.secretHygieneScan("candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail for secret pattern")
+	}
+	if !strings.Contains(err.Error(), "secret-like pattern") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
 	repoParent := filepath.Dir(repoPath)
@@ -121,6 +161,18 @@ func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 
 	if err := o.secretHygieneScan("candidate"); err != nil {
 		t.Fatalf("expected placeholder email to pass scan, got: %v", err)
+	}
+}
+
+func TestSummarizePrivacyScanIssues(t *testing.T) {
+	commitErr := NewDeepReviewError("privacy scan failed: disallowed sensitive content detected in delivery commit message")
+	fileErr := NewDeepReviewError("privacy scan failed: local path pattern matched in docs/example.md")
+	summary := summarizePrivacyScanIssues(commitErr, fileErr)
+	if !strings.Contains(summary, "commit-message scan:") {
+		t.Fatalf("expected commit message scan section, got: %s", summary)
+	}
+	if !strings.Contains(summary, "changed-file scan:") {
+		t.Fatalf("expected changed-file scan section, got: %s", summary)
 	}
 }
 
