@@ -560,6 +560,32 @@ References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/cli.go`, `README.md`
 
 Decision:
+In PR mode, pre-delivery privacy handling uses a bounded remediation loop (maximum 3 attempts) and proceeds with PR delivery after bounded attempts.
+Context:
+Hard-failing delivery on first privacy scan miss caused repeated runs to complete review/execute work but fail at the final gate, creating avoidable delivery dead-ends.
+Rationale:
+Treating privacy as a bounded fix loop keeps privacy hygiene proactive while preserving delivery momentum; Codex can stop early when it judges remediation complete.
+Trade-offs:
+Residual privacy findings may still exist when bounded attempts are exhausted; this approach prioritizes bounded autonomy and delivery continuity over hard-stop guarantees at this gate.
+Enforcement:
+PR-mode delivery runs a Codex-guided privacy remediation attempt loop (`max=3`) before push/PR actions; attempts may stop early on Codex `stop`, and delivery proceeds by policy after bounded attempts.
+References:
+`internal/deepreview/orchestrator.go`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
+
+Decision:
+Treat Windows local-path matching as conservative to avoid false positives on shell/path-expansion fragments in changed files.
+Context:
+The original Windows path regex (`[A-Za-z]:\\\S+`) could match non-path shell fragments such as `.../bin:\${PATH}`, triggering unnecessary privacy remediation attempts.
+Rationale:
+Restricting Windows-path matches to backslash-prefixed path segments that begin with an expected path token keeps privacy detection useful while avoiding obvious false positives in shell scripts.
+Trade-offs:
+This matcher remains heuristic and may miss unusual Windows path encodings that start with symbols; coverage is focused on common absolute path shapes.
+Enforcement:
+Privacy path matcher requires a drive-letter path segment with an alphanumeric/path-like token after the first backslash; regression tests assert shell expansion fragments are allowed while canonical Windows absolute paths are still blocked.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/privacy_test.go`
+
+Decision:
 Treat user interrupt (`Ctrl+C`) as immediate worker termination plus cleanup: hard-stop active worker commands immediately, then cleanup worktrees/locks and exit.
 Context:
 Long-running review runs need a predictable operator escape hatch that does not continue spending Codex tokens after user cancellation. Pure abrupt process termination can leave stale worktrees/locks and block subsequent runs.

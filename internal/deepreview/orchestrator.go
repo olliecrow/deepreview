@@ -194,7 +194,7 @@ var personalRiskyPatterns = []*regexp.Regexp{
 var privatePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?m)/Users/\S+`),
 	regexp.MustCompile(`(?m)/home/\S+`),
-	regexp.MustCompile(`(?m)[A-Za-z]:\\\S+`),
+	regexp.MustCompile(`(?m)[A-Za-z]:\\[A-Za-z0-9_.~\-][^\s]*`),
 }
 var allowedPlaceholderEmailDomains = map[string]struct{}{
 	"example.com": {},
@@ -210,6 +210,7 @@ const (
 	githubPRBodyMaxChars     = 65536
 	githubPRBodyTargetChars  = 64000
 	githubPRTitleTargetChars = 240
+	prPrivacyMaxAttempts     = 3
 )
 
 func parseOwnerRepo(text string) (string, string, bool) {
@@ -390,39 +391,28 @@ func (o *Orchestrator) Run() error {
 		o.reporter.RunFinished(true, "run completed successfully (no deliverable repository changes)")
 		return nil
 	}
-	if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
-		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		finalErr = err
-		return err
-	}
-	if err := o.secretHygieneScan(candidateBranch); err != nil {
-		remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(candidateBranch, err)
-		if remediationErr != nil {
-			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(remediationErr))
-			finalErr = remediationErr
-			return remediationErr
-		}
-		if !remediated {
-			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-			finalErr = err
-			return err
-		}
-		o.reporter.StageProgress("delivery", "auto-remediated local path privacy violation in docs; re-running delivery checks", nil)
-		changedFiles, err = o.validateDeliveryFiles(candidateBranch)
+	if o.config.Mode == ModePR {
+		changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
 		if err != nil {
 			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 			finalErr = err
 			return err
 		}
-		if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
-			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-			finalErr = err
-			return err
-		}
-		if err := o.secretHygieneScan(candidateBranch); err != nil {
-			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-			finalErr = err
-			return err
+		if len(changedFiles) == 0 {
+			delivery := DeliveryResult{
+				Mode:       o.config.Mode,
+				Skipped:    true,
+				SkipReason: "privacy remediation removed all deliverable repository changes",
+			}
+			o.lastDelivery = &delivery
+			if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
+				o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+				finalErr = err
+				return err
+			}
+			o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
+			o.reporter.RunFinished(true, "run completed successfully (no deliverable repository changes)")
+			return nil
 		}
 	}
 	if err := o.runDeliveryQualityChecks(candidateBranch); err != nil {
@@ -480,6 +470,10 @@ func (o *Orchestrator) preflight() error {
 		deliveryTemplate := filepath.Join(o.promptsRoot, "delivery", "pr-description-summary.md")
 		if _, err := os.Stat(deliveryTemplate); err != nil {
 			return NewDeepReviewError("delivery prompt template missing: %s", deliveryTemplate)
+		}
+		privacyTemplate := filepath.Join(o.promptsRoot, "delivery", "privacy-fix.md")
+		if _, err := os.Stat(privacyTemplate); err != nil {
+			return NewDeepReviewError("delivery prompt template missing: %s", privacyTemplate)
 		}
 	}
 	return nil
@@ -1587,6 +1581,236 @@ func (o *Orchestrator) validateDeliveryFiles(candidateBranch string) ([]string, 
 		}
 	}
 	return files, nil
+}
+
+func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles []string) ([]string, error) {
+	for attempt := 1; attempt <= prPrivacyMaxAttempts; attempt++ {
+		commitScanErr := o.deliveryCommitMessageScan(candidateBranch)
+		fileScanErr := o.secretHygieneScan(candidateBranch)
+		if commitScanErr == nil && fileScanErr == nil {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf("privacy fix gate passed on attempt %d/%d", attempt, prPrivacyMaxAttempts),
+				nil,
+			)
+			return changedFiles, nil
+		}
+
+		o.reporter.StageProgress(
+			"delivery",
+			fmt.Sprintf(
+				"privacy fix gate attempt %d/%d detected issues: %s",
+				attempt,
+				prPrivacyMaxAttempts,
+				summarizePrivacyScanIssues(commitScanErr, fileScanErr),
+			),
+			nil,
+		)
+
+		remediatedByBuiltin := false
+		if fileScanErr != nil {
+			remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(candidateBranch, fileScanErr)
+			if remediationErr != nil {
+				o.reporter.StageProgress(
+					"delivery",
+					"built-in local path privacy remediation failed; continuing with codex remediation: "+progressMessage(remediationErr),
+					nil,
+				)
+			} else if remediated {
+				remediatedByBuiltin = true
+				o.reporter.StageProgress(
+					"delivery",
+					"auto-remediated local path privacy violation in docs; continuing privacy gate attempts",
+					nil,
+				)
+			}
+		}
+
+		codexRequestedStop := false
+		if !remediatedByBuiltin {
+			stop, reason, remediationErr := o.runPrivacyFixAttempt(candidateBranch, attempt, prPrivacyMaxAttempts, commitScanErr, fileScanErr)
+			if remediationErr != nil {
+				o.reporter.StageProgress(
+					"delivery",
+					fmt.Sprintf(
+						"privacy remediation attempt %d/%d failed; continuing by policy: %s",
+						attempt,
+						prPrivacyMaxAttempts,
+						progressMessage(remediationErr),
+					),
+					nil,
+				)
+			} else if stop {
+				codexRequestedStop = true
+				stopReason := strings.TrimSpace(reason)
+				if stopReason == "" {
+					stopReason = "codex marked privacy remediation complete"
+				}
+				o.reporter.StageProgress(
+					"delivery",
+					fmt.Sprintf(
+						"privacy remediation attempt %d/%d requested stop: %s",
+						attempt,
+						prPrivacyMaxAttempts,
+						sanitizePublicText(stopReason),
+					),
+					nil,
+				)
+			}
+		}
+
+		updatedFiles, err := o.validateDeliveryFiles(candidateBranch)
+		if err != nil {
+			return nil, err
+		}
+		changedFiles = updatedFiles
+
+		if codexRequestedStop {
+			return changedFiles, nil
+		}
+	}
+
+	o.reporter.StageProgress(
+		"delivery",
+		fmt.Sprintf("privacy fix gate reached max attempts (%d); proceeding with delivery by policy", prPrivacyMaxAttempts),
+		nil,
+	)
+	return changedFiles, nil
+}
+
+func summarizePrivacyScanIssues(commitScanErr, fileScanErr error) string {
+	issues := make([]string, 0, 2)
+	if commitScanErr != nil {
+		issues = append(issues, "commit-message scan: "+progressMessage(commitScanErr))
+	}
+	if fileScanErr != nil {
+		issues = append(issues, "changed-file scan: "+progressMessage(fileScanErr))
+	}
+	if len(issues) == 0 {
+		return "none"
+	}
+	return strings.Join(issues, " | ")
+}
+
+func (o *Orchestrator) runPrivacyFixAttempt(candidateBranch string, attempt, maxAttempts int, commitScanErr, fileScanErr error) (bool, string, error) {
+	templatePath := filepath.Join(o.promptsRoot, "delivery", "privacy-fix.md")
+	templateText, err := ReadTemplate(templatePath)
+	if err != nil {
+		return false, "", err
+	}
+
+	attemptDir := filepath.Join(o.runRoot, "delivery", "privacy-fix", fmt.Sprintf("attempt-%02d", attempt))
+	if err := os.MkdirAll(attemptDir, 0o755); err != nil {
+		return false, "", err
+	}
+
+	statusPath := filepath.Join(attemptDir, "privacy-status.json")
+	managedRepoRelPath, relErr := filepath.Rel(o.runRoot, o.managedRepoPath)
+	if relErr != nil {
+		managedRepoRelPath = o.managedRepoPath
+	}
+	if strings.TrimSpace(managedRepoRelPath) == "" {
+		managedRepoRelPath = "."
+	}
+
+	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch)
+	if err != nil {
+		return false, "", err
+	}
+	changedFilesValue := "none"
+	if len(changedFiles) > 0 {
+		items := make([]string, 0, len(changedFiles))
+		for _, file := range changedFiles {
+			items = append(items, "- `"+sanitizePublicText(strings.TrimSpace(file))+"`")
+		}
+		changedFilesValue = strings.Join(items, "\n")
+	}
+
+	variables := map[string]string{
+		"REPO_SLUG":          o.repoIdentity.Slug(),
+		"SOURCE_BRANCH":      o.config.SourceBranch,
+		"CANDIDATE_BRANCH":   candidateBranch,
+		"RUN_ID":             o.config.RunID,
+		"ATTEMPT_NUMBER":     fmt.Sprintf("%d", attempt),
+		"MAX_ATTEMPTS":       fmt.Sprintf("%d", maxAttempts),
+		"MANAGED_REPO_PATH":  filepath.ToSlash(managedRepoRelPath),
+		"CHANGED_FILES":      changedFilesValue,
+		"PRIVACY_ISSUES":     sanitizePublicText(summarizePrivacyScanIssues(commitScanErr, fileScanErr)),
+		"OUTPUT_STATUS_PATH": filepath.ToSlash(statusPath),
+	}
+	prompt, err := RenderTemplate(templateText, variables)
+	if err != nil {
+		return false, "", err
+	}
+
+	logPrefix := filepath.Join(attemptDir, "privacy-fix")
+	_, _, err = o.runPromptWithWatchdog(
+		currentRunCommandContext(),
+		monitoredPromptRequest{
+			label:        fmt.Sprintf("delivery/privacy-fix-attempt-%02d", attempt),
+			cwd:          o.managedRepoPath,
+			prompt:       prompt,
+			threadID:     nil,
+			logPrefix:    logPrefix,
+			useGitStatus: true,
+			monitoredPaths: []string{
+				statusPath,
+				logPrefix + ".stdout.jsonl",
+				logPrefix + ".stderr.log",
+			},
+		},
+		monitoredPromptCallbacks{
+			onHeartbeat: func(elapsed, silence time.Duration) {
+				message := fmt.Sprintf(
+					"running privacy remediation attempt %d/%d (elapsed %s)",
+					attempt,
+					maxAttempts,
+					elapsed.Round(time.Second),
+				)
+				policy := o.promptWatchdogPolicy()
+				if policy.inactivity > 0 {
+					remaining := policy.inactivity - silence
+					if remaining < 0 {
+						remaining = 0
+					}
+					message = fmt.Sprintf("%s | inactivity timeout in %s", message, remaining.Round(time.Second))
+				}
+				o.reporter.StageProgress("delivery", message, nil)
+			},
+			onRestart: func(nextAttempt, maxWorkerAttempts int, inactivityErr *promptInactivityError) {
+				o.reporter.StageProgress(
+					"delivery",
+					fmt.Sprintf(
+						"privacy remediation attempt %d/%d stalled for %s; restarting codex worker attempt %d/%d",
+						attempt,
+						maxAttempts,
+						inactivityErr.silence.Round(time.Second),
+						nextAttempt,
+						maxWorkerAttempts,
+					),
+					nil,
+				)
+			},
+		},
+	)
+	if err != nil {
+		return false, "", err
+	}
+
+	status, err := readRoundStatus(statusPath)
+	if err != nil {
+		o.reporter.StageProgress(
+			"delivery",
+			fmt.Sprintf(
+				"privacy remediation attempt %d/%d missing/invalid status; defaulting to continue",
+				attempt,
+				maxAttempts,
+			),
+			nil,
+		)
+		return false, "", nil
+	}
+	return status.Decision == "stop", status.Reason, nil
 }
 
 func executePromptLabel(templateName string) string {

@@ -124,10 +124,21 @@ func handlePrompt(prompt string) (string, error) {
 			}
 		}
 		if os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE") == "" {
-			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
+			changeContent := "round change\n"
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE")) != "" {
+				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
+			}
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE")) != "" {
+				changeContent = "key " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n"
+			}
+			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), changeContent); err != nil {
 				return "", err
 			}
-			if err := gitCommitIfPossible("deepreview: fake execute change"); err != nil {
+			commitMessage := strings.TrimSpace(os.Getenv("FAKE_CODEX_CHANGE_COMMIT_MESSAGE"))
+			if commitMessage == "" {
+				commitMessage = "deepreview: fake execute change"
+			}
+			if err := gitCommitIfPossible(commitMessage); err != nil {
 				return "", err
 			}
 		}
@@ -173,6 +184,26 @@ func handlePrompt(prompt string) (string, error) {
 			}
 		}
 		return "pr description summary complete", nil
+	}
+
+	if strings.Contains(prompt, "pre-delivery privacy remediation stage") {
+		statusPath := regexGet("Output status path: `([^`]+)`", prompt)
+		if statusPath != "" {
+			decision := strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_DECISION"))
+			if decision == "" {
+				decision = "continue"
+			}
+			payload := map[string]any{
+				"decision":   decision,
+				"reason":     "fake privacy remediation status",
+				"confidence": 0.9,
+			}
+			b, _ := json.MarshalIndent(payload, "", "  ")
+			if err := writeText(statusPath, string(b)+"\n"); err != nil {
+				return "", err
+			}
+		}
+		return "privacy remediation complete", nil
 	}
 
 	return "ok", nil
