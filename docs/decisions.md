@@ -181,7 +181,7 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Run iterative deepreview rounds with default `max_rounds=5`, allowing codex to stop early via a round status flag.
+Run iterative deepreview rounds with default `max_rounds=5`, where round-loop control is based on whether execute produced repository changes.
 Context:
 One review/execute pass may miss issues; iterative passes improve confidence before final delivery.
 Rationale:
@@ -189,20 +189,20 @@ Bounded rounds provide extra review depth while preventing unbounded loops.
 Trade-offs:
 Longer wall-clock runtime compared with single-pass flows.
 Enforcement:
-Runtime contract includes `--max-rounds`; architecture defines round loop and codex stop-flag behavior.
+Runtime contract includes `--max-rounds`; architecture defines change-driven round progression and treats round status as traceability metadata.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Push exactly once at final delivery, regardless of mode; never push intermediate-round commits, and only deliver after codex final green-light.
+Push exactly once at final delivery, regardless of mode; never push intermediate-round commits, and only deliver after round execution and delivery gates pass.
 Context:
 User requires that intermediate iteration remains local until final confidence is reached.
 Rationale:
-Single final push reduces remote churn and keeps iterative experimentation private until finalized; codex final green-light ensures delivery only happens after the run is judged complete/successful.
+Single final push reduces remote churn and keeps iterative experimentation private until finalized; gating delivery on completed rounds plus delivery checks ensures publishing only happens after successful run completion.
 Trade-offs:
 Remote visibility of intermediate progress is intentionally reduced.
 Enforcement:
-Spec/architecture require one final push point, forbid intermediate pushes, and gate final delivery on codex final stop/success signal.
+Spec/architecture require one final push point, forbid intermediate pushes, and gate final delivery on completed round execution plus delivery quality/privacy checks.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
@@ -230,7 +230,7 @@ Slightly larger CLI parser surface.
 Enforcement:
 Runtime contract documents both forms; parser tests must assert equivalent behavior.
 References:
-`docs/spec.md`, `plan/current/spec.md`
+`docs/spec.md`, `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`
 
 Decision:
 Use delivery naming prefixes `deepreview/` for branch names and `deepreview:` for PR titles.
@@ -243,18 +243,18 @@ Reduced flexibility for ad hoc naming styles.
 Enforcement:
 Delivery naming contract in spec; delivery-mode tests must assert prefixes.
 References:
-`docs/spec.md`, `plan/current/spec.md`
+`docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
-If an execute round produces no changes, stop by default unless codex explicitly requests another round.
+If an execute round produces no changes, stop the round loop.
 Context:
 Round loops should stay bounded and purposeful; no-change rounds often indicate convergence.
 Rationale:
-Stopping on no-change reduces unnecessary cycles while preserving codex authority to continue when it has strong reason.
+Stopping on no-change reduces unnecessary cycles and keeps progression deterministic.
 Trade-offs:
-May stop earlier than a human would choose in rare cases where another round could still produce changes.
+Could miss low-probability follow-on changes that might appear in another round despite no current diff.
 Enforcement:
-Round loop logic checks no-change outcome before next-round scheduling; codex continue signal overrides default stop.
+Round loop logic compares candidate branch state before/after execute; if there is no repository diff, orchestration stops additional rounds.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
@@ -453,7 +453,7 @@ Less explicit historical prompt version tracking.
 Enforcement:
 Prompt-template contract in spec and phase-5 plan tasks require file-based template loading.
 References:
-`docs/spec.md`, `plan/current/spec.md`
+`docs/spec.md`, `prompts/README.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
 Treat prompt `{{...}}` markers as strict template variables and fail fast if any remain unresolved at render time.

@@ -21,7 +21,7 @@ This document defines how work is tracked so progress compounds without context 
 - Before widening scope, ensure existing plan items are verified and documented.
 
 ## Round-loop operating rules
-- Execute deepreview as bounded rounds (`max_rounds`, default `5`) with codex early-stop signaling.
+- Execute deepreview as bounded rounds (`max_rounds`, default `5`) with change-driven stop when execute produces no repository changes.
 - Use fresh review/execute worktrees each round; do not reuse stale round worktrees.
 - Use one shared independent-review prompt template and an ordered execute prompt queue in one Codex context per round.
 - Keep orchestration simple: avoid unbounded retries; only bounded inactivity restarts are allowed.
