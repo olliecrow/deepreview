@@ -30,14 +30,14 @@ This document maps the user-provided project description to canonical requiremen
 | R-17 | Reuse compatible patterns internally but do not reference external inspiration projects in committed deepreview artifacts. | `docs/spec.md`, `AGENTS.md`, `docs/decisions.md` |
 | R-18 | Keep orchestration simple: avoid unbounded retries; allow only bounded inactivity restarts with explicit caps. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-19 | Run iterative deepreview loops with configurable max rounds (default 5). | `docs/spec.md`, `docs/architecture.md` |
-| R-20 | Codex is trusted as the main judge and may stop early via round status flag file. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
+| R-20 | Round status flag files are required execute artifacts (`continue|stop`) for traceability, while round-loop control remains change-driven. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-21 | Do not push in intermediate rounds; perform one push only at final delivery step. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-22 | Each round must use fresh isolated worktrees to minimize stale context carryover. | `docs/spec.md`, `docs/architecture.md` |
 | R-23 | Aggressive cleanup: remove obsolete worktrees and transient artifacts as soon as they are no longer needed. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-24 | Codex may inspect repo history, recent commits, and PR context if useful. | `docs/spec.md`, `docs/architecture.md` |
 | R-25 | Mode interface supports `--mode yolo` and `--yolo` alias; default remains PR mode. | `docs/spec.md` |
 | R-26 | Delivery naming conventions use `deepreview/` branch prefix and `deepreview:` PR title prefix. | `docs/spec.md`, `docs/decisions.md` |
-| R-27 | If an execute round produces no changes, stop by default unless codex explicitly requests continue. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
+| R-27 | If an execute round produces no changes, stop additional rounds. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-28 | Encourage local commits throughout execution; ensure changed round work is committed locally (no empty commits) before round completion. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-29 | Local candidate branch naming uses `deepreview/candidate/<source-branch>/<run-id>`. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-30 | Default PR body includes sections: round summary, key fixes, verification evidence, residual risks. | `docs/spec.md`, `docs/decisions.md` |
