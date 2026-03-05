@@ -39,7 +39,8 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute stage validates `round-triage.md` and fails the round if any `accept` item is missing severity/confidence tags or does not satisfy `severity in {critical, high}` and `confidence=high`.
 - execute prompt-2 (plan) must produce an end-to-end, execution-ready plan and defer low-confidence items.
 - execute prompt-3 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
-- execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and ensure changed work is committed locally.
+- execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and produce complete round artifacts for orchestrator post-processing.
+- execute-stage finalization (prompt-4 outputs plus orchestrator post-processing) must ensure changed work is committed locally.
 - round progression is determined by repository changes produced in execute stage.
 - if an execute round produces repository changes, deepreview must run at least one additional review round (subject to `--max-rounds`).
 - if an execute round produces no repository changes, deepreview stops the round loop.
