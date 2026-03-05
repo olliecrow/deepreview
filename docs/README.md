@@ -23,6 +23,8 @@ Relationship to `/plan/`:
 - [workflows.md](workflows.md): execution workflow, note routing, and orchestration conventions.
 - [decisions.md](decisions.md): durable decision policy and recorded decisions.
 - [alignment.md](alignment.md): requirements traceability baseline from user description to canonical contracts.
+- [project-preferences.md](project-preferences.md): durable maintenance and collaboration preferences.
+- [untrusted-third-party-repos.md](untrusted-third-party-repos.md): safety policy for external repository snapshots.
 - [../prompts/README.md](../prompts/README.md): prompt-template pack and queue layout for independent review/execute stages.
 
 ## Source-Of-Truth Layering

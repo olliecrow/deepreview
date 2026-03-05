@@ -43,7 +43,8 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - prompt 1: consolidate reviews (reviews are inputs, not gospel; decisioning only, no code edits)
   - prompt 2: plan (high-conviction, end-to-end implementation and verification plan; no code edits)
   - prompt 3: execute/verify (apply approved changes and run codex-led verification with evidence output)
-  - prompt 4: cleanup/summary/commit (docs/decision upkeep, round status flag write, ensure changed work is committed locally)
+  - prompt 4: cleanup/summary/commit (docs/decision upkeep, round status flag write, and complete round artifacts)
+- after prompt queue completion, orchestrator performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist)
 - apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
 - allow local checkpoint commits throughout execution; never push during rounds
 - Codex writes round status file at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
