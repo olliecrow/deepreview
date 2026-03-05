@@ -181,15 +181,15 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Run iterative deepreview rounds with default `max_rounds=5`, allowing codex to stop early via a round status flag.
+Run iterative deepreview rounds with default `max_rounds=5`, using change-driven progression and a required round-status artifact for traceability.
 Context:
 One review/execute pass may miss issues; iterative passes improve confidence before final delivery.
 Rationale:
-Bounded rounds provide extra review depth while preventing unbounded loops.
+Bounded rounds provide extra review depth while preventing unbounded loops, while change-driven progression keeps control flow deterministic.
 Trade-offs:
 Longer wall-clock runtime compared with single-pass flows.
 Enforcement:
-Runtime contract includes `--max-rounds`; architecture defines round loop and codex stop-flag behavior.
+Runtime contract includes `--max-rounds`; architecture/spec require change-driven round-loop control and a validated round-status artifact per execute pass.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
@@ -246,15 +246,15 @@ References:
 `docs/spec.md`, `plan/current/spec.md`
 
 Decision:
-If an execute round produces no changes, stop by default unless codex explicitly requests another round.
+If an execute round produces no changes, stop additional rounds.
 Context:
 Round loops should stay bounded and purposeful; no-change rounds often indicate convergence.
 Rationale:
-Stopping on no-change reduces unnecessary cycles while preserving codex authority to continue when it has strong reason.
+Stopping on no-change reduces unnecessary cycles once the candidate branch converges.
 Trade-offs:
-May stop earlier than a human would choose in rare cases where another round could still produce changes.
+May stop earlier than a human might prefer in edge cases where another round could still discover changes.
 Enforcement:
-Round loop logic checks no-change outcome before next-round scheduling; codex continue signal overrides default stop.
+Round loop logic checks candidate-branch diffs before/after execute; no-change outcome ends the loop.
 References:
 `docs/spec.md`, `docs/architecture.md`
 

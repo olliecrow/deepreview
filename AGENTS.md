@@ -17,7 +17,7 @@
 - Managed workspace root is `~/deepreview`.
 - Never operate in or mutate the user's own working checkout of a target repo.
 - Orchestration should stay simple and fail-fast; do not add automatic retry/backoff loops by default.
-- Review execution is iterative by rounds (`--max-rounds`, default `3`) with codex early-stop support.
+- Review execution is iterative by rounds (`--max-rounds`, default `5`) with change-driven round progression.
 - Do not push during intermediate rounds; perform exactly one final push at delivery.
 - Cleanup should be aggressive for stale worktrees/transient artifacts once no longer needed.
 - Detailed behavior/runtime constraints are canonical in `docs/spec.md`.
