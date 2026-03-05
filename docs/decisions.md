@@ -181,15 +181,15 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Run iterative deepreview rounds with default `max_rounds=5`, where round-loop control is based on whether execute produced repository changes.
+Run iterative deepreview rounds with default `max_rounds=5`, using change-driven progression and a required round-status artifact for traceability.
 Context:
 One review/execute pass may miss issues; iterative passes improve confidence before final delivery.
 Rationale:
-Bounded rounds provide extra review depth while preventing unbounded loops.
+Bounded rounds provide extra review depth while preventing unbounded loops, while change-driven progression keeps control flow deterministic.
 Trade-offs:
 Longer wall-clock runtime compared with single-pass flows.
 Enforcement:
-Runtime contract includes `--max-rounds`; architecture defines change-driven round progression and treats round status as traceability metadata.
+Runtime contract includes `--max-rounds`; architecture/spec require change-driven round-loop control and a validated round-status artifact per execute pass.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
@@ -246,15 +246,15 @@ References:
 `docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
-If an execute round produces no changes, stop the round loop.
+If an execute round produces no changes, stop additional rounds.
 Context:
 Round loops should stay bounded and purposeful; no-change rounds often indicate convergence.
 Rationale:
-Stopping on no-change reduces unnecessary cycles and keeps progression deterministic.
+Stopping on no-change reduces unnecessary cycles once the candidate branch converges.
 Trade-offs:
-Could miss low-probability follow-on changes that might appear in another round despite no current diff.
+May stop earlier than a human might prefer in edge cases where another round could still discover changes.
 Enforcement:
-Round loop logic compares candidate branch state before/after execute; if there is no repository diff, orchestration stops additional rounds.
+Round loop logic checks candidate-branch diffs before/after execute; no-change outcome ends the loop.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
