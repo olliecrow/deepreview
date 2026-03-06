@@ -33,8 +33,8 @@ const (
 	defaultReviewInactivitySec = 300
 	defaultReviewActivityPollS = 15
 	defaultReviewMaxRestarts   = 1
-	forcedCodexModel           = "gpt-5.3-codex"
-	forcedCodexReasoningEffort = "xhigh"
+	forcedCodexModel           = "gpt-5.4"
+	forcedCodexReasoningEffort = "high"
 )
 
 func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
