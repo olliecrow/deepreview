@@ -243,7 +243,7 @@ Reduced flexibility for ad hoc naming styles.
 Enforcement:
 Delivery naming contract in spec; delivery-mode tests must assert prefixes.
 References:
-`docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`
+`docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`
 
 Decision:
 If an execute round produces no changes, stop additional rounds.
@@ -453,7 +453,7 @@ Less explicit historical prompt version tracking.
 Enforcement:
 Prompt-template contract in spec and phase-5 plan tasks require file-based template loading.
 References:
-`docs/spec.md`, `prompts/README.md`, `internal/deepreview/orchestrator.go`
+`docs/spec.md`, `prompts/README.md`, `internal/deepreview/templates.go`, `internal/deepreview/template_test.go`, `internal/deepreview/orchestrator.go`
 
 Decision:
 Treat prompt `{{...}}` markers as strict template variables and fail fast if any remain unresolved at render time.

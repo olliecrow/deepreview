@@ -37,7 +37,7 @@ This document defines how work is tracked so progress compounds without context 
 
 ## Durable vs ephemeral routing
 - Durable contracts and architecture belong in `/docs/` (`spec.md`, `architecture.md`, `decisions.md`, `workflows.md`).
-- Unresolved design questions and iterative planning belong in `/plan/current/` (`spec.md`, `open-questions.md`, `notes.md`).
+- Unresolved design questions and iterative planning belong in `/plan/current/` (`open-questions.md`, `notes.md`, and task-specific scratch files).
 
 ## Doc update routing
 - Update `README.md` for user-facing onboarding and CLI ergonomics (for example quickstart, help usage, optional shell alias guidance).
