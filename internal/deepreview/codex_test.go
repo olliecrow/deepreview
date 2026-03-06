@@ -8,15 +8,15 @@ import (
 func TestCodexRunnerBuildCommandNewThread(t *testing.T) {
 	runner := CodexRunner{
 		CodexBin:   "codex",
-		CodexModel: "gpt-5.3-codex",
-		Reasoning:  "xhigh",
+		CodexModel: "gpt-5.4",
+		Reasoning:  "high",
 	}
 	got := runner.buildCommand(nil)
 	want := []string{
 		"codex",
 		"exec",
-		"--model", "gpt-5.3-codex",
-		"-c", `model_reasoning_effort="xhigh"`,
+		"--model", "gpt-5.4",
+		"-c", `model_reasoning_effort="high"`,
 		"--skip-git-repo-check",
 		"--full-auto", "--json", "-",
 	}
@@ -29,16 +29,16 @@ func TestCodexRunnerBuildCommandResumeThread(t *testing.T) {
 	threadID := "thread-123"
 	runner := CodexRunner{
 		CodexBin:   "codex",
-		CodexModel: "gpt-5.3-codex",
-		Reasoning:  "xhigh",
+		CodexModel: "gpt-5.4",
+		Reasoning:  "high",
 	}
 	got := runner.buildCommand(&threadID)
 	want := []string{
 		"codex",
 		"exec",
 		"resume", "thread-123",
-		"--model", "gpt-5.3-codex",
-		"-c", `model_reasoning_effort="xhigh"`,
+		"--model", "gpt-5.4",
+		"-c", `model_reasoning_effort="high"`,
 		"--skip-git-repo-check",
 		"--full-auto", "--json", "-",
 	}
@@ -57,8 +57,8 @@ func TestCodexRunnerBuildCommandForcesPinnedModelAndReasoning(t *testing.T) {
 	want := []string{
 		"codex",
 		"exec",
-		"--model", "gpt-5.3-codex",
-		"-c", `model_reasoning_effort="xhigh"`,
+		"--model", "gpt-5.4",
+		"-c", `model_reasoning_effort="high"`,
 		"--skip-git-repo-check",
 		"--full-auto", "--json", "-",
 	}
