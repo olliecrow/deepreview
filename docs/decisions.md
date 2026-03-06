@@ -194,15 +194,15 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Push exactly once at final delivery, regardless of mode; never push intermediate-round commits, and only deliver after codex final green-light.
+Push exactly once at final delivery, regardless of mode; never push intermediate-round commits, and only deliver after round execution and delivery gates pass.
 Context:
 User requires that intermediate iteration remains local until final confidence is reached.
 Rationale:
-Single final push reduces remote churn and keeps iterative experimentation private until finalized; codex final green-light ensures delivery only happens after the run is judged complete/successful.
+Single final push reduces remote churn and keeps iterative experimentation private until finalized; gating delivery on completed rounds plus delivery checks ensures publishing only happens after successful run completion.
 Trade-offs:
 Remote visibility of intermediate progress is intentionally reduced.
 Enforcement:
-Spec/architecture require one final push point, forbid intermediate pushes, and gate final delivery on codex final stop/success signal.
+Spec/architecture require one final push point, forbid intermediate pushes, and gate final delivery on completed round execution plus delivery quality/privacy checks.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
@@ -243,7 +243,7 @@ Reduced flexibility for ad hoc naming styles.
 Enforcement:
 Delivery naming contract in spec; delivery-mode tests must assert prefixes.
 References:
-`docs/spec.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`
+`docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`
 
 Decision:
 If an execute round produces no changes, stop additional rounds.
@@ -453,7 +453,7 @@ Less explicit historical prompt version tracking.
 Enforcement:
 Prompt-template contract in spec and phase-5 plan tasks require file-based template loading.
 References:
-`docs/spec.md`, `prompts/README.md`, `internal/deepreview/templates.go`, `internal/deepreview/template_test.go`
+`docs/spec.md`, `prompts/README.md`, `internal/deepreview/templates.go`, `internal/deepreview/template_test.go`, `internal/deepreview/orchestrator.go`
 
 Decision:
 Treat prompt `{{...}}` markers as strict template variables and fail fast if any remain unresolved at render time.
