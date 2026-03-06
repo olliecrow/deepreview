@@ -34,4 +34,6 @@ Relationship to `/plan/`:
 - Durable rationale/trade-offs: `decisions.md`
 - Requirement-to-contract mapping: `alignment.md`
 - Prompt-template contracts and stage templates: `../prompts/README.md`
+
+## Active Scratch Pointers
 - Active unresolved implementation questions: `../plan/current/open-questions.md` (scratch; promote resolved items into docs)
