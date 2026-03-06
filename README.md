@@ -220,6 +220,7 @@ Common options.
 - [docs/alignment.md](docs/alignment.md): requirement traceability baseline
 - [prompts/README.md](prompts/README.md): prompt template pack and execute queue
 - [docs/project-preferences.md](docs/project-preferences.md): durable project maintenance preferences
+- [docs/untrusted-third-party-repos.md](docs/untrusted-third-party-repos.md): static-analysis-only policy for third-party snapshots
 
 <!-- third-party-policy:start -->
 ## Third-Party Code Policy
