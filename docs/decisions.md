@@ -716,7 +716,7 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `README.md`
 
 Decision:
-Pin deepreview Codex execution to `gpt-5.3-codex` with `model_reasoning_effort=xhigh` for all prompt executions and resume turns.
+Pin deepreview Codex execution to `gpt-5.4` with `model_reasoning_effort=high` for all prompt executions and resume turns.
 Context:
 Users want consistent deep-review quality and deterministic model behavior across runs.
 Rationale:
@@ -724,7 +724,7 @@ Hard-pinning model and reasoning removes drift from local CLI defaults/profile c
 Trade-offs:
 Reduced flexibility to switch model/effort at runtime from deepreview CLI flags.
 Enforcement:
-Codex command construction always injects `--model gpt-5.3-codex` and `-c model_reasoning_effort=\"xhigh\"` for new and resumed exec turns; parser defaults and help text reflect the pin.
+Codex command construction always injects `--model gpt-5.4` and `-c model_reasoning_effort=\"high\"` for new and resumed exec turns; parser defaults and help text reflect the pin.
 References:
 `internal/deepreview/codex.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/cli.go`, `README.md`
 

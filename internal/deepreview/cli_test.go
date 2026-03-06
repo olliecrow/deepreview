@@ -155,8 +155,8 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"If <repo> is omitted:",
 		"Troubleshooting:",
 		"press Ctrl+C once",
-		"Codex model: gpt-5.3-codex",
-		"Codex reasoning effort: xhigh",
+		"Codex model: gpt-5.4",
+		"Codex reasoning effort: high",
 		"Codex prompt timeout per prompt: 3600s",
 	} {
 		if !strings.Contains(help, want) {
