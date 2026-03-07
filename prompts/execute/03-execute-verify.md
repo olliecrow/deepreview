@@ -6,8 +6,12 @@ This is prompt 3 of 4, in the same Codex chat context as prompts 1-2.
 - Approved plan: `{{ROUND_PLAN_PATH}}`
 - Repository/worktree context and triage context.
 
+{{ROUND_MODE_NOTE}}
+
 ## Task
 Execute the plan end-to-end and verify thoroughly.
+
+{{ROUND_EXECUTE_MODE_OVERRIDE}}
 
 Execution requirements:
 1. Work deeply, proactively, and autonomously; do not wait for follow-up prompts.

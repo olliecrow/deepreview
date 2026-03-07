@@ -777,7 +777,7 @@ func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *tes
 	}
 }
 
-func TestRunFailsWhenMaxRoundsPreventsRequiredPostChangeReview(t *testing.T) {
+func TestRunAutoSchedulesFinalAuditRoundWhenLastAllowedExecuteRoundChangesCode(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -800,51 +800,61 @@ func TestRunFailsWhenMaxRoundsPreventsRequiredPostChangeReview(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
 	runCmd(t, td, nil, "git", "clone", remote, userClone)
-	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
-	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	out := runCmdExpectFailure(t, root, env,
+	out := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
-		"--source-branch", "main",
+		"--source-branch", "feature/test",
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "yolo",
 		"--no-tui",
 	)
-	if !strings.Contains(out, "requires at least one additional review round after code changes") {
-		t.Fatalf("expected max-rounds enforcement error, got: %s", out)
+	if !strings.Contains(out, "deepreview completed:") {
+		t.Fatalf("expected successful completion output, got: %s", out)
 	}
-	if !strings.Contains(out, "deepreview failure summary:") {
-		t.Fatalf("expected failure summary output, got: %s", out)
+	if !strings.Contains(out, "changes pushed:") {
+		t.Fatalf("expected yolo delivery output, got: %s", out)
 	}
-	if !strings.Contains(out, "review rounds completed before exit: 1") {
-		t.Fatalf("expected progress context in failure summary, got: %s", out)
-	}
-	if !strings.Contains(out, "run exited before delivery; no push or PR was created.") {
-		t.Fatalf("expected delivery guidance in failure summary, got: %s", out)
-	}
-	if !strings.Contains(out, "inspect these paths to review what deepreview produced:") {
-		t.Fatalf("expected self-serve artifact guidance in failure summary, got: %s", out)
-	}
-	for _, want := range []string{
-		"run artifacts:",
-		"logs:",
-		"reviews:",
-		"round artifacts:",
-		"round status files:",
-	} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("expected failure summary to include %q, got: %s", want, out)
-		}
+	if !strings.Contains(out, "final review status: decision `stop`") {
+		t.Fatalf("expected final review status context, got: %s", out)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
-	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")
-	if before != after {
-		t.Fatalf("remote source branch should remain unchanged when run fails before delivery")
+	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+	if before == after {
+		t.Fatalf("expected auto-audit run to complete delivery and update remote source branch")
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	if _, err := os.Stat(filepath.Join(runDir, "round-02", "round-summary.md")); err != nil {
+		t.Fatalf("expected automatic audit round artifacts, missing round-02 summary: %v", err)
+	}
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing final-summary.md: %v", err)
+	}
+	if !strings.Contains(string(finalSummaryBytes), "- rounds: `2`") {
+		t.Fatalf("expected final summary to record both execute and automatic audit rounds, got:\n%s", string(finalSummaryBytes))
 	}
 }
