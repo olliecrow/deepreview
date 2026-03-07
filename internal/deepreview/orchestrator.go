@@ -346,19 +346,12 @@ func (o *Orchestrator) Run() error {
 			finalErr = err
 			return err
 		}
-		roundChangedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, candidateHeadBefore, candidateHeadAfter)
-		if err != nil {
-			finalErr = err
-			return err
-		}
-		changed := len(roundChangedFiles) > 0
 
 		if auditOnly {
-			if changed {
+			if candidateHeadAfter != candidateHeadBefore {
 				err := NewDeepReviewError(
-					"automatic final audit round %d produced %d repository change(s); audit rounds must remain read-only",
+					"automatic final audit round %d moved candidate branch HEAD; audit rounds must remain read-only",
 					round,
-					len(roundChangedFiles),
 				)
 				finalErr = err
 				return err
@@ -378,6 +371,13 @@ func (o *Orchestrator) Run() error {
 			)
 			break
 		}
+
+		roundChangedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, candidateHeadBefore, candidateHeadAfter)
+		if err != nil {
+			finalErr = err
+			return err
+		}
+		changed := len(roundChangedFiles) > 0
 
 		if changed {
 			o.reporter.StageProgress(
@@ -1397,33 +1397,65 @@ Audit-round override:
 		return RoundStatus{}, "", err
 	}
 
-	changed, err := HasUncommittedChanges(executeWorktree, o.config.GitBin)
-	if err != nil {
-		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-		return RoundStatus{}, "", err
-	}
-	if changed {
-		if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round)); err != nil {
+	var candidateHeadAfter string
+	if auditOnly {
+		changed, err := HasUncommittedChanges(executeWorktree, o.config.GitBin)
+		if err != nil {
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
 		}
-	}
+		if changed {
+			err := NewDeepReviewError(
+				"automatic final audit round %d left uncommitted changes in execute worktree; audit rounds must remain read-only: %s",
+				round,
+				executeWorktree,
+			)
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
 
-	changed, err = HasUncommittedChanges(executeWorktree, o.config.GitBin)
-	if err != nil {
-		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-		return RoundStatus{}, "", err
-	}
-	if changed {
-		err := NewDeepReviewError("execute worktree has uncommitted changes after auto-commit: %s", executeWorktree)
-		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-		return RoundStatus{}, "", err
-	}
+		candidateHeadAfter, err = RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+		if err != nil {
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
+		if candidateHeadAfter != candidateHead {
+			err := NewDeepReviewError(
+				"automatic final audit round %d moved candidate branch HEAD; audit rounds must remain read-only",
+				round,
+			)
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
+	} else {
+		changed, err := HasUncommittedChanges(executeWorktree, o.config.GitBin)
+		if err != nil {
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
+		if changed {
+			if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round)); err != nil {
+				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+				return RoundStatus{}, "", err
+			}
+		}
 
-	candidateHeadAfter, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
-	if err != nil {
-		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-		return RoundStatus{}, "", err
+		changed, err = HasUncommittedChanges(executeWorktree, o.config.GitBin)
+		if err != nil {
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
+		if changed {
+			err := NewDeepReviewError("execute worktree has uncommitted changes after auto-commit: %s", executeWorktree)
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
+
+		candidateHeadAfter, err = RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+		if err != nil {
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
 	}
 	if err := o.validateNoInternalArtifactChanges(candidateHead, candidateHeadAfter); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))

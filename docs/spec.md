@@ -45,7 +45,8 @@ This document defines the canonical runtime and product contract for `deepreview
 - round progression is determined by repository changes produced in execute stage.
 - if an execute round produces repository changes, deepreview must run at least one additional review round.
 - if the last allowed execute round produces repository changes, deepreview must schedule one automatic final audit round with the same review strictness and no repository edits.
-- automatic final audit rounds must remain read-only and must end with round status `stop` before delivery can proceed.
+- automatic final audit rounds must remain read-only: after execute artifact extraction, the execute worktree must be clean, the candidate branch HEAD must be identical before and after the round, and deepreview must not auto-commit audit-round changes.
+- automatic final audit rounds must end with round status `stop` before delivery can proceed.
 - if an execute round produces no repository changes, deepreview stops the round loop.
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
