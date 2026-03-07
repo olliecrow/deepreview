@@ -11,9 +11,11 @@ This is prompt 1 of 4. Stay in this same Codex chat context for prompts 2-4.
 - Independent review files:
 {{REVIEW_REPORT_PATHS}}
 
-Injected review content:
+{{ROUND_MODE_NOTE}}
 
-{{REVIEW_REPORTS_MARKDOWN}}
+Injected review summaries:
+
+{{REVIEW_SUMMARIES_MARKDOWN}}
 
 ## Task: consolidate reviews
 Investigate every reported item and decide what should actually be acted on.
@@ -43,6 +45,7 @@ Rules:
 - You may use multiple sub-agents or staged analysis inside this prompt if useful.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.
+- Use the injected summaries for initial orientation, then read the on-disk review files directly when you want more detail.
 - If an item remains low-confidence after investigation, reject or defer it rather than forcing it into execution.
 
 Output:

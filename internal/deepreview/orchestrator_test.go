@@ -188,6 +188,51 @@ func TestTriagePolicyViolationsRequiresTagsForAcceptedItems(t *testing.T) {
 	}
 }
 
+func TestBuildReviewSummaryInjectionPrefersVerdictAndIssueHeadings(t *testing.T) {
+	td := t.TempDir()
+	report := filepath.Join(td, "review-01.md")
+	markdown := `# Independent Review 1
+
+## Verdict
+- ` + "`critical_flags_found: yes`" + `
+- ` + "`merge_readiness: needs_fixes`" + `
+
+## Critical Red Flags / Serious Issues
+### [severity: high] sample cache bug
+- Location: ` + "`src/cache.py:10`" + `
+- Why it matters: stale cache can silently corrupt outputs.
+- Evidence: empirical repro showed stale values.
+- Recommendation: invalidate cache on upstream change.
+- Confidence: high
+
+## Verification ideas
+- run pytest
+`
+	if err := os.WriteFile(report, []byte(markdown), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	summary, err := buildReviewSummaryInjection([]string{report})
+	if err != nil {
+		t.Fatalf("buildReviewSummaryInjection failed: %v", err)
+	}
+	for _, want := range []string{
+		"## review-01.md",
+		"## Verdict",
+		"`critical_flags_found: yes`",
+		"### [severity: high] sample cache bug",
+		"- Why it matters: stale cache can silently corrupt outputs.",
+		"- Confidence: high",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("expected summary to include %q, got:\n%s", want, summary)
+		}
+	}
+	if strings.Contains(summary, "## Verification ideas") {
+		t.Fatalf("summary should omit verification-ideas section, got:\n%s", summary)
+	}
+}
+
 func TestAcquireRepoRunLockPreventsConcurrentSameRepo(t *testing.T) {
 	td := t.TempDir()
 	shared := Orchestrator{

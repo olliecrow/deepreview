@@ -17,7 +17,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - default branch
 - mode (`pr` or `yolo`)
 - concurrency (default `4`)
-- max rounds (default `5`)
+- max rounds (default `5`) for code-changing execute rounds, plus one automatic final audit round when the last allowed execute round changes the repository
 - UI mode (full-screen UI by default when terminal capabilities are valid; optional `--no-tui` force-off for structured text logs)
 - if source branch is inferred from local repo context, require local readiness:
   - no tracked local changes
@@ -37,6 +37,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - require all review workers to complete successfully and emit one markdown review artifact each
 - monitor worker activity (stdout/stderr + filesystem/git-change evidence); cancel and restart inactive workers with bounded retries
 - collect report artifacts needed for execute prompts
+- inject compact review summaries into execute prompt 1 and also provide on-disk review paths so Codex can inspect full reports directly when needed
 - aggressively remove independent-review worktrees
 - create fresh execute worktree from current candidate head
 - run ordered execute prompt queue in one Codex chat context:
@@ -50,6 +51,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - Codex writes round status file at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - aggressively remove execute worktree and transient per-round artifacts
 - if execute produced changes, update candidate head to latest local committed state and continue
+- if the last allowed execute round produced changes, deepreview automatically schedules one final audit round using the same four execute prompts in audit-only mode; that round may not edit the repository and must end in a terminal `stop` decision for delivery to proceed
 - if execute produced no changes, stop the round loop early
 
 4. Final delivery (single push point):

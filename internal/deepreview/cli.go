@@ -253,7 +253,9 @@ Optional flags:
     Higher means more parallel review coverage but more local load.
 
   --max-rounds <int>    (default: %d)
-    Maximum review/execute rounds before stopping.
+    Maximum code-changing review/execute rounds before stopping.
+    If the last allowed execute round changes the repository, deepreview automatically
+    schedules one final audit round with the same review bar and no repository edits.
     Process stops early when an execute round produces no repository changes.
 
   --mode <pr|yolo>      (default: %s)

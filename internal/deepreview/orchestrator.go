@@ -302,8 +302,10 @@ func (o *Orchestrator) Run() error {
 	)
 
 	roundSummaries := make([]string, 0)
+	effectiveMaxRounds := o.config.MaxRounds
+	autoAuditRoundScheduled := false
 
-	for round := 1; round <= o.config.MaxRounds; round++ {
+	for round := 1; round <= effectiveMaxRounds; round++ {
 		roundDir := filepath.Join(o.runRoot, fmt.Sprintf("round-%02d", round))
 		if err := os.MkdirAll(roundDir, 0o755); err != nil {
 			finalErr = err
@@ -322,7 +324,17 @@ func (o *Orchestrator) Run() error {
 			return err
 		}
 
-		_, summaryPath, err := o.runExecuteStage(round, roundDir, candidateBranch, candidateHeadBefore, defaultBranch, reviewReports)
+		auditOnly := autoAuditRoundScheduled && round == effectiveMaxRounds
+		status, summaryPath, err := o.runExecuteStage(
+			round,
+			roundDir,
+			candidateBranch,
+			candidateHeadBefore,
+			defaultBranch,
+			reviewReports,
+			effectiveMaxRounds,
+			auditOnly,
+		)
 		if err != nil {
 			finalErr = err
 			return err
@@ -341,19 +353,53 @@ func (o *Orchestrator) Run() error {
 		}
 		changed := len(roundChangedFiles) > 0
 
+		if auditOnly {
+			if changed {
+				err := NewDeepReviewError(
+					"automatic final audit round %d produced %d repository change(s); audit rounds must remain read-only",
+					round,
+					len(roundChangedFiles),
+				)
+				finalErr = err
+				return err
+			}
+			if status.Decision == "continue" {
+				err := NewDeepReviewError(
+					"automatic final audit round %d identified additional work (`continue`); rerun deepreview with a higher --max-rounds to allow another execute round",
+					round,
+				)
+				finalErr = err
+				return err
+			}
+			o.reporter.StageProgress(
+				"execute stage",
+				"automatic final audit round completed without repository changes; proceeding to delivery",
+				roundPtr(round),
+			)
+			break
+		}
+
 		if changed {
 			o.reporter.StageProgress(
 				"execute stage",
 				fmt.Sprintf("round produced %d repository change(s); scheduling next review round", len(roundChangedFiles)),
 				roundPtr(round),
 			)
-			if round >= o.config.MaxRounds {
-				err := NewDeepReviewError(
-					"max rounds reached after execute changes in round %d; deepreview requires at least one additional review round after code changes (increase --max-rounds)",
-					round,
+			if round >= effectiveMaxRounds {
+				effectiveMaxRounds = round + 1
+				autoAuditRoundScheduled = true
+				if reporterWithMaxRounds, ok := o.reporter.(MaxRoundsAwareProgressReporter); ok {
+					reporterWithMaxRounds.SetMaxRounds(effectiveMaxRounds)
+				}
+				o.reporter.StageProgress(
+					"execute stage",
+					fmt.Sprintf(
+						"round reached configured max with repository changes; scheduling automatic final audit round %d/%d",
+						effectiveMaxRounds,
+						effectiveMaxRounds,
+					),
+					roundPtr(round),
 				)
-				finalErr = err
-				return err
 			}
 			continue
 		}
@@ -1130,7 +1176,13 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	return selectedReviewPaths, nil
 }
 
-func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, candidateHead, defaultBranch string, reviewReports []string) (RoundStatus, string, error) {
+func (o *Orchestrator) runExecuteStage(
+	round int,
+	roundDir, candidateBranch, candidateHead, defaultBranch string,
+	reviewReports []string,
+	maxRounds int,
+	auditOnly bool,
+) (RoundStatus, string, error) {
 	o.reporter.StageStarted("execute stage", roundPtr(round), "running execute workflow (triage, plan, execute+verify, cleanup)")
 	executeDir := filepath.Join(roundDir, "execute")
 	executeWorktree := filepath.Join(executeDir, "worktree")
@@ -1174,7 +1226,7 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 		return RoundStatus{}, "", err
 	}
 
-	reviewInjection, err := buildReviewInjection(reviewReports)
+	reviewSummaryInjection, err := buildReviewSummaryInjection(reviewReports)
 	if err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
@@ -1209,18 +1261,40 @@ func (o *Orchestrator) runExecuteStage(round int, roundDir, candidateBranch, can
 	}
 	reviewReportPathsBullet = strings.TrimSpace(reviewReportPathsBullet)
 
+	roundModeNote := ""
+	roundExecuteModeOverride := ""
+	if auditOnly {
+		roundModeNote = strings.TrimSpace(`
+Mode note:
+- This is the automatic final audit round reserved after the last code-changing execute round.
+- Keep the same review bar as every other round.
+- Do not modify code, docs, configuration, or git state in this round.
+- Use the injected review summaries plus the on-disk review files to audit the candidate state and decide whether delivery is still appropriate.
+- If you find remaining critical/high issues that should block delivery, record them and set round status to continue in prompt 4.
+`)
+		roundExecuteModeOverride = strings.TrimSpace(`
+Audit-round override:
+- This prompt is audit-only. Do not edit files, do not create commits, and do not change git state.
+- Perform final verification and investigation only.
+- If you discover material remaining issues, record them in the verification artifact and leave prompt 4 to set round status to continue.
+`)
+	}
+
 	variables := map[string]string{
-		"REPO_SLUG":               o.repoIdentity.Slug(),
-		"SOURCE_BRANCH":           o.config.SourceBranch,
-		"DEFAULT_BRANCH":          defaultBranch,
-		"ROUND_NUMBER":            fmt.Sprintf("%d", round),
-		"MAX_ROUNDS":              fmt.Sprintf("%d", o.config.MaxRounds),
-		"WORKTREE_PATH":           ".",
-		"REVIEW_REPORT_PATHS":     reviewReportPathsBullet,
-		"REVIEW_REPORTS_MARKDOWN": reviewInjection,
+		"REPO_SLUG":                   o.repoIdentity.Slug(),
+		"SOURCE_BRANCH":               o.config.SourceBranch,
+		"DEFAULT_BRANCH":              defaultBranch,
+		"ROUND_NUMBER":                fmt.Sprintf("%d", round),
+		"MAX_ROUNDS":                  fmt.Sprintf("%d", maxRounds),
+		"WORKTREE_PATH":               ".",
+		"REVIEW_REPORT_PATHS":         reviewReportPathsBullet,
+		"REVIEW_SUMMARIES_MARKDOWN":   reviewSummaryInjection,
+		"ROUND_MODE_NOTE":             roundModeNote,
+		"ROUND_EXECUTE_MODE_OVERRIDE": roundExecuteModeOverride,
 		// Backward compatibility for older templates that still use fanout placeholders.
 		"FANOUT_REVIEW_PATHS":     reviewReportPathsBullet,
-		"FANOUT_REVIEWS_MARKDOWN": reviewInjection,
+		"FANOUT_REVIEWS_MARKDOWN": reviewSummaryInjection,
+		"REVIEW_REPORTS_MARKDOWN": reviewSummaryInjection,
 		"ROUND_TRIAGE_PATH":       roundTriageRelPath,
 		"ROUND_PLAN_PATH":         roundPlanRelPath,
 		"ROUND_VERIFICATION_PATH": roundVerificationRelPath,
@@ -1828,16 +1902,90 @@ func executePromptLabel(templateName string) string {
 	}
 }
 
-func buildReviewInjection(reportPaths []string) (string, error) {
+func buildReviewSummaryInjection(reportPaths []string) (string, error) {
 	chunks := make([]string, 0, len(reportPaths))
 	for _, path := range reportPaths {
 		b, err := os.ReadFile(path)
 		if err != nil {
 			return "", err
 		}
-		chunks = append(chunks, fmt.Sprintf("## %s\n\n%s\n", filepath.Base(path), strings.TrimSpace(string(b))))
+		chunks = append(chunks, summarizeReviewMarkdown(filepath.Base(path), string(b)))
 	}
 	return strings.TrimSpace(strings.Join(chunks, "\n")), nil
+}
+
+func summarizeReviewMarkdown(reportName, markdown string) string {
+	lines := strings.Split(markdown, "\n")
+	summary := []string{fmt.Sprintf("## %s", reportName)}
+	section := ""
+	capturedAny := false
+	currentIssueBullets := 0
+	issueCount := 0
+
+	appendLine := func(text string) {
+		trimmed := strings.TrimSpace(text)
+		if trimmed == "" {
+			return
+		}
+		summary = append(summary, trimForDisplay(trimmed, 280))
+		capturedAny = true
+	}
+
+	for _, raw := range lines {
+		line := strings.TrimSpace(raw)
+		switch {
+		case strings.HasPrefix(line, "## "):
+			section = strings.TrimSpace(strings.TrimPrefix(line, "## "))
+			if strings.EqualFold(section, "Verdict") || strings.HasPrefix(strings.ToLower(section), "critical red flags") {
+				appendLine(line)
+			}
+			continue
+		case strings.HasPrefix(line, "### "):
+			if !strings.HasPrefix(strings.ToLower(section), "critical red flags") {
+				continue
+			}
+			if issueCount >= 8 {
+				continue
+			}
+			appendLine(line)
+			issueCount++
+			currentIssueBullets = 0
+			continue
+		}
+
+		switch {
+		case strings.EqualFold(section, "Verdict"):
+			if strings.HasPrefix(line, "- ") {
+				appendLine(line)
+			}
+		case strings.HasPrefix(strings.ToLower(section), "critical red flags"):
+			if issueCount == 0 || currentIssueBullets >= 5 {
+				continue
+			}
+			if strings.HasPrefix(line, "- ") {
+				appendLine(line)
+				currentIssueBullets++
+			}
+		}
+	}
+
+	if !capturedAny {
+		summary = summary[:1]
+		kept := 0
+		for _, raw := range lines {
+			line := strings.TrimSpace(raw)
+			if line == "" {
+				continue
+			}
+			appendLine(line)
+			kept++
+			if kept >= 12 {
+				break
+			}
+		}
+	}
+
+	return strings.Join(summary, "\n")
 }
 
 func readRoundStatus(path string) (RoundStatus, error) {

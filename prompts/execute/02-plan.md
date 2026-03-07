@@ -6,6 +6,8 @@ This is prompt 2 of 4, in the same Codex chat context as prompt 1.
 - Triage decisions: `{{ROUND_TRIAGE_PATH}}`
 - Repository/worktree context from prior prompt.
 
+{{ROUND_MODE_NOTE}}
+
 ## Task: plan
 Create a high-confidence implementation and verification plan for accepted items.
 

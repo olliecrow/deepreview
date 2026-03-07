@@ -123,7 +123,8 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
-		if os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE") == "" {
+		auditOnly := strings.Contains(prompt, "automatic final audit round")
+		if os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE") == "" && !auditOnly {
 			changeContent := "round change\n"
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE")) != "" {
 				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"

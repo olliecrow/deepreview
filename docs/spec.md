@@ -24,7 +24,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, then lock/worktree cleanup runs before process exit.
-- round loop runs up to `--max-rounds` (default `5`) and may stop early.
+- round loop runs up to `--max-rounds` (default `5`) code-changing execute rounds and may stop early.
 - independent reviews run in independent worktrees.
 - independent review concurrency defaults to `4` and is configurable.
 - each successful independent-review worker must emit one markdown review report.
@@ -35,6 +35,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - each execute pass runs in a fresh worktree.
 - independent-review workers use one shared independent-review prompt template.
 - each execute pass runs an ordered multi-prompt queue in one Codex chat context.
+- execute prompt-1 receives compact injected review summaries plus on-disk review report paths so Codex can inspect full reports directly when needed.
 - execute prompt-1 (consolidate reviews) treats independent reviews as inputs, not gospel, and only accepts independently-validated, high-confidence `critical|high` items.
 - execute stage validates `round-triage.md` and fails the round if any `accept` item is missing severity/confidence tags or does not satisfy `severity in {critical, high}` and `confidence=high`.
 - execute prompt-2 (plan) must produce an end-to-end, execution-ready plan and defer low-confidence items.
@@ -42,7 +43,9 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and produce complete round artifacts for orchestrator post-processing.
 - execute-stage finalization (prompt-4 outputs plus orchestrator post-processing) must ensure changed work is committed locally.
 - round progression is determined by repository changes produced in execute stage.
-- if an execute round produces repository changes, deepreview must run at least one additional review round (subject to `--max-rounds`).
+- if an execute round produces repository changes, deepreview must run at least one additional review round.
+- if the last allowed execute round produces repository changes, deepreview must schedule one automatic final audit round with the same review strictness and no repository edits.
+- automatic final audit rounds must remain read-only and must end with round status `stop` before delivery can proceed.
 - if an execute round produces no repository changes, deepreview stops the round loop.
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
@@ -136,7 +139,7 @@ Cleanup policy:
 - in `yolo` mode, do not push when verification fails.
 - in PR mode, deepreview should run at most 3 bounded privacy remediation attempts before delivery; each attempt can apply built-in local-path doc sanitization and/or Codex-guided fixes, then re-scan.
 - in PR mode, after bounded privacy attempts complete, delivery proceeds by policy (privacy findings no longer hard-block delivery).
-- if run fails because execute changed code in the final allowed round (`--max-rounds` limit reached before required post-change review round), print a self-serve failure summary with completed run context and artifact/log/review paths.
+- if an automatic final audit round reports `continue` or produces repository changes, fail the run with guidance to rerun deepreview using a higher `--max-rounds`.
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)

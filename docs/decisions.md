@@ -194,6 +194,32 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
+When the last allowed execute round changes the repository, automatically add one final audit round instead of failing immediately.
+Context:
+deepreview requires a post-change reassessment before delivery, but long runs should not fail purely because the last configured execute round happened to produce changes.
+Rationale:
+An automatic final audit round preserves the same review strictness while converting a bookkeeping failure into a deterministic terminal state. The audit round remains read-only, so it cannot silently expand scope.
+Trade-offs:
+Total runtime may increase by one round, and `--max-rounds` now means the maximum number of code-changing execute rounds rather than the total number of round directories.
+Enforcement:
+Orchestrator control flow auto-schedules one read-only audit round, updates the reported max-round count, and fails if that audit round requests more work or changes the repository.
+References:
+`internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Inject compact review summaries into execute prompt 1 and provide on-disk review file paths for deeper inspection.
+Context:
+Execute prompt 1 needs reviewer signal quickly, but fully inlining every review body increases prompt size and latency.
+Rationale:
+Compact summaries keep the most relevant review signal in prompt context while still trusting Codex to open full review files on disk when it wants more detail.
+Trade-offs:
+The injected summaries are lossy compared with raw review text, so the prompt must explicitly point Codex at the review files when deeper inspection is needed.
+Enforcement:
+The orchestrator builds structured review summaries for prompt injection, and prompt 1 tells Codex to use those summaries for orientation and read the on-disk reports directly when useful.
+References:
+`internal/deepreview/orchestrator.go`, `prompts/execute/01-consolidate-reviews.md`, `docs/spec.md`
+
+Decision:
 Push exactly once at final delivery, regardless of mode; never push intermediate-round commits, and only deliver after round execution and delivery gates pass.
 Context:
 User requires that intermediate iteration remains local until final confidence is reached.

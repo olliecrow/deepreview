@@ -9,6 +9,8 @@ This is prompt 4 of 4, in the same Codex chat context as prompts 1-3.
 - Round status output path: `{{ROUND_STATUS_PATH}}`
 - Round summary output path: `{{ROUND_SUMMARY_PATH}}`
 
+{{ROUND_MODE_NOTE}}
+
 ## Task
 Finalize this round with cleanup, documentation updates, strict round decision flag output, and final round artifacts.
 
