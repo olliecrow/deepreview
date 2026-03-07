@@ -124,6 +124,18 @@ func handlePrompt(prompt string) (string, error) {
 			}
 		}
 		auditOnly := strings.Contains(prompt, "automatic final audit round")
+		if auditOnly {
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE")) != "" {
+				if err := writeText(filepath.Join(".", "audit_round_change.txt"), "audit change\n"); err != nil {
+					return "", err
+				}
+			}
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_ALLOW_EMPTY_COMMIT")) != "" {
+				if _, err := runGit("commit", "--allow-empty", "-m", "audit empty commit"); err != nil {
+					return "", err
+				}
+			}
+		}
 		if os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE") == "" && !auditOnly {
 			changeContent := "round change\n"
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE")) != "" {
