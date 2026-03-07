@@ -202,7 +202,7 @@ An automatic final audit round preserves the same review strictness while conver
 Trade-offs:
 Total runtime may increase by one round, and `--max-rounds` now means the maximum number of code-changing execute rounds rather than the total number of round directories.
 Enforcement:
-Orchestrator control flow auto-schedules one read-only audit round, updates the reported max-round count, and fails if that audit round requests more work or changes the repository.
+Orchestrator control flow auto-schedules one read-only audit round, updates the reported max-round count, and fails if that audit round requests more work, leaves the execute worktree dirty after artifact extraction, or moves the candidate branch HEAD. Audit-round enforcement uses HEAD immutability rather than file-diff emptiness alone so tree-identical commits (for example `--allow-empty`) cannot slip through delivery.
 References:
 `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 

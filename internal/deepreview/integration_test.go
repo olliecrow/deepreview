@@ -858,3 +858,131 @@ func TestRunAutoSchedulesFinalAuditRoundWhenLastAllowedExecuteRoundChangesCode(t
 		t.Fatalf("expected final summary to record both execute and automatic audit rounds, got:\n%s", string(finalSummaryBytes))
 	}
 }
+
+func TestRunAuditRoundFailsWhenCandidateHeadMovesWithoutTreeChanges(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_AUDIT_ALLOW_EMPTY_COMMIT=1")
+	out := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "yolo",
+		"--no-tui",
+	)
+	if !strings.Contains(out, "automatic final audit round 2 moved candidate branch HEAD; audit rounds must remain read-only") {
+		t.Fatalf("expected audit round head-movement error, got: %s", out)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+	if before != after {
+		t.Fatalf("expected failed audit round to leave remote source branch unchanged")
+	}
+
+	managedRepo := filepath.Join(workspace, "repos", "local", "user")
+	logs := runCmd(t, td, nil, "git", "-C", managedRepo, "log", "--oneline", "--all", "-n", "10")
+	if !strings.Contains(logs, "audit empty commit") {
+		t.Fatalf("expected audit-only empty commit repro to move candidate history, got:\n%s", logs)
+	}
+}
+
+func TestRunAuditRoundFailsBeforeAutoCommitOnDirtyWorktree(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE=1")
+	out := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "yolo",
+		"--no-tui",
+	)
+	if !strings.Contains(out, "automatic final audit round 2 left uncommitted changes in execute worktree; audit rounds must remain read-only") {
+		t.Fatalf("expected audit round dirty-worktree error, got: %s", out)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+	if before != after {
+		t.Fatalf("expected failed audit round to leave remote source branch unchanged")
+	}
+
+	managedRepo := filepath.Join(workspace, "repos", "local", "user")
+	logs := runCmd(t, td, nil, "git", "-C", managedRepo, "log", "--oneline", "--all", "-n", "10")
+	if strings.Contains(logs, "deepreview: round 02 execute updates") {
+		t.Fatalf("expected dirty audit round to fail before deepreview auto-commit, got:\n%s", logs)
+	}
+}
