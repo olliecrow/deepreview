@@ -28,6 +28,13 @@ func main() {
 		if !hasTitle {
 			os.Exit(4)
 		}
+		if os.Getenv("FAKE_GH_PR_CREATE_SILENT") != "" {
+			return
+		}
+		if custom := os.Getenv("FAKE_GH_PR_CREATE_STDOUT"); custom != "" {
+			fmt.Println(custom)
+			return
+		}
 		fmt.Println("https://example.com/olliecrow/test/pull/123")
 		return
 	}

@@ -1034,7 +1034,11 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 		if strings.TrimSpace(delivery.PRURL) != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "PR created: %s\n", delivery.PRURL)
 		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "delivery completed in PR mode.\n")
+			_, _ = fmt.Fprintf(os.Stdout, "delivery completed in PR mode, but no PR URL was returned.\n")
+			_, _ = fmt.Fprintf(os.Stdout, "inspect delivery commits and recover the PR manually if needed.\n")
+		}
+		if strings.TrimSpace(delivery.CommitsURL) != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "delivery commits: %s\n", delivery.CommitsURL)
 		}
 	case ModeYolo:
 		if strings.TrimSpace(delivery.CommitsURL) != "" {

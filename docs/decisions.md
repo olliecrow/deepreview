@@ -724,7 +724,7 @@ A concise completion line with direct URL improves UX and reduces ambiguity imme
 Trade-offs:
 Adds a small amount of additional stdout output after successful runs.
 Enforcement:
-CLI prints run completion summary, including PR URL in PR mode, commits URL in yolo mode, or explicit skipped-delivery reason for no-op runs.
+CLI prints run completion summary, including PR URL in PR mode when available, delivery commits URL for delivered runs, commits URL in yolo mode, or explicit skipped-delivery reason for no-op runs. When PR mode completes without a returned PR URL, CLI prints manual-recovery guidance instead of a vague success line.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`
 
