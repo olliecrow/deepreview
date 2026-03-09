@@ -296,6 +296,9 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
 		t.Fatalf("expected pr created summary output, got: %s", output)
 	}
+	if !strings.Contains(output, "delivery commits: https://github.com/local/user/commits/deepreview/feature/test/") {
+		t.Fatalf("expected delivery commits summary output, got: %s", output)
+	}
 	if !strings.Contains(output, "repository reviewed: `local/user`") {
 		t.Fatalf("expected repository context in completion summary, got: %s", output)
 	}
@@ -436,6 +439,63 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-01.md")); err != nil {
 		t.Fatalf("review-01.md missing: %v", err)
+	}
+}
+
+func TestEndToEndPRModeReportsRecoveryHintsWhenPRURLMissing(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_GH_PR_CREATE_SILENT=1")
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery completed in PR mode, but no PR URL was returned.") {
+		t.Fatalf("expected missing-pr-url summary output, got: %s", output)
+	}
+	if !strings.Contains(output, "inspect delivery commits and recover the PR manually if needed.") {
+		t.Fatalf("expected manual recovery guidance, got: %s", output)
+	}
+	if !strings.Contains(output, "delivery commits: https://github.com/local/user/commits/deepreview/feature/test/") {
+		t.Fatalf("expected delivery commits summary output, got: %s", output)
 	}
 }
 
