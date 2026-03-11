@@ -20,6 +20,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview operates only in managed workspace paths under `~/deepreview`.
 - deepreview must not operate in the user's own active checkout.
 - deepreview must isolate managed repository clones and run locks by repo plus source branch, so different branches of the same repo can run concurrently while same-branch runs remain serialized.
+- deepreview-managed commits must use the operator's resolved local Git identity (`user.name` / `user.email`) and must not depend on host GPG signing configuration.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization.
@@ -45,6 +46,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute prompt-3 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
 - execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and produce complete round artifacts for orchestrator post-processing.
 - execute-stage finalization (prompt-4 outputs plus orchestrator post-processing) must ensure changed work is committed locally.
+- provisional execute artifacts may be snapshotted during prompt execution, but canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) must be promoted only after execute-stage success and any required local commit completes.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` remains reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
 - all Codex prompt executions must receive writable worktree-local temp/cache defaults for tool execution, including Go cache/temp envs (`TMPDIR`, `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`), so verification commands do not fall back to host-local caches outside the sandbox.
 - round progression is determined by repository changes produced in execute stage.
@@ -112,6 +114,7 @@ Helper command behavior:
   - `confidence`: number in `[0.0, 1.0]`
   - `next_focus`: string
 - This file is an execute-stage artifact for traceability; round-loop control is change-driven, not decision-driven.
+- A round counts as completed for final reporting only when its canonical round artifacts have been promoted after execute-stage success; provisional artifacts from failed execute attempts must not affect completion summaries or final-round reporting.
 - Invalid or missing required fields fail the round.
 
 ## Delivery naming contract

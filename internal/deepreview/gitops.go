@@ -328,7 +328,7 @@ func HasUncommittedChanges(repoPath, gitBin string) (bool, error) {
 	return strings.TrimSpace(status) != "", nil
 }
 
-func CommitAllChanges(repoPath, gitBin, message string) error {
+func CommitAllChanges(repoPath, gitBin, message string, identity CommitIdentity) error {
 	if _, err := RunCommand([]string{gitBin, "-C", repoPath, "add", "-A"}, "", "", true, 0); err != nil {
 		return err
 	}
@@ -339,7 +339,19 @@ func CommitAllChanges(repoPath, gitBin, message string) error {
 	if !changed {
 		return nil
 	}
-	_, err = RunCommand([]string{gitBin, "-C", repoPath, "commit", "-m", message}, "", "", true, 0)
+	command := []string{
+		gitBin,
+		"-C", repoPath,
+		"-c", "commit.gpgsign=false",
+	}
+	if strings.TrimSpace(identity.Name) != "" {
+		command = append(command, "-c", "user.name="+identity.Name)
+	}
+	if strings.TrimSpace(identity.Email) != "" {
+		command = append(command, "-c", "user.email="+identity.Email)
+	}
+	command = append(command, "commit", "--no-gpg-sign", "-m", message)
+	_, err = RunCommand(command, "", "", true, 0)
 	return err
 }
 

@@ -1090,13 +1090,14 @@ func readCompletionReviewSnapshot(runRoot string) completionReviewSnapshot {
 	if strings.TrimSpace(runRoot) == "" {
 		return snapshot
 	}
-	statusPaths, err := filepath.Glob(filepath.Join(runRoot, "round-*", "round-status.json"))
+	summaryPaths, err := filepath.Glob(filepath.Join(runRoot, "round-*", "round-summary.md"))
 	if err != nil {
 		return snapshot
 	}
-	sort.Strings(statusPaths)
-	snapshot.CompletedRounds = len(statusPaths)
-	for _, statusPath := range statusPaths {
+	sort.Strings(summaryPaths)
+	snapshot.CompletedRounds = len(summaryPaths)
+	for _, summaryPath := range summaryPaths {
+		statusPath := filepath.Join(filepath.Dir(summaryPath), "round-status.json")
 		status, err := readRoundStatus(statusPath)
 		if err != nil {
 			continue

@@ -145,3 +145,82 @@ func TestEnsureWorktreeOperationalExcludesResolvesRelativeGitPathAgainstRepo(t *
 		t.Fatalf("expected idempotent exclude content\nprevious content\n%s\ncurrent content\n%s", excludeContent, string(excludeBytesAfter))
 	}
 }
+
+func TestCommitAllChangesUsesProvidedIdentityAndDisablesSigning(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "wrong@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Wrong User")
+	runGitCommand(t, td, "-C", repo, "config", "commit.gpgsign", "true")
+	runGitCommand(t, td, "-C", repo, "config", "gpg.program", "/nonexistent-gpg")
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAllChanges(repo, "git", "seed", CommitIdentity{Name: "Loopy Test", Email: "loopy-test@example.com"}); err != nil {
+		t.Fatalf("initial commit failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAllChanges(repo, "git", "update", CommitIdentity{Name: "Loopy Test", Email: "loopy-test@example.com"}); err != nil {
+		t.Fatalf("CommitAllChanges failed with signing disabled path: %v", err)
+	}
+
+	authorName := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%an"))
+	if authorName != "Loopy Test" {
+		t.Fatalf("expected author name Loopy Test, got %q", authorName)
+	}
+	authorEmail := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%ae"))
+	if authorEmail != "loopy-test@example.com" {
+		t.Fatalf("expected author email loopy-test@example.com, got %q", authorEmail)
+	}
+}
+
+func TestResolveCommitIdentityUsesRepoConfigForLocalRepo(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "repo-user@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Repo User")
+
+	identity, err := ResolveCommitIdentity("git", repo)
+	if err != nil {
+		t.Fatalf("ResolveCommitIdentity failed: %v", err)
+	}
+	if identity.Name != "Repo User" {
+		t.Fatalf("expected repo user name, got %q", identity.Name)
+	}
+	if identity.Email != "repo-user@example.com" {
+		t.Fatalf("expected repo user email, got %q", identity.Email)
+	}
+}
+
+func TestConfigureManagedGitIdentityEnablesPlainGitCommitWithoutSigner(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "commit.gpgsign", "true")
+	runGitCommand(t, td, "-C", repo, "config", "gpg.program", "/nonexistent-gpg")
+
+	if err := ConfigureManagedGitIdentity(repo, "git", CommitIdentity{Name: "Loopy Test", Email: "loopy-test@example.com"}); err != nil {
+		t.Fatalf("ConfigureManagedGitIdentity failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+
+	authorName := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%an"))
+	if authorName != "Loopy Test" {
+		t.Fatalf("expected author name Loopy Test, got %q", authorName)
+	}
+	authorEmail := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%ae"))
+	if authorEmail != "loopy-test@example.com" {
+		t.Fatalf("expected author email loopy-test@example.com, got %q", authorEmail)
+	}
+}
