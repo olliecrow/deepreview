@@ -36,4 +36,5 @@ Relationship to `/plan/`:
 - Prompt-template contracts and stage templates: `../prompts/README.md`
 
 ## Active Scratch Pointers
-- Active unresolved implementation questions: `../plan/current/open-questions.md` (scratch; promote resolved items into docs)
+- Use `../plan/current/` for active scratch artifacts (for example `notes.md`, `open-questions.md`, or task-specific files).
+- Promote resolved, durable guidance from scratch artifacts into docs and delete stale scratch files.
