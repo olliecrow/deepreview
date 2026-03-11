@@ -612,17 +612,17 @@ References:
 `internal/deepreview/orchestrator.go`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
 
 Decision:
-Treat Windows local-path matching as conservative to avoid false positives on shell/path-expansion fragments in changed files.
+Support only macOS and Linux host operating systems.
 Context:
-The original Windows path regex (`[A-Za-z]:\\\S+`) could match non-path shell fragments such as `.../bin:\${PATH}`, triggering unnecessary privacy remediation attempts.
+`deepreview` is used on macOS and Linux only. Carrying Windows-specific code paths and heuristics increased maintenance surface without serving an in-scope runtime.
 Rationale:
-Restricting Windows-path matches to backslash-prefixed path segments that begin with an expected path token keeps privacy detection useful while avoiding obvious false positives in shell scripts.
+Removing Windows-specific compatibility code keeps process handling, privacy scanning, and documentation aligned with actual operating scope.
 Trade-offs:
-This matcher remains heuristic and may miss unusual Windows path encodings that start with symbols; coverage is focused on common absolute path shapes.
+Windows builds and runtime behavior are unsupported. Reintroducing Windows support would require deliberate implementation work rather than relying on stale compatibility shims.
 Enforcement:
-Privacy path matcher requires a drive-letter path segment with an alphanumeric/path-like token after the first backslash; regression tests assert shell expansion fragments are allowed while canonical Windows absolute paths are still blocked.
+Host-specific process management is implemented only for `darwin` and `linux`; privacy path matching scans only supported macOS/Linux home-directory prefixes; docs and requirements declare Windows unsupported.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/privacy_test.go`
+`internal/deepreview/process.go`, `internal/deepreview/process_unix.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/privacy_test.go`, `README.md`, `docs/spec.md`
 
 Decision:
 Treat user interrupt (`Ctrl+C`) as immediate worker termination plus cleanup: hard-stop active worker commands immediately, then cleanup worktrees/locks and exit.
@@ -633,7 +633,7 @@ Immediate hard-stop preserves operator control/token budget while still maintain
 Trade-offs:
 Adds interrupt orchestration and aggressive process teardown behavior.
 Enforcement:
-Review command captures interrupts, cancels run context, and force-terminates active command/process trees immediately (`SIGKILL` on unix, `Kill` on windows), then returns exit code `130` after cleanup; tests verify cancellation classification, command teardown behavior, and interrupt-triggered cleanup/source-branch non-mutation.
+Review command captures interrupts, cancels run context, and force-terminates active command/process trees immediately with `SIGKILL`, then returns exit code `130` after cleanup; tests verify cancellation classification, command teardown behavior, and interrupt-triggered cleanup/source-branch non-mutation.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/tui.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/gitops.go`
 
@@ -828,7 +828,7 @@ Local terminal output should be maximally useful for the operator. Privacy polic
 Trade-offs:
 Machine-local paths can appear in local terminal output; users should treat terminal transcripts as local artifacts unless intentionally shared.
 Enforcement:
-`RunCLI` prints the original unsupported token, with regression coverage asserting `/Users/...` is preserved locally.
+`RunCLI` prints the original unsupported token, with regression coverage asserting representative absolute-path input is preserved locally.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`
 

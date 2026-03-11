@@ -59,10 +59,10 @@ func TestAssertPublicTextSafeAllowsShellPathExpansionFragments(t *testing.T) {
 	}
 }
 
-func TestAssertPublicTextSafeRejectsWindowsAbsolutePath(t *testing.T) {
-	windowsPath := "path " + "C:" + `\` + `Users\alice\secret.txt`
-	if err := assertPublicTextSafe(windowsPath, "test surface"); err == nil {
-		t.Fatalf("expected windows local path to be rejected")
+func TestAssertPublicTextSafeIgnoresUnsupportedDriveLetterPathSyntax(t *testing.T) {
+	driveLetterPath := "path " + "C:" + `\` + `Users\alice\secret.txt`
+	if err := assertPublicTextSafe(driveLetterPath, "test surface"); err != nil {
+		t.Fatalf("expected unsupported drive-letter path syntax to be ignored, got: %v", err)
 	}
 }
 

@@ -33,6 +33,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 
 ## Requirements
 
+- supported host operating systems: macOS and Linux
 - `git`
 - `codex`
 - `gh` for default pull request mode
@@ -51,6 +52,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 
 ## Known limitations
 
+- Windows is unsupported.
 - Requires local `git` and `codex`; default pull request mode also requires `gh`.
 - Review quality depends on Codex outputs and repository test coverage.
 - Deep runs can take significant time on large repositories or high `--max-rounds`.
