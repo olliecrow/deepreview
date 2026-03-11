@@ -1876,7 +1876,10 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 		return false, "", err
 	}
 
-	statusPath := filepath.Join(attemptDir, "privacy-status.json")
+	statusArtifactPath := filepath.Join(attemptDir, "privacy-status.json")
+	// Codex can only write inside its worktree sandbox, so persist the worker-written
+	// status there first and copy it back into the run artifact directory after execution.
+	statusWorktreePath := filepath.Join(worktreePath, ".tmp", "deepreview", "privacy-fix", fmt.Sprintf("attempt-%02d", attempt), "privacy-status.json")
 	worktreeRelPath, relErr := filepath.Rel(o.runRoot, worktreePath)
 	if relErr != nil {
 		worktreeRelPath = worktreePath
@@ -1908,7 +1911,7 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 		"MANAGED_REPO_PATH":  filepath.ToSlash(worktreeRelPath),
 		"CHANGED_FILES":      changedFilesValue,
 		"PRIVACY_ISSUES":     sanitizePublicText(summarizePrivacyScanIssues(commitScanErr, fileScanErr)),
-		"OUTPUT_STATUS_PATH": filepath.ToSlash(statusPath),
+		"OUTPUT_STATUS_PATH": filepath.ToSlash(statusWorktreePath),
 	}
 	prompt, err := RenderTemplate(templateText, variables)
 	if err != nil {
@@ -1926,7 +1929,7 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 			logPrefix:    logPrefix,
 			useGitStatus: true,
 			monitoredPaths: []string{
-				statusPath,
+				statusWorktreePath,
 				logPrefix + ".stdout.jsonl",
 				logPrefix + ".stderr.log",
 			},
@@ -1969,8 +1972,11 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 		return false, "", err
 	}
 
-	status, err := readRoundStatus(statusPath)
+	status, err := readRoundStatus(statusWorktreePath)
 	if err != nil {
+		if persistErr := persistStatusArtifact(statusWorktreePath, statusArtifactPath); persistErr != nil && !errors.Is(persistErr, os.ErrNotExist) {
+			return false, "", persistErr
+		}
 		o.reporter.StageProgress(
 			"delivery",
 			fmt.Sprintf(
@@ -1982,7 +1988,21 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 		)
 		return false, "", nil
 	}
+	if err := persistStatusArtifact(statusWorktreePath, statusArtifactPath); err != nil {
+		return false, "", err
+	}
 	return status.Decision == "stop", status.Reason, nil
+}
+
+func persistStatusArtifact(srcPath, dstPath string) error {
+	payload, err := os.ReadFile(srcPath)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(dstPath, payload, 0o644)
 }
 
 func executePromptLabel(templateName string) string {

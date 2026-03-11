@@ -229,6 +229,15 @@ func handlePrompt(prompt string) (string, error) {
 	if strings.Contains(prompt, "pre-delivery privacy remediation stage") {
 		statusPath := regexGet("Output status path: `([^`]+)`", prompt)
 		if statusPath != "" {
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD")) != "" {
+				cwd, err := os.Getwd()
+				if err != nil {
+					return "", err
+				}
+				if !pathWithinBase(cwd, statusPath) {
+					return "", fmt.Errorf("privacy status path must stay within cwd: %s", statusPath)
+				}
+			}
 			decision := strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_DECISION"))
 			if decision == "" {
 				decision = "continue"
@@ -259,6 +268,22 @@ func workerIDFromPrompt(prompt string) int {
 		return 0
 	}
 	return id
+}
+
+func pathWithinBase(basePath, targetPath string) bool {
+	baseAbs, err := filepath.Abs(basePath)
+	if err != nil {
+		return false
+	}
+	targetAbs, err := filepath.Abs(targetPath)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(baseAbs, targetAbs)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) && rel != "..")
 }
 
 func sleepFromEnv(raw string) bool {
