@@ -40,7 +40,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-27 | If an execute round produces no changes, stop additional rounds. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-28 | Encourage local commits throughout execution; ensure changed round work is committed locally (no empty commits) before round completion. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-29 | Local candidate branch naming uses `deepreview/candidate/<source-branch>/<run-id>`. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
-| R-30 | Default PR body includes sections: round summary, key fixes, verification evidence, residual risks. | `docs/spec.md`, `docs/decisions.md` |
+| R-30 | Default final PR body uses canonical sections: summary, what changed and why, round outcomes, verification, risks and follow-ups, and final status. | `docs/spec.md`, `docs/decisions.md`, `prompts/delivery/pr-description-summary.md` |
 | R-31 | Verification execution is codex-led; codex should run available tests/pre-commit/local CI checks and report outcomes. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-32 | Round stop-flag file uses a strict schema with enum decision values and deterministic run-artifact path. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-33 | Prompt templates are file-based and unversioned. | `docs/spec.md`, `docs/decisions.md` |
