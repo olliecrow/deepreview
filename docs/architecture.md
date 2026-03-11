@@ -34,6 +34,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 3. Round loop (`round = 1..max_rounds`):
 - create `N` independent review worktrees from current candidate head
 - run `N` concurrent Codex independent reviews using one shared independent-review prompt template
+- when source branch equals default branch, treat branch diff as orientation only and run independent review as a current-state repository audit
 - require all review workers to complete successfully and emit one markdown review artifact each
 - monitor worker activity (stdout/stderr + filesystem/git-change evidence); cancel and restart inactive workers with bounded retries
 - collect report artifacts needed for execute prompts
@@ -47,6 +48,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - prompt 4: cleanup/summary/commit (docs/decision upkeep, round status flag write, and complete round artifacts)
 - after prompt queue completion, orchestrator performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist)
 - apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
+- all Codex workers inherit worktree-local temp/cache defaults so verification tools do not write to host-global caches outside the worktree sandbox
 - allow local checkpoint commits throughout execution; never push during rounds
 - Codex writes round status file at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - aggressively remove execute worktree and transient per-round artifacts
