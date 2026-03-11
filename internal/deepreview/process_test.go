@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"runtime"
 	"testing"
 	"time"
 )
@@ -52,10 +51,6 @@ func TestSetRunCommandContextAppliesToRunCommand(t *testing.T) {
 }
 
 func TestTerminateActiveCommandsStopsInFlightCommand(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("unix-only process group behavior")
-	}
-
 	done := make(chan error, 1)
 	go func() {
 		_, err := RunCommandContext(context.Background(), []string{"/usr/bin/env", "sh", "-lc", "sleep 5"}, "", "", true, 0)

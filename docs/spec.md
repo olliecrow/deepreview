@@ -16,6 +16,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - project/tool naming is always `deepreview` (lowercase, one word).
 - repository posture is open-source-ready even while private.
 - no secrets, confidential data, or personal information may be committed.
+- supported host operating systems are macOS and Linux only; Windows compatibility is out of scope and should be removed rather than maintained.
 - deepreview operates only in managed workspace paths under `~/deepreview`.
 - deepreview must not operate in the user's own active checkout.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.

@@ -194,7 +194,6 @@ var personalRiskyPatterns = []*regexp.Regexp{
 var privatePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?m)/Users/\S+`),
 	regexp.MustCompile(`(?m)/home/\S+`),
-	regexp.MustCompile(`(?m)[A-Za-z]:\\[A-Za-z0-9_.~\-][^\s]*`),
 }
 var allowedPlaceholderEmailDomains = map[string]struct{}{
 	"example.com": {},
@@ -617,9 +616,6 @@ func lockLooksStale(lockPath string, payload []byte) bool {
 func isPIDAlive(pid int) bool {
 	if pid <= 0 {
 		return false
-	}
-	if runtime.GOOS == "windows" {
-		return true
 	}
 	process, err := os.FindProcess(pid)
 	if err != nil {

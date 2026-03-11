@@ -7,11 +7,12 @@ These preferences define how `deepreview` should be maintained as an open-source
 - Keep behavior deterministic and bounded across review rounds.
 - Prefer clear, testable pipeline rules over implicit behavior.
 - Keep changes small and easy to reason about, especially around delivery logic.
+- Support only macOS and Linux hosts; do not preserve Windows compatibility code or documentation.
 
 ## Security and Confidentiality
 
 - Never commit secrets, credentials, tokens, API keys, or private key material.
-- Never commit private/sensitive machine paths; use placeholders such as `/path/to/project`, `/Users/YOU`, `/home/user`, or `C:\\Users\\USERNAME`.
+- Never commit private/sensitive machine paths; use generic placeholders such as `/path/to/project`.
 - Keep local runtime state untracked (`.env*`, `.claude/`, `.codex/`, run artifacts, temp files).
 - If sensitive data is found in history, rotate credentials and scrub history before publication.
 
