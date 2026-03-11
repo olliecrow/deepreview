@@ -6,9 +6,29 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var sanitizeSegmentRe = regexp.MustCompile(`[^A-Za-z0-9._/-]+`)
+
+var worktreeOperationalExcludePatterns = []string{
+	".deepreview/",
+	".tmp/go-build-cache/",
+	".tmp/",
+	".codex/",
+	".claude/",
+	".cache/",
+	".pytest_cache/",
+	".mypy_cache/",
+	".ruff_cache/",
+	".tox/",
+	".nox/",
+}
+
+const (
+	operationalExcludeBlockStart = "# deepreview operational artifacts: begin"
+	operationalExcludeBlockEnd   = "# deepreview operational artifacts: end"
+)
 
 func SanitizeSegment(text string) string {
 	sanitized := sanitizeSegmentRe.ReplaceAllString(text, "-")
@@ -114,8 +134,161 @@ func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 		}
 		return err
 	}
-	_, err := RunCommandContext(context.Background(), []string{gitBin, "-C", repoPath, "worktree", "remove", "--force", worktreePath}, "", "", true, 0)
-	return err
+	var removeErr error
+	for attempt := 0; attempt < 3; attempt++ {
+		_, removeErr = RunCommandContext(
+			context.Background(),
+			[]string{gitBin, "-C", repoPath, "worktree", "remove", "--force", worktreePath},
+			"",
+			"",
+			true,
+			0,
+		)
+		if statErr := pruneStaleWorktree(repoPath, gitBin, worktreePath); statErr == nil {
+			return nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if err := os.RemoveAll(worktreePath); err != nil && !os.IsNotExist(err) {
+		if removeErr != nil {
+			return removeErr
+		}
+		return err
+	}
+	if err := pruneStaleWorktree(repoPath, gitBin, worktreePath); err != nil {
+		if removeErr != nil {
+			return removeErr
+		}
+		return err
+	}
+	return nil
+}
+
+func pruneStaleWorktree(repoPath, gitBin, worktreePath string) error {
+	_, pruneErr := RunCommandContext(
+		context.Background(),
+		[]string{gitBin, "-C", repoPath, "worktree", "prune", "--expire", "now"},
+		"",
+		"",
+		true,
+		0,
+	)
+	if pruneErr != nil {
+		return pruneErr
+	}
+	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	return NewDeepReviewError("worktree path still exists after prune: %s", worktreePath)
+}
+
+func EnsureWorktreeOperationalExcludes(repoPath, gitBin string) error {
+	excludePath, err := Git(repoPath, gitBin, true, "rev-parse", "--git-path", "info/exclude")
+	if err != nil {
+		return err
+	}
+	existingBytes, err := os.ReadFile(excludePath)
+	if err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	existing := string(existingBytes)
+	patterns, err := managedOperationalExcludePatterns(repoPath, gitBin)
+	if err != nil {
+		return err
+	}
+	blockLines := []string{operationalExcludeBlockStart}
+	blockLines = append(blockLines, patterns...)
+	blockLines = append(blockLines, operationalExcludeBlockEnd)
+	block := strings.Join(blockLines, "\n") + "\n"
+	updated := upsertManagedExcludeBlock(existing, block)
+	if updated == existing {
+		return nil
+	}
+	if err := os.MkdirAll(filepath.Dir(excludePath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(excludePath, []byte(updated), 0o644)
+}
+
+func managedOperationalExcludePatterns(repoPath, gitBin string) ([]string, error) {
+	patterns := make([]string, 0, len(worktreeOperationalExcludePatterns))
+	for _, pattern := range worktreeOperationalExcludePatterns {
+		relPath := strings.TrimSuffix(pattern, "/")
+		if relPath == "" {
+			continue
+		}
+		if relPath == ".deepreview" {
+			patterns = append(patterns, pattern)
+			continue
+		}
+		tracked, err := repoHasTrackedEntries(repoPath, gitBin, relPath)
+		if err != nil {
+			return nil, err
+		}
+		if tracked {
+			continue
+		}
+		patterns = append(patterns, pattern)
+	}
+	return patterns, nil
+}
+
+func upsertManagedExcludeBlock(existing, block string) string {
+	start := strings.Index(existing, operationalExcludeBlockStart)
+	if start >= 0 {
+		end := strings.Index(existing[start:], operationalExcludeBlockEnd)
+		if end >= 0 {
+			end += start + len(operationalExcludeBlockEnd)
+			if end < len(existing) && existing[end] == '\n' {
+				end++
+			}
+			existing = existing[:start] + existing[end:]
+		}
+	}
+	existing = strings.TrimRight(existing, "\n")
+	if existing == "" {
+		return block
+	}
+	return existing + "\n\n" + block
+}
+
+func CleanupUntrackedOperationalArtifacts(repoPath, gitBin string) error {
+	for _, pattern := range worktreeOperationalExcludePatterns {
+		relPath := strings.TrimSuffix(pattern, "/")
+		if relPath == "" {
+			continue
+		}
+		tracked, err := repoHasTrackedEntries(repoPath, gitBin, relPath)
+		if err != nil {
+			return err
+		}
+		if tracked {
+			continue
+		}
+		targetPath := filepath.Join(repoPath, filepath.FromSlash(relPath))
+		if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
+}
+
+func repoHasTrackedEntries(repoPath, gitBin, relPath string) (bool, error) {
+	out, err := Git(repoPath, gitBin, true, "ls-files", "--", relPath)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
+}
+
+func RefHasTrackedEntries(repoPath, gitBin, ref, relPath string) (bool, error) {
+	out, err := Git(repoPath, gitBin, true, "ls-tree", "-r", "--name-only", ref, "--", relPath)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(out) != "", nil
 }
 
 func HasUncommittedChanges(repoPath, gitBin string) (bool, error) {

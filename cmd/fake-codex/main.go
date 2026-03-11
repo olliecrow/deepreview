@@ -123,6 +123,28 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_OPERATIONAL_TMP")) != "" {
+			if err := writeText(filepath.Join(".", ".tmp", "go-build-cache", "synthetic-cache.txt"), "cache\n"); err != nil {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_FORCE_ADD_OPERATIONAL_TMP")) != "" {
+			target := filepath.Join(".", ".tmp", "go-build-cache", "forced-cache.txt")
+			if err := writeText(target, "forced cache\n"); err != nil {
+				return "", err
+			}
+			if _, err := runGit("add", "-f", filepath.ToSlash(target)); err != nil {
+				return "", err
+			}
+			if _, err := runGit("commit", "-m", "deepreview: force add operational tmp"); err != nil {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_ADD_REPO_TMP_FILE")) != "" {
+			if err := writeText(filepath.Join(".", ".tmp", "repo-added.txt"), "repo tmp file\n"); err != nil {
+				return "", err
+			}
+		}
 		auditOnly := strings.Contains(prompt, "automatic final audit round")
 		if auditOnly {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE")) != "" {
@@ -138,13 +160,18 @@ func handlePrompt(prompt string) (string, error) {
 		}
 		if os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE") == "" && !auditOnly {
 			changeContent := "round change\n"
+			changePath := filepath.Join(".", "deepreview_test_round.txt")
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE")) != "" {
 				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE")) != "" {
 				changeContent = "key " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n"
 			}
-			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), changeContent); err != nil {
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
+				changePath = filepath.Join(".", "docs", "generated.md")
+				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
+			}
+			if err := writeText(changePath, changeContent); err != nil {
 				return "", err
 			}
 			commitMessage := strings.TrimSpace(os.Getenv("FAKE_CODEX_CHANGE_COMMIT_MESSAGE"))

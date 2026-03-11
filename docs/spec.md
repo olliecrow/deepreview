@@ -42,6 +42,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute prompt-3 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
 - execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and produce complete round artifacts for orchestrator post-processing.
 - execute-stage finalization (prompt-4 outputs plus orchestrator post-processing) must ensure changed work is committed locally.
+- execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` remains reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
 - round progression is determined by repository changes produced in execute stage.
 - if an execute round produces repository changes, deepreview must run at least one additional review round.
 - if the last allowed execute round produces repository changes, deepreview must schedule one automatic final audit round with the same review strictness and no repository edits.
@@ -56,7 +57,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - run `./setup_env.sh` when `setup_env.sh` exists
   - run both gates in an isolated detached worktree created at the candidate branch HEAD to match the exact content being delivered
 - default delivery mode is `pr` and must not push source branch directly.
-- in `pr` mode, run a bounded pre-delivery privacy remediation loop (up to 3 Codex-guided attempts) that inspects delivery commit messages and changed files for sensitive patterns.
+- in `pr` mode, run a bounded pre-delivery privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree so changed-file scans and auto-remediation inspect the exact candidate content rather than the managed repo's default checked-out branch.
 - in `pr` mode, privacy remediation attempts may stop early when Codex reports `stop`; otherwise proceed automatically after the configured max attempts.
 - in `pr` mode, privacy remediation is a fix gate (attempted remediation + scan feedback), not a hard terminal blocker after max attempts.
 - in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.

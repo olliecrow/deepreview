@@ -172,6 +172,7 @@ func TestEndToEndYoloWithFakeCodex(t *testing.T) {
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_WRITE_OPERATIONAL_TMP=1")
 	output := runCmd(t, root, env,
 		bin,
 		"review",
@@ -197,6 +198,9 @@ func TestEndToEndYoloWithFakeCodex(t *testing.T) {
 	deliveredTree := runCmd(t, td, nil, "git", "-C", userClone, "ls-tree", "-r", "--name-only", "origin/feature/test")
 	if strings.Contains(deliveredTree, ".deepreview/") {
 		t.Fatalf("yolo delivery must not include .deepreview artifacts, tree:\n%s", deliveredTree)
+	}
+	if strings.Contains(deliveredTree, ".tmp/") {
+		t.Fatalf("yolo delivery must not include .tmp artifacts, tree:\n%s", deliveredTree)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -270,6 +274,7 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
+		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
 		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
 		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
@@ -330,6 +335,9 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 		tree := runCmd(t, td, nil, "git", "-C", userClone, "ls-tree", "-r", "--name-only", ref)
 		if strings.Contains(tree, ".deepreview/") {
 			t.Fatalf("pr delivery branch must not include .deepreview artifacts, ref=%s tree:\n%s", ref, tree)
+		}
+		if strings.Contains(tree, ".tmp/") {
+			t.Fatalf("pr delivery branch must not include .tmp artifacts, ref=%s tree:\n%s", ref, tree)
 		}
 	}
 
@@ -680,6 +688,92 @@ func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
 	}
 }
 
+func TestEndToEndPRModeAutoSanitizesCandidateBranchDocsWithoutMutatingDefaultBranch(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "docs", "generated.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "docs/generated.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE=1")
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected pr delivery output, got: %s", output)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	mainDoc := runCmd(t, td, nil, "git", "-C", userClone, "show", "origin/main:docs/generated.md")
+	if strings.Contains(mainDoc, "/Users/") {
+		t.Fatalf("default branch doc must not be mutated by candidate privacy remediation: %s", mainDoc)
+	}
+	if strings.TrimSpace(mainDoc) != "base" {
+		t.Fatalf("expected default branch doc to remain unchanged, got: %q", mainDoc)
+	}
+
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	var deliveryRef string
+	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
+		ref = strings.TrimSpace(ref)
+		if strings.Contains(ref, "origin/deepreview/feature/test/") {
+			deliveryRef = ref
+			break
+		}
+	}
+	if deliveryRef == "" {
+		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
+	}
+	deliveredDoc := runCmd(t, td, nil, "git", "-C", userClone, "show", deliveryRef+":docs/generated.md")
+	if strings.Contains(deliveredDoc, "/Users/") {
+		t.Fatalf("expected candidate doc to be sanitized before delivery, got: %s", deliveredDoc)
+	}
+	if !strings.Contains(deliveredDoc, "/path/to/project") {
+		t.Fatalf("expected candidate doc to contain sanitized placeholder, got: %s", deliveredDoc)
+	}
+}
+
 func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
@@ -745,6 +839,199 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-02.md")); err != nil {
 		t.Fatalf("expected worker-02 review artifact after restart, got: %v", err)
+	}
+}
+
+func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDetection(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
+	)
+	output, _ := runCmdCapture(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
+		t.Fatalf("expected no second round when only operational artifacts were produced")
+	}
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing final-summary.md: %v", err)
+	}
+	if !strings.Contains(string(finalSummaryBytes), "- delivery: `skipped`") {
+		t.Fatalf("expected skipped delivery in final summary")
+	}
+}
+
+func TestEndToEndPRModeAllowsNewTrackedFilesUnderRepoOwnedOperationalPath(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, ".tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, ".tmp", "tracked.txt"), []byte("repo-owned\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", ".tmp/tracked.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_ADD_REPO_TMP_FILE=1",
+		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected pr delivery output, got: %s", output)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	var deliveryRef string
+	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
+		ref = strings.TrimSpace(ref)
+		if strings.Contains(ref, "origin/deepreview/main/") {
+			deliveryRef = ref
+			break
+		}
+	}
+	if deliveryRef == "" {
+		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
+	}
+	tree := runCmd(t, td, nil, "git", "-C", userClone, "ls-tree", "-r", "--name-only", deliveryRef)
+	if !strings.Contains(tree, ".tmp/repo-added.txt") {
+		t.Fatalf("expected repo-owned .tmp file to be delivered, ref=%s tree:\n%s", deliveryRef, tree)
+	}
+	if strings.Contains(tree, ".tmp/go-build-cache/") {
+		t.Fatalf("did not expect operational go-build-cache under repo-owned .tmp path, ref=%s tree:\n%s", deliveryRef, tree)
+	}
+}
+
+func TestRunFailsWhenExecuteForceCommitsNewOperationalArtifacts(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_FORCE_ADD_OPERATIONAL_TMP=1")
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "operational artifacts must not be committed: .tmp/go-build-cache/forced-cache.txt") {
+		t.Fatalf("expected operational artifact validation failure, got: %s", output)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	if _, err := os.Stat(filepath.Join(runDir, "final-summary.md")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect final-summary.md after execute-stage validation failure")
 	}
 }
 

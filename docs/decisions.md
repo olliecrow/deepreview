@@ -607,7 +607,7 @@ Treating privacy as a bounded fix loop keeps privacy hygiene proactive while pre
 Trade-offs:
 Residual privacy findings may still exist when bounded attempts are exhausted; this approach prioritizes bounded autonomy and delivery continuity over hard-stop guarantees at this gate.
 Enforcement:
-PR-mode delivery runs a Codex-guided privacy remediation attempt loop (`max=3`) before push/PR actions; attempts may stop early on Codex `stop`, and delivery proceeds by policy after bounded attempts.
+PR-mode delivery runs a Codex-guided privacy remediation attempt loop (`max=3`) in a candidate-branch worktree before push/PR actions; attempts may stop early on Codex `stop`, and delivery proceeds by policy after bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
 References:
 `internal/deepreview/orchestrator.go`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
 
@@ -716,15 +716,15 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`
 
 Decision:
-Internal deepreview operational artifacts must never be delivered to source repositories (no commit/push/PR diff entries under `.deepreview/`).
+Internal deepreview operational artifacts must never be delivered to source repositories, and untracked runtime directories created during execute rounds must not affect round change detection or auto-commit decisions.
 Context:
-Execute-stage prompts require intermediate files (triage/plan/verification/status/summary) for orchestration, but these are control-plane artifacts, not user repository content.
+Execute-stage prompts require intermediate files (triage/plan/verification/status/summary) for orchestration, and round-local verification often creates temporary caches or helper state (`.tmp/`, `.codex/`, `.claude/`, cache dirs) that are not repository changes.
 Rationale:
-Preventing operational artifact delivery keeps PRs clean, avoids leaking internal review machinery, and aligns output with user expectations (only meaningful repository changes should be delivered).
+Preventing operational artifact delivery keeps PRs clean, avoids leaking internal review machinery, and prevents false-positive extra rounds caused by untracked runtime state being mistaken for meaningful repository changes.
 Trade-offs:
-Adds delivery validation and execute-stage cleanup/auto-commit logic to separate operational files from real repository changes.
+Adds worktree-local git exclude management plus execute-stage cleanup logic to separate operational files from real repository changes. The excludes are installed only for operational paths the source repository does not already track, so repositories that intentionally version content under paths like `.tmp/` keep those files deliverable; `.deepreview/` remains reserved and blocked; and known nested runtime caches (for example `.tmp/go-build-cache/`) stay protected even inside a repo-owned parent directory unless the source repository already tracks that subtree.
 Enforcement:
-Execute stage removes internal `.deepreview` worktree artifacts before final commit checks, auto-commits remaining repository changes when needed, validates no internal artifact paths exist in candidate commit range, and blocks delivery if branch diff contains `.deepreview/`.
+Execute stage installs deepreview-managed untracked excludes for operational directories that are untracked in the candidate repository, removes round-local operational directories before final commit checks when the repository does not already own those paths, auto-commits remaining repository changes when needed, validates no internal `.deepreview/` artifact paths exist in candidate commit range, and blocks delivery only for newly introduced operational-artifact paths that were absent from the source branch.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/gitops.go`, `prompts/execute/04-cleanup-summary-commit.md`, `internal/deepreview/integration_test.go`
 

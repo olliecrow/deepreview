@@ -29,7 +29,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 12. In yolo mode, it pushes directly to your source branch.
 13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
 14. Before delivery, deepreview resolves candidate branch HEAD and runs repository quality gates in a detached worktree snapshot of that candidate (`pre-commit run --all-files` when configured, plus `./setup_env.sh` when present).
-15. In PR mode, deepreview runs a bounded privacy remediation loop (up to 3 Codex-guided attempts) immediately before push/PR delivery, and then proceeds with PR delivery by policy after the bounded attempts.
+15. In PR mode, deepreview runs a bounded privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree immediately before push/PR delivery, and then proceeds with PR delivery by policy after the bounded attempts.
 
 ## Requirements
 
