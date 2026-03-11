@@ -638,6 +638,32 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/tui.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/gitops.go`
 
 Decision:
+Write privacy remediation status inside the remediation worktree, then persist it into run artifacts after the worker exits.
+Context:
+Codex privacy-remediation workers execute under a write sandbox limited to the remediation worktree. Writing `privacy-status.json` directly into the run artifact directory can fail even when remediation itself succeeds.
+Rationale:
+Keeping the worker-written status file inside the worktree matches the worker sandbox while still preserving the status artifact under the run directory for diagnostics and tests.
+Trade-offs:
+This adds one post-run copy step for the status artifact. If artifact persistence fails after a valid worker write, the attempt now fails explicitly instead of silently degrading diagnostics.
+Enforcement:
+Privacy remediation prompts receive a worktree-local `OUTPUT_STATUS_PATH`; orchestrator copies the resulting JSON into the attempt artifact directory before consuming it, and integration coverage requires the worker path to stay within the remediation worktree.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`
+
+Decision:
+Evaluate outbound push diffs against added lines only.
+Context:
+The push-range sensitive-text hook previously scanned full patches, including deleted lines. That caused privacy cleanups to be blocked by the very sensitive text they were removing.
+Rationale:
+Only newly added lines can leak sensitive content into new history. Ignoring deletions and patch context keeps the hook aligned with its security goal without blocking remediation commits.
+Trade-offs:
+The hook no longer reports sensitive text that appears only in deleted/context lines within an outbound patch. Commit messages remain scanned separately.
+Enforcement:
+The push-range hook extracts added patch lines before running sensitive-text checks, and regression tests cover both deleted-sensitive-line cleanup and added-sensitive-line rejection.
+References:
+`scripts/security/check-push-range.sh`, `scripts/security/check-sensitive-text.sh`, `internal/deepreview/security_scripts_test.go`
+
+Decision:
 When source branch is inferred, require local branch readiness: no tracked local changes and exact local/upstream synchronization.
 Context:
 deepreview reviews remote branch state; inferred local context should match the remote state to avoid reviewing stale or partial work.

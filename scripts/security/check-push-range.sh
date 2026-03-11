@@ -29,9 +29,12 @@ trap 'rm -rf "${tmp_dir}"' EXIT
 
 commit_msg_file="${tmp_dir}/commit_messages.txt"
 patch_file="${tmp_dir}/patches.diff"
+added_lines_file="${tmp_dir}/added_lines.txt"
 
 git log --format='%H%n%s%n%b%n' "${commits[@]}" > "${commit_msg_file}"
 git show --format= --patch --no-color "${commits[@]}" > "${patch_file}"
+# Only newly added lines can leak sensitive text into outbound history.
+awk 'BEGIN { added=0 } /^\+\+\+/ { next } /^\+/ { print substr($0, 2); added=1 } END { if (!added) exit 0 }' "${patch_file}" > "${added_lines_file}"
 
 bash scripts/security/check-sensitive-text.sh --context=push-commit-message "${commit_msg_file}"
-bash scripts/security/check-sensitive-text.sh --context=push-diff "${patch_file}"
+bash scripts/security/check-sensitive-text.sh --context=push-diff "${added_lines_file}"
