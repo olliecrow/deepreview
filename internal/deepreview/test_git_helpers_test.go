@@ -37,12 +37,17 @@ func withWorkingDir(t *testing.T, dir string, fn func()) {
 func createSyncedGitHubLikeRepo(t *testing.T, branch string) string {
 	t.Helper()
 	td := t.TempDir()
+	remote := filepath.Join(td, "remotes", "github.com", "example-org", "example-repo.git")
 	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(filepath.Dir(remote), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, repo)
 	if err := os.MkdirAll(repo, 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	runGitCommand(t, td, "init", repo)
 	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
 	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
 	runGitCommand(t, td, "-C", repo, "checkout", "-b", branch)
@@ -51,11 +56,7 @@ func createSyncedGitHubLikeRepo(t *testing.T, branch string) string {
 	}
 	runGitCommand(t, td, "-C", repo, "add", "README.md")
 	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
-	runGitCommand(t, td, "-C", repo, "remote", "add", "origin", "https://github.com/example-org/example-repo.git")
-
-	head := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
-	runGitCommand(t, td, "-C", repo, "update-ref", "refs/remotes/origin/"+branch, head)
-	runGitCommand(t, td, "-C", repo, "branch", "--set-upstream-to=origin/"+branch, branch)
+	runGitCommand(t, td, "-C", repo, "push", "-u", "origin", branch)
 	return repo
 }
 
@@ -70,4 +71,17 @@ func canonicalPath(t *testing.T, path string) string {
 		return abs
 	}
 	return resolved
+}
+
+func readGitPathFile(t *testing.T, repoPath, gitPath string) (string, bool) {
+	t.Helper()
+	resolvedPath := strings.TrimSpace(runGitCommand(t, repoPath, "rev-parse", "--git-path", gitPath))
+	content, err := os.ReadFile(resolvedPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", false
+		}
+		t.Fatalf("read git path %s failed: %v", gitPath, err)
+	}
+	return string(content), true
 }

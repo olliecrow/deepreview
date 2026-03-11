@@ -19,6 +19,9 @@ func setSourceRootDetectorForTest(t *testing.T, detector func() (string, bool)) 
 func TestInferRepoAndBranchFromCurrentDirectory(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {
+		beforeFetchHead, beforeFetchHeadExists := readGitPathFile(t, repo, "FETCH_HEAD")
+		beforeUpstreamSHA := strings.TrimSpace(runGitCommand(t, repo, "rev-parse", "--verify", "refs/remotes/origin/feature/test"))
+
 		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
 		if err != nil {
 			t.Fatalf("inferRepoAndBranch failed: %v", err)
@@ -29,6 +32,15 @@ func TestInferRepoAndBranchFromCurrentDirectory(t *testing.T) {
 		}
 		if resolvedBranch != "feature/test" {
 			t.Fatalf("expected inferred branch feature/test, got %s", resolvedBranch)
+		}
+
+		afterFetchHead, afterFetchHeadExists := readGitPathFile(t, repo, "FETCH_HEAD")
+		if beforeFetchHeadExists != afterFetchHeadExists || beforeFetchHead != afterFetchHead {
+			t.Fatalf("expected FETCH_HEAD to remain unchanged, before exists=%t after exists=%t", beforeFetchHeadExists, afterFetchHeadExists)
+		}
+		afterUpstreamSHA := strings.TrimSpace(runGitCommand(t, repo, "rev-parse", "--verify", "refs/remotes/origin/feature/test"))
+		if afterUpstreamSHA != beforeUpstreamSHA {
+			t.Fatalf("expected remote-tracking ref to remain unchanged, before=%s after=%s", beforeUpstreamSHA, afterUpstreamSHA)
 		}
 	})
 }
@@ -155,6 +167,8 @@ func TestEnsureBranchReadyForRemoteReviewRejectsStaleTrackingRef(t *testing.T) {
 
 	runGitCommand(t, td, "clone", remote, user)
 	runGitCommand(t, user, "checkout", "feature/test")
+	beforeFetchHead, beforeFetchHeadExists := readGitPathFile(t, user, "FETCH_HEAD")
+	beforeUpstreamSHA := strings.TrimSpace(runGitCommand(t, user, "rev-parse", "--verify", "refs/remotes/origin/feature/test"))
 
 	runGitCommand(t, td, "clone", remote, other)
 	runGitCommand(t, other, "checkout", "feature/test")
@@ -175,8 +189,16 @@ func TestEnsureBranchReadyForRemoteReviewRejectsStaleTrackingRef(t *testing.T) {
 	if err == nil {
 		t.Fatalf("expected stale remote-tracking ref to be rejected")
 	}
-	if !strings.Contains(err.Error(), "not synchronized") {
+	if !strings.Contains(err.Error(), "stale versus remote branch") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	afterFetchHead, afterFetchHeadExists := readGitPathFile(t, user, "FETCH_HEAD")
+	if beforeFetchHeadExists != afterFetchHeadExists || beforeFetchHead != afterFetchHead {
+		t.Fatalf("expected FETCH_HEAD to remain unchanged, before exists=%t after exists=%t", beforeFetchHeadExists, afterFetchHeadExists)
+	}
+	afterUpstreamSHA := strings.TrimSpace(runGitCommand(t, user, "rev-parse", "--verify", "refs/remotes/origin/feature/test"))
+	if afterUpstreamSHA != beforeUpstreamSHA {
+		t.Fatalf("expected remote-tracking ref to remain unchanged, before=%s after=%s", beforeUpstreamSHA, afterUpstreamSHA)
 	}
 }
 

@@ -209,17 +209,25 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 	if err != nil {
 		return err
 	}
-	if err := refreshUpstreamRef(gitBin, state.Path, upstreamRef); err != nil {
+	upstreamSHA, err := Git(state.Path, gitBin, true, "rev-parse", "--verify", upstreamRef)
+	if err != nil {
 		return err
 	}
-
 	localSHA, err := Git(state.Path, gitBin, true, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return err
 	}
-	upstreamSHA, err := Git(state.Path, gitBin, true, "rev-parse", "--verify", upstreamRef)
+	remoteSHA, err := resolveRemoteBranchSHA(gitBin, state.Path, upstreamRef)
 	if err != nil {
 		return err
+	}
+	if upstreamSHA != remoteSHA {
+		return NewDeepReviewError(
+			"local tracking ref `%s` is stale versus remote branch (local=%s remote=%s); fetch/pull so local tracking state matches remote before review",
+			upstreamRef,
+			shortSHA(upstreamSHA),
+			shortSHA(remoteSHA),
+		)
 	}
 	if localSHA == upstreamSHA {
 		return nil
@@ -237,25 +245,38 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 	)
 }
 
-func refreshUpstreamRef(gitBin, repoPath, upstreamRef string) error {
+func splitUpstreamRef(upstreamRef string) (remote string, branchRef string, err error) {
 	parts := strings.SplitN(strings.TrimSpace(upstreamRef), "/", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return NewDeepReviewError("unable to refresh upstream branch state: invalid upstream ref `%s`", upstreamRef)
+		return "", "", NewDeepReviewError("unable to validate upstream branch state: invalid upstream ref `%s`", upstreamRef)
 	}
-	remote := parts[0]
-	branchRef := parts[1]
-	targetRef := "refs/remotes/" + upstreamRef
-	_, err := RunCommand(
-		[]string{gitBin, "-C", repoPath, "fetch", "--no-tags", remote, branchRef + ":" + targetRef},
+	return parts[0], parts[1], nil
+}
+
+func resolveRemoteBranchSHA(gitBin, repoPath, upstreamRef string) (string, error) {
+	remote, branchRef, err := splitUpstreamRef(upstreamRef)
+	if err != nil {
+		return "", err
+	}
+	remoteRef := "refs/heads/" + branchRef
+	completed, err := RunCommand(
+		[]string{gitBin, "-C", repoPath, "ls-remote", "--exit-code", remote, remoteRef},
 		"",
 		"",
-		true,
+		false,
 		0,
 	)
 	if err != nil {
-		return NewDeepReviewError("unable to refresh upstream branch `%s`: %v", upstreamRef, err)
+		return "", err
 	}
-	return nil
+	if completed.ReturnCode != 0 {
+		return "", NewDeepReviewError("unable to resolve remote branch `%s` via `%s`", branchRef, remote)
+	}
+	fields := strings.Fields(strings.TrimSpace(completed.Stdout))
+	if len(fields) == 0 || strings.TrimSpace(fields[0]) == "" {
+		return "", NewDeepReviewError("unable to parse remote branch SHA for `%s`", remoteRef)
+	}
+	return strings.TrimSpace(fields[0]), nil
 }
 
 func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {
