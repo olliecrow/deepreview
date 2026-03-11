@@ -189,6 +189,7 @@ func EnsureWorktreeOperationalExcludes(repoPath, gitBin string) error {
 	if err != nil {
 		return err
 	}
+	excludePath = resolveGitPath(repoPath, excludePath)
 	existingBytes, err := os.ReadFile(excludePath)
 	if err != nil && !os.IsNotExist(err) {
 		return err
@@ -210,6 +211,13 @@ func EnsureWorktreeOperationalExcludes(repoPath, gitBin string) error {
 		return err
 	}
 	return os.WriteFile(excludePath, []byte(updated), 0o644)
+}
+
+func resolveGitPath(repoPath, gitPath string) string {
+	if filepath.IsAbs(gitPath) {
+		return gitPath
+	}
+	return filepath.Join(repoPath, filepath.FromSlash(gitPath))
 }
 
 func managedOperationalExcludePatterns(repoPath, gitBin string) ([]string, error) {
