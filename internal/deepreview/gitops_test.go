@@ -103,13 +103,13 @@ func TestEnsureWorktreeOperationalExcludesResolvesRelativeGitPathAgainstRepo(t *
 	}
 	excludeContent := string(excludeBytes)
 	if !strings.Contains(excludeContent, operationalExcludeBlockStart) {
-		t.Fatalf("expected managed exclude block start, got:\n%s", excludeContent)
+		t.Fatalf("expected managed exclude block start; content follows\n%s", excludeContent)
 	}
 	if !strings.Contains(excludeContent, operationalExcludeBlockEnd) {
-		t.Fatalf("expected managed exclude block end, got:\n%s", excludeContent)
+		t.Fatalf("expected managed exclude block end; content follows\n%s", excludeContent)
 	}
 	if !strings.Contains(excludeContent, ".deepreview/") {
-		t.Fatalf("expected .deepreview pattern in exclude block, got:\n%s", excludeContent)
+		t.Fatalf("expected .deepreview pattern in exclude block; content follows\n%s", excludeContent)
 	}
 
 	withWorkingDir(t, caller, func() {
@@ -122,6 +122,6 @@ func TestEnsureWorktreeOperationalExcludesResolvesRelativeGitPathAgainstRepo(t *
 		t.Fatalf("expected repo exclude file after second run: %v", err)
 	}
 	if string(excludeBytesAfter) != excludeContent {
-		t.Fatalf("expected idempotent exclude content\nbefore:\n%s\nafter:\n%s", excludeContent, string(excludeBytesAfter))
+		t.Fatalf("expected idempotent exclude content\nprevious content\n%s\ncurrent content\n%s", excludeContent, string(excludeBytesAfter))
 	}
 }
