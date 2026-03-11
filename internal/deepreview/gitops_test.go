@@ -182,6 +182,7 @@ func TestCommitAllChangesUsesProvidedIdentityAndDisablesSigning(t *testing.T) {
 func TestResolveCommitIdentityUsesRepoConfigForLocalRepo(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(td, "empty.gitconfig"))
 	runGitCommand(t, td, "init", "-b", "main", repo)
 	runGitCommand(t, td, "-C", repo, "config", "user.email", "repo-user@example.com")
 	runGitCommand(t, td, "-C", repo, "config", "user.name", "Repo User")
@@ -195,6 +196,45 @@ func TestResolveCommitIdentityUsesRepoConfigForLocalRepo(t *testing.T) {
 	}
 	if identity.Email != "repo-user@example.com" {
 		t.Fatalf("expected repo user email, got %q", identity.Email)
+	}
+}
+
+func TestResolveCommitIdentityUsesDeepreviewEnvOverride(t *testing.T) {
+	t.Setenv(deepreviewCommitNameEnv, "Env User")
+	t.Setenv(deepreviewCommitEmailEnv, "env-user@example.com")
+
+	identity, err := ResolveCommitIdentity("git", "")
+	if err != nil {
+		t.Fatalf("ResolveCommitIdentity failed: %v", err)
+	}
+	if identity.Name != "Env User" {
+		t.Fatalf("expected env override name, got %q", identity.Name)
+	}
+	if identity.Email != "env-user@example.com" {
+		t.Fatalf("expected env override email, got %q", identity.Email)
+	}
+}
+
+func TestResolveCommitIdentityUsesDeepreviewGlobalOverrideBeforeRepoConfig(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	globalConfig := filepath.Join(td, "global.gitconfig")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "repo-user@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Repo User")
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	runGitCommand(t, td, "config", "--global", deepreviewCommitNameKey, "Preferred User")
+	runGitCommand(t, td, "config", "--global", deepreviewCommitEmailKey, "preferred-user@example.com")
+
+	identity, err := ResolveCommitIdentity("git", repo)
+	if err != nil {
+		t.Fatalf("ResolveCommitIdentity failed: %v", err)
+	}
+	if identity.Name != "Preferred User" {
+		t.Fatalf("expected deepreview global override name, got %q", identity.Name)
+	}
+	if identity.Email != "preferred-user@example.com" {
+		t.Fatalf("expected deepreview global override email, got %q", identity.Email)
 	}
 }
 
