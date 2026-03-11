@@ -32,6 +32,7 @@ type Orchestrator struct {
 	pushCount       int
 	lastDelivery    *DeliveryResult
 	runLockPath     string
+	commitIdentity  CommitIdentity
 }
 
 const stageHeartbeatInterval = 15 * time.Second
@@ -292,6 +293,20 @@ func (o *Orchestrator) Run() (retErr error) {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
 	}
+	identity := o.config.CommitIdentity
+	if strings.TrimSpace(identity.Name) == "" || strings.TrimSpace(identity.Email) == "" {
+		resolvedIdentity, resolveErr := ResolveCommitIdentity(o.config.GitBin, o.config.Repo)
+		if resolveErr != nil {
+			o.reporter.StageFinished(prepareStage, nil, false, progressMessage(resolveErr))
+			return resolveErr
+		}
+		identity = resolvedIdentity
+	}
+	if err := ConfigureManagedGitIdentity(o.managedRepoPath, o.config.GitBin, identity); err != nil {
+		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
+		return err
+	}
+	o.commitIdentity = identity
 	if err := EnsureWorktreeOperationalExcludes(o.managedRepoPath, o.config.GitBin); err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
@@ -1255,6 +1270,12 @@ func (o *Orchestrator) runExecuteStage(
 	roundTriagePath := filepath.Join(roundDir, "round-triage.md")
 	roundPlanPath := filepath.Join(roundDir, "round-plan.md")
 	roundVerificationPath := filepath.Join(roundDir, "round-verification.md")
+	executeSnapshotDir := filepath.Join(executeDir, "artifacts")
+	roundStatusSnapshotPath := filepath.Join(executeSnapshotDir, "round-status.json")
+	roundSummarySnapshotPath := filepath.Join(executeSnapshotDir, "round-summary.md")
+	roundTriageSnapshotPath := filepath.Join(executeSnapshotDir, "round-triage.md")
+	roundPlanSnapshotPath := filepath.Join(executeSnapshotDir, "round-plan.md")
+	roundVerificationSnapshotPath := filepath.Join(executeSnapshotDir, "round-verification.md")
 	executeArtifactsDir := filepath.Join(executeWorktree, ".deepreview", "artifacts")
 	roundStatusRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-status.json"))
 	roundSummaryRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-summary.md"))
@@ -1268,6 +1289,10 @@ func (o *Orchestrator) runExecuteStage(
 	roundVerificationWorktreePath := filepath.Join(executeArtifactsDir, "round-verification.md")
 
 	if err := os.MkdirAll(executeArtifactsDir, 0o755); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+	if err := os.MkdirAll(executeSnapshotDir, 0o755); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1394,52 +1419,47 @@ Audit-round override:
 		o.reporter.StageFinished(stageName, roundPtr(round), true, "completed")
 	}
 
-	if err := ensureCanonicalArtifact(roundStatusPath, []string{
+	if err := ensureCanonicalArtifact(roundStatusSnapshotPath, []string{
 		roundStatusWorktreePath,
 		filepath.Join(executeWorktree, "round-status.json"),
-		roundStatusPath,
 	}); err != nil {
-		err := NewDeepReviewError("round status file missing: %s", roundStatusPath)
+		err := NewDeepReviewError("round status file missing: %s", roundStatusSnapshotPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	if err := ensureCanonicalArtifact(roundSummaryPath, []string{
+	if err := ensureCanonicalArtifact(roundSummarySnapshotPath, []string{
 		roundSummaryWorktreePath,
 		filepath.Join(executeWorktree, "round-summary.md"),
-		roundSummaryPath,
 	}); err != nil {
-		err := NewDeepReviewError("round summary file missing: %s", roundSummaryPath)
+		err := NewDeepReviewError("round summary file missing: %s", roundSummarySnapshotPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	if err := ensureCanonicalArtifact(roundTriagePath, []string{
+	if err := ensureCanonicalArtifact(roundTriageSnapshotPath, []string{
 		roundTriageWorktreePath,
 		filepath.Join(executeWorktree, "round-triage.md"),
-		roundTriagePath,
 	}); err != nil {
-		err := NewDeepReviewError("round triage file missing: %s", roundTriagePath)
+		err := NewDeepReviewError("round triage file missing: %s", roundTriageSnapshotPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	if err := validateRoundTriagePolicy(roundTriagePath); err != nil {
+	if err := validateRoundTriagePolicy(roundTriageSnapshotPath); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	if err := ensureCanonicalArtifact(roundPlanPath, []string{
+	if err := ensureCanonicalArtifact(roundPlanSnapshotPath, []string{
 		roundPlanWorktreePath,
 		filepath.Join(executeWorktree, "round-plan.md"),
-		roundPlanPath,
 	}); err != nil {
-		err := NewDeepReviewError("round plan file missing: %s", roundPlanPath)
+		err := NewDeepReviewError("round plan file missing: %s", roundPlanSnapshotPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	if err := ensureCanonicalArtifact(roundVerificationPath, []string{
+	if err := ensureCanonicalArtifact(roundVerificationSnapshotPath, []string{
 		roundVerificationWorktreePath,
 		filepath.Join(executeWorktree, "round-verification.md"),
-		roundVerificationPath,
 	}); err != nil {
-		err := NewDeepReviewError("round verification file missing: %s", roundVerificationPath)
+		err := NewDeepReviewError("round verification file missing: %s", roundVerificationSnapshotPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1490,7 +1510,7 @@ Audit-round override:
 			return RoundStatus{}, "", err
 		}
 		if changed {
-			if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round)); err != nil {
+			if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round), o.commitIdentity); err != nil {
 				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 				return RoundStatus{}, "", err
 			}
@@ -1518,7 +1538,28 @@ Audit-round override:
 		return RoundStatus{}, "", err
 	}
 
-	status, err := readRoundStatus(roundStatusPath)
+	if err := ensureCanonicalArtifact(roundStatusPath, []string{roundStatusSnapshotPath}); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+	if err := ensureCanonicalArtifact(roundSummaryPath, []string{roundSummarySnapshotPath}); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+	if err := ensureCanonicalArtifact(roundTriagePath, []string{roundTriageSnapshotPath}); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+	if err := ensureCanonicalArtifact(roundPlanPath, []string{roundPlanSnapshotPath}); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+	if err := ensureCanonicalArtifact(roundVerificationPath, []string{roundVerificationSnapshotPath}); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+
+	status, err := readRoundStatus(roundStatusSnapshotPath)
 	if err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
@@ -2280,7 +2321,7 @@ func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(repoPath, candi
 	if err := os.WriteFile(targetPath, []byte(sanitized), 0o644); err != nil {
 		return false, err
 	}
-	if err := CommitAllChanges(repoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan"); err != nil {
+	if err := CommitAllChanges(repoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan", o.commitIdentity); err != nil {
 		return false, err
 	}
 	if err := CleanupUntrackedOperationalArtifacts(repoPath, o.config.GitBin); err != nil {

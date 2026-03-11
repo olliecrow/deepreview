@@ -233,6 +233,32 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
+Deepreview-managed commits use the operator's local Git identity and explicitly disable signing in managed clones/worktrees.
+Context:
+Deepreview creates internal automation commits in managed repositories and worktrees. Depending on host-level GPG signing config can make otherwise-valid runs fail for operator-environment reasons.
+Rationale:
+Using the operator's configured `user.name` and `user.email` keeps authorship aligned with the local machine, while disabling signing for DeepReview-owned commits removes an unnecessary dependency on external signer setup.
+Trade-offs:
+Automation commits created by deepreview are intentionally unsigned even when the operator normally signs interactive commits.
+Enforcement:
+Managed-clone setup writes local Git identity plus `commit.gpgsign=false`, and commit helpers pass the resolved identity with no-sign flags on each deepreview-owned commit.
+References:
+`internal/deepreview/git_identity.go`, `internal/deepreview/gitops.go`, `internal/deepreview/gitops_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Only canonically promoted round artifacts count as completed rounds in final reporting.
+Context:
+Execute prompts can produce provisional round artifacts before orchestrator post-processing finishes. If a later execute-stage commit fails, those provisional artifacts can misrepresent an uncommitted round as completed.
+Rationale:
+Completion summaries and delivery surfaces must reflect committed, durable round state rather than transient execute output.
+Trade-offs:
+Failed execute attempts may require reading diagnostic sub-artifacts instead of the top-level round summary paths.
+Enforcement:
+Execute-stage snapshots are validated first, canonical round artifacts are promoted only after execute-stage success, and completion reporting keys off promoted round summaries rather than raw status-file presence.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
 Aggressively clean stale worktrees and transient round artifacts as soon as they are no longer needed.
 Context:
 Round-based review/execute creates many temporary resources that should not accumulate.

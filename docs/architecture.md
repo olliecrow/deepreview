@@ -27,6 +27,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - replace stale managed checkout for the source branch with a fresh clone
 - fetch latest remote refs
 - resolve source-branch head SHA
+- resolve the operator's Git identity from local Git config and apply it to the managed clone with local signing disabled for deepreview-owned commits
 - initialize candidate head to latest remote source branch
 - initialize or reuse local candidate branch `deepreview/candidate/<source-branch>/<run-id>`
 - in `yolo` mode when source branch is default branch, run push dry-run preflight before rounds
@@ -46,11 +47,12 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - prompt 2: plan (high-conviction, end-to-end implementation and verification plan; no code edits)
   - prompt 3: execute/verify (apply approved changes and run codex-led verification with evidence output)
   - prompt 4: cleanup/summary/commit (docs/decision upkeep, round status flag write, and complete round artifacts)
-- after prompt queue completion, orchestrator performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist)
+- after prompt queue completion, orchestrator validates the execute outputs from provisional artifact snapshots, performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist), and only then promotes canonical per-round artifacts
 - apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
 - all Codex workers inherit worktree-local temp/cache defaults so verification tools do not write to host-global caches outside the worktree sandbox
 - allow local checkpoint commits throughout execution; never push during rounds
 - Codex writes round status file at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
+- final completion reporting counts only canonically promoted rounds; failed execute attempts may leave diagnostic snapshots but must not be reported as completed rounds
 - aggressively remove execute worktree and transient per-round artifacts
 - if execute produced changes, update candidate head to latest local committed state and continue
 - if the last allowed execute round produced changes, deepreview automatically schedules one final audit round using the same four execute prompts in audit-only mode; that round may not edit the repository and must end in a terminal `stop` decision for delivery to proceed
