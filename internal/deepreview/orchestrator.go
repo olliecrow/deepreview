@@ -235,7 +235,7 @@ func tryReadRemoteURL(gitBin, repoPath string) (string, error) {
 	return strings.TrimSpace(completed.Stdout), nil
 }
 
-func (o *Orchestrator) Run() error {
+func (o *Orchestrator) Run() (retErr error) {
 	if err := o.preflight(); err != nil {
 		return err
 	}
@@ -254,10 +254,29 @@ func (o *Orchestrator) Run() error {
 	}
 	o.reporter.RunStarted(o.config.RunID, o.repoIdentity.Slug(), o.config.SourceBranch, o.config.Mode, o.runRoot)
 
-	var finalErr error
+	var (
+		defaultBranch   string
+		candidateBranch string
+		roundSummaries  []string
+		successMessage  string
+	)
 	defer func() {
-		if finalErr != nil {
-			o.reporter.RunFinished(false, finalErr.Error())
+		if retErr != nil {
+			recovered, recoveryErr := o.tryPublishIncompleteDraftPR(defaultBranch, candidateBranch, roundSummaries, retErr)
+			switch {
+			case recoveryErr != nil:
+				retErr = errors.Join(retErr, recoveryErr)
+			case recovered:
+				successMessage = "run completed with incomplete draft PR"
+				retErr = nil
+			}
+		}
+		if retErr != nil {
+			o.reporter.RunFinished(false, retErr.Error())
+			return
+		}
+		if successMessage != "" {
+			o.reporter.RunFinished(true, successMessage)
 		}
 	}()
 
@@ -265,32 +284,28 @@ func (o *Orchestrator) Run() error {
 	o.reporter.StageStarted(prepareStage, nil, "syncing managed repository copy")
 	if err := CloneOrFetch(o.managedRepoPath, o.repoIdentity.CloneSource, o.config.GitBin); err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
-	defaultBranch, err := ResolveDefaultBranch(o.managedRepoPath, o.config.GitBin)
+	var err error
+	defaultBranch, err = ResolveDefaultBranch(o.managedRepoPath, o.config.GitBin)
 	if err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
 	sourceSHA, err := RequireRemoteBranch(o.managedRepoPath, o.config.GitBin, o.config.SourceBranch)
 	if err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
 
-	candidateBranch := o.candidateBranchName(o.config.SourceBranch, o.config.RunID)
+	candidateBranch = o.candidateBranchName(o.config.SourceBranch, o.config.RunID)
 	if err := SetBranchToRef(o.managedRepoPath, o.config.GitBin, candidateBranch, sourceSHA); err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
 	if o.config.Mode == ModeYolo && o.config.SourceBranch == defaultBranch {
 		if err := o.verifyYoloDefaultBranchPushAllowed(candidateBranch, defaultBranch); err != nil {
 			o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
-			finalErr = err
 			return err
 		}
 	}
@@ -301,26 +316,23 @@ func (o *Orchestrator) Run() error {
 		fmt.Sprintf("managed repo ready: default branch `%s`, source head `%s`", defaultBranch, shortSHA(sourceSHA)),
 	)
 
-	roundSummaries := make([]string, 0)
+	roundSummaries = make([]string, 0)
 	effectiveMaxRounds := o.config.MaxRounds
 	autoAuditRoundScheduled := false
 
 	for round := 1; round <= effectiveMaxRounds; round++ {
 		roundDir := filepath.Join(o.runRoot, fmt.Sprintf("round-%02d", round))
 		if err := os.MkdirAll(roundDir, 0o755); err != nil {
-			finalErr = err
 			return err
 		}
 
 		candidateHeadBefore, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 		if err != nil {
-			finalErr = err
 			return err
 		}
 
 		reviewReports, err := o.runReviewStage(round, roundDir, candidateHeadBefore, defaultBranch)
 		if err != nil {
-			finalErr = err
 			return err
 		}
 
@@ -336,33 +348,27 @@ func (o *Orchestrator) Run() error {
 			auditOnly,
 		)
 		if err != nil {
-			finalErr = err
 			return err
 		}
 		roundSummaries = append(roundSummaries, summaryPath)
 
 		candidateHeadAfter, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 		if err != nil {
-			finalErr = err
 			return err
 		}
 
 		if auditOnly {
 			if candidateHeadAfter != candidateHeadBefore {
-				err := NewDeepReviewError(
+				return NewDeepReviewError(
 					"automatic final audit round %d moved candidate branch HEAD; audit rounds must remain read-only",
 					round,
 				)
-				finalErr = err
-				return err
 			}
 			if status.Decision == "continue" {
-				err := NewDeepReviewError(
+				return NewDeepReviewError(
 					"automatic final audit round %d identified additional work (`continue`); rerun deepreview with a higher --max-rounds to allow another execute round",
 					round,
 				)
-				finalErr = err
-				return err
 			}
 			o.reporter.StageProgress(
 				"execute stage",
@@ -374,7 +380,6 @@ func (o *Orchestrator) Run() error {
 
 		roundChangedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, candidateHeadBefore, candidateHeadAfter)
 		if err != nil {
-			finalErr = err
 			return err
 		}
 		changed := len(roundChangedFiles) > 0
@@ -408,9 +413,7 @@ func (o *Orchestrator) Run() error {
 	}
 
 	if len(roundSummaries) == 0 {
-		err := NewDeepReviewError("internal run state invalid: no review/execute rounds were completed")
-		finalErr = err
-		return err
+		return NewDeepReviewError("internal run state invalid: no review/execute rounds were completed")
 	}
 
 	deliveryStage := "delivery"
@@ -418,7 +421,6 @@ func (o *Orchestrator) Run() error {
 	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
 	if err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
 	if len(changedFiles) == 0 {
@@ -430,18 +432,16 @@ func (o *Orchestrator) Run() error {
 		o.lastDelivery = &delivery
 		if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
 			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-			finalErr = err
 			return err
 		}
 		o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
-		o.reporter.RunFinished(true, "run completed successfully (no deliverable repository changes)")
+		successMessage = "run completed successfully (no deliverable repository changes)"
 		return nil
 	}
 	if o.config.Mode == ModePR {
 		changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
 		if err != nil {
 			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-			finalErr = err
 			return err
 		}
 		if len(changedFiles) == 0 {
@@ -453,34 +453,30 @@ func (o *Orchestrator) Run() error {
 			o.lastDelivery = &delivery
 			if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
 				o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-				finalErr = err
 				return err
 			}
 			o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
-			o.reporter.RunFinished(true, "run completed successfully (no deliverable repository changes)")
+			successMessage = "run completed successfully (no deliverable repository changes)"
 			return nil
 		}
 	}
 	if err := o.runDeliveryQualityChecks(candidateBranch); err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
 
 	delivery, err := o.deliver(defaultBranch, candidateBranch, roundSummaries, changedFiles)
 	if err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
 	o.lastDelivery = &delivery
 	if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		finalErr = err
 		return err
 	}
 	o.reporter.StageFinished(deliveryStage, nil, true, fmt.Sprintf("delivery completed in `%s` mode", delivery.Mode))
-	o.reporter.RunFinished(true, "run completed successfully")
+	successMessage = "run completed successfully"
 	return nil
 }
 
@@ -2310,6 +2306,13 @@ func (o *Orchestrator) deliveryCommitMessageScan(candidateBranch string) error {
 	return nil
 }
 
+type prDeliveryOptions struct {
+	draft            bool
+	incomplete       bool
+	incompleteReason string
+	skipEnhancement  bool
+}
+
 func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries []string, changedFiles []string) (DeliveryResult, error) {
 	if o.config.Mode == ModeYolo {
 		refspec := candidateBranch + ":" + o.config.SourceBranch
@@ -2324,6 +2327,10 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 		}, nil
 	}
 
+	return o.deliverPR(defaultBranch, candidateBranch, summaries, changedFiles, prDeliveryOptions{})
+}
+
+func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summaries, changedFiles []string, opts prDeliveryOptions) (DeliveryResult, error) {
 	deliveryBranch := "deepreview/" + SanitizeSegment(o.config.SourceBranch) + "/" + SanitizeSegment(o.config.RunID)
 	refspec := candidateBranch + ":" + deliveryBranch
 	o.reporter.StageProgress("delivery", "pushing delivery branch and creating pull request", nil)
@@ -2333,11 +2340,14 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 	o.pushCount++
 
 	prTitle := basePRTitleFromChanges(changedFiles)
+	if opts.incomplete {
+		prTitle = ensureIncompletePRTitlePrefix(prTitle)
+	}
 	if err := assertPublicTextSafe(prTitle, "pr title"); err != nil {
 		return DeliveryResult{}, err
 	}
-	prBody := o.buildPRBody(defaultBranch, candidateBranch, summaries, changedFiles)
-	prBody = o.capPRBodyForGitHub(prBody, summaries, changedFiles)
+	prBody := o.buildPRBody(defaultBranch, candidateBranch, summaries, changedFiles, opts)
+	prBody = o.capPRBodyForGitHub(prBody, summaries, changedFiles, opts)
 	if err := assertPublicTextSafe(prBody, "pr body"); err != nil {
 		return DeliveryResult{}, err
 	}
@@ -2358,16 +2368,20 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 		return DeliveryResult{}, err
 	}
 
+	createArgs := []string{
+		o.config.GhBin,
+		"pr", "create",
+		"--repo", o.repoIdentity.Slug(),
+		"--base", o.config.SourceBranch,
+		"--head", deliveryBranch,
+		"--title", prTitle,
+		"--body-file", prBodyPath,
+	}
+	if opts.draft {
+		createArgs = append(createArgs, "--draft")
+	}
 	completed, err := RunCommand(
-		[]string{
-			o.config.GhBin,
-			"pr", "create",
-			"--repo", o.repoIdentity.Slug(),
-			"--base", o.config.SourceBranch,
-			"--head", deliveryBranch,
-			"--title", prTitle,
-			"--body-file", prBodyPath,
-		},
+		createArgs,
 		o.managedRepoPath,
 		"",
 		true,
@@ -2382,16 +2396,20 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 		lines := strings.Split(trimmed, "\n")
 		prURL = strings.TrimSpace(lines[len(lines)-1])
 	}
-	o.reporter.StageProgress("delivery", "running post-pr codex summary and updating pr title/body", nil)
-	if err := o.enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, prTitleBasePath, prTitlePath, prBodyBasePath, prBodyPath, summaries, changedFiles); err != nil {
-		o.reporter.StageProgress("delivery", "post-pr description enhancement failed; keeping base title/body: "+progressMessage(err), nil)
+	if !opts.skipEnhancement {
+		o.reporter.StageProgress("delivery", "running post-pr codex summary and updating pr title/body", nil)
+		if err := o.enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, prTitleBasePath, prTitlePath, prBodyBasePath, prBodyPath, summaries, changedFiles); err != nil {
+			o.reporter.StageProgress("delivery", "post-pr description enhancement failed; keeping base title/body: "+progressMessage(err), nil)
+		}
 	}
 
 	return DeliveryResult{
-		Mode:          ModePR,
-		PushedRefspec: refspec,
-		PRURL:         prURL,
-		CommitsURL:    fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(deliveryBranch)),
+		Mode:             ModePR,
+		PushedRefspec:    refspec,
+		PRURL:            prURL,
+		CommitsURL:       fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(deliveryBranch)),
+		Incomplete:       opts.incomplete,
+		IncompleteReason: strings.TrimSpace(opts.incompleteReason),
 	}, nil
 }
 
@@ -2515,7 +2533,7 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 		return err
 	}
 	finalBody := sanitizePublicText(generatedSummary + "\n")
-	finalBody = o.capPRBodyForGitHub(finalBody, summaries, changedFiles)
+	finalBody = o.capPRBodyForGitHub(finalBody, summaries, changedFiles, prDeliveryOptions{})
 	if err := assertPublicTextSafe(finalBody, "final pr body"); err != nil {
 		return err
 	}
@@ -2546,11 +2564,56 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 	return err
 }
 
-func (o *Orchestrator) capPRBodyForGitHub(body string, summaries, changedFiles []string) string {
+func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranch string, summaries []string, cause error) (bool, error) {
+	if o.config.Mode != ModePR || strings.TrimSpace(candidateBranch) == "" || len(summaries) == 0 || o.pushCount != 0 {
+		return false, nil
+	}
+
+	o.reporter.StageStarted("delivery", nil, "publishing incomplete draft PR to preserve work")
+	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
+	if err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
+	}
+	if len(changedFiles) == 0 {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
+		return false, nil
+	}
+	changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
+	if err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
+	}
+	if len(changedFiles) == 0 {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: privacy remediation removed all deliverable changes")
+		return false, nil
+	}
+
+	reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(cause.Error(), "\n", " ")), 500)
+	delivery, err := o.deliverPR(defaultBranch, candidateBranch, summaries, changedFiles, prDeliveryOptions{
+		draft:            true,
+		incomplete:       true,
+		incompleteReason: reason,
+		skipEnhancement:  true,
+	})
+	if err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR delivery failed: "+progressMessage(err))
+		return false, err
+	}
+	o.lastDelivery = &delivery
+	if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, summaries); err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR final summary failed: "+progressMessage(err))
+		return false, err
+	}
+	o.reporter.StageFinished("delivery", nil, true, "incomplete draft PR created to preserve work")
+	return true, nil
+}
+
+func (o *Orchestrator) capPRBodyForGitHub(body string, summaries, changedFiles []string, opts prDeliveryOptions) string {
 	if withinPRBodyTarget(body) {
 		return body
 	}
-	compact := o.buildCompactPRBody(summaries, changedFiles)
+	compact := o.buildCompactPRBody(summaries, changedFiles, opts)
 	if withinPRBodyTarget(compact) {
 		return compact
 	}
@@ -2561,7 +2624,7 @@ func withinPRBodyTarget(body string) bool {
 	return utf8.RuneCountInString(body) <= githubPRBodyTargetChars
 }
 
-func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string) string {
+func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string, opts prDeliveryOptions) string {
 	areaSummary := summarizeChangedAreas(changedFiles, 6)
 	filePreview, omitted := summarizeChangedFilePreview(changedFiles, 12)
 
@@ -2570,9 +2633,61 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string) stri
 		"- deepreview generated this compact body to stay within GitHub PR body limits.",
 		fmt.Sprintf("- run id: `%s`", o.config.RunID),
 		fmt.Sprintf("- rounds executed: `%d`", len(summaries)),
+	}
+	if opts.incomplete {
+		lines = append(lines,
+			"- status: `[INCOMPLETE]` draft PR created because the run made repository changes but did not finish cleanly.",
+			fmt.Sprintf("- blocking reason: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(opts.incompleteReason), 240))),
+		)
+	}
+	lines = append(lines,
 		"",
 		"## changed files",
 		fmt.Sprintf("- count: `%d`", len(changedFiles)),
+		fmt.Sprintf("- main change areas: %s", sanitizePublicText(areaSummary)),
+	)
+	previewLine := "- key changed files: " + sanitizePublicText(filePreview)
+	if omitted > 0 {
+		previewLine += fmt.Sprintf(" (+%d more)", omitted)
+	}
+	lines = append(lines, previewLine)
+
+	if opts.incomplete {
+		lines = append(lines, "", "## incomplete status")
+		if latestRound, latestStatus, ok := latestRoundStatus(summaries); ok {
+			lines = append(lines, fmt.Sprintf("- latest round: `%s`", latestRound))
+			lines = append(lines, fmt.Sprintf("- latest decision: `%s`", latestStatus.Decision))
+			lines = append(lines, fmt.Sprintf("- latest reason: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(strings.ReplaceAll(latestStatus.Reason, "\n", " ")), 240))))
+			if latestStatus.NextFocus != nil && strings.TrimSpace(*latestStatus.NextFocus) != "" {
+				lines = append(lines, fmt.Sprintf("- next focus: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(*latestStatus.NextFocus), 220))))
+			}
+		}
+	}
+
+	lines = append(lines, "", "## round decisions")
+	lines = append(lines, roundDecisionLines(summaries)...)
+
+	lines = append(lines,
+		"",
+		"## note",
+		"- Detailed per-round artifacts remain available in the deepreview run directory.",
+	)
+
+	return sanitizePublicText(strings.Join(lines, "\n") + "\n")
+}
+
+func (o *Orchestrator) buildIncompletePRBody(summaries, changedFiles []string, blockingReason string) string {
+	areaSummary := summarizeChangedAreas(changedFiles, 6)
+	filePreview, omitted := summarizeChangedFilePreview(changedFiles, 12)
+
+	lines := []string{
+		"## summary",
+		"- `[INCOMPLETE]` draft PR created to preserve deepreview work that made real repository changes.",
+		fmt.Sprintf("- run id: `%s`", o.config.RunID),
+		fmt.Sprintf("- rounds completed: `%d`", len(summaries)),
+		"",
+		"## what changed and why",
+		fmt.Sprintf("- changed files: `%d`", len(changedFiles)),
 		fmt.Sprintf("- main change areas: %s", sanitizePublicText(areaSummary)),
 	}
 	previewLine := "- key changed files: " + sanitizePublicText(filePreview)
@@ -2580,35 +2695,44 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string) stri
 		previewLine += fmt.Sprintf(" (+%d more)", omitted)
 	}
 	lines = append(lines, previewLine)
-
-	lines = append(lines, "", "## round decisions")
-	if len(summaries) == 0 {
-		lines = append(lines, "- no round artifacts available")
-	} else {
-		for _, path := range summaries {
-			roundLabel := filepath.Base(filepath.Dir(path))
-			statusPath := filepath.Join(filepath.Dir(path), "round-status.json")
-			status, err := readRoundStatus(statusPath)
-			if err != nil {
-				lines = append(lines, fmt.Sprintf("- %s: status unavailable", roundLabel))
-				continue
-			}
-			reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(status.Reason, "\n", " ")), 220)
-			lines = append(lines, fmt.Sprintf("- %s: decision=`%s`, reason=%s", roundLabel, status.Decision, sanitizePublicText(reason)))
-		}
-	}
-
 	lines = append(lines,
 		"",
-		"## note",
-		"- Full per-round artifacts are available in the managed deepreview run directory.",
+		"## incomplete status",
+		"- do not merge this PR as-is; deepreview ended before full completion.",
+		fmt.Sprintf("- blocking reason: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(blockingReason), 500))),
+	)
+	if latestRound, latestStatus, ok := latestRoundStatus(summaries); ok {
+		lines = append(lines,
+			fmt.Sprintf("- latest round: `%s`", latestRound),
+			fmt.Sprintf("- latest decision: `%s`", latestStatus.Decision),
+			fmt.Sprintf("- latest reason: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(strings.ReplaceAll(latestStatus.Reason, "\n", " ")), 320))),
+		)
+		if latestStatus.NextFocus != nil && strings.TrimSpace(*latestStatus.NextFocus) != "" {
+			lines = append(lines, fmt.Sprintf("- next focus: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(*latestStatus.NextFocus), 280))))
+		}
+	}
+	lines = append(lines, "", "## round outcomes")
+	lines = append(lines, roundDecisionLines(summaries)...)
+	lines = append(lines,
+		"",
+		"## verification",
+		"- Verification evidence was captured during the completed rounds and is reflected in the associated round summaries and verification artifacts.",
+		"",
+		"## risks and follow-ups",
+		"- Remaining blocking work is still required before this branch is ready for normal delivery.",
+		"",
+		"## final status",
+		"- deepreview preserved the current candidate branch as a draft PR because the run ended incomplete after tangible repository changes.",
 	)
 
 	return sanitizePublicText(strings.Join(lines, "\n") + "\n")
 }
 
-func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles []string) string {
-	return o.buildCompactPRBody(summaries, changedFiles)
+func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles []string, opts prDeliveryOptions) string {
+	if opts.incomplete {
+		return o.buildIncompletePRBody(summaries, changedFiles, opts.incompleteReason)
+	}
+	return o.buildCompactPRBody(summaries, changedFiles, opts)
 }
 
 func basePRTitleFromChanges(changedFiles []string) string {
@@ -2670,6 +2794,14 @@ func normalizePRTitle(rawTitle, fallback string) string {
 	return trimForDisplay(title, githubPRTitleTargetChars)
 }
 
+func ensureIncompletePRTitlePrefix(title string) string {
+	normalized := normalizePRTitle(title, "deepreview: review updates")
+	if strings.HasPrefix(normalized, "[INCOMPLETE] ") {
+		return normalized
+	}
+	return trimForDisplay("[INCOMPLETE] "+normalized, githubPRTitleTargetChars)
+}
+
 func ensurePRTitlePrefix(title string) string {
 	trimmed := strings.TrimSpace(title)
 	if trimmed == "" {
@@ -2695,6 +2827,38 @@ done:
 		return "deepreview: review updates"
 	}
 	return "deepreview: " + trimmed
+}
+
+func roundDecisionLines(summaries []string) []string {
+	if len(summaries) == 0 {
+		return []string{"- no round artifacts available"}
+	}
+	lines := make([]string, 0, len(summaries))
+	for _, path := range summaries {
+		roundLabel := filepath.Base(filepath.Dir(path))
+		statusPath := filepath.Join(filepath.Dir(path), "round-status.json")
+		status, err := readRoundStatus(statusPath)
+		if err != nil {
+			lines = append(lines, fmt.Sprintf("- %s: status unavailable", roundLabel))
+			continue
+		}
+		reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(status.Reason, "\n", " ")), 220)
+		lines = append(lines, fmt.Sprintf("- %s: decision=`%s`, reason=%s", roundLabel, status.Decision, sanitizePublicText(reason)))
+	}
+	return lines
+}
+
+func latestRoundStatus(summaries []string) (string, RoundStatus, bool) {
+	if len(summaries) == 0 {
+		return "", RoundStatus{}, false
+	}
+	summaryPath := summaries[len(summaries)-1]
+	statusPath := filepath.Join(filepath.Dir(summaryPath), "round-status.json")
+	status, err := readRoundStatus(statusPath)
+	if err != nil {
+		return "", RoundStatus{}, false
+	}
+	return filepath.Base(filepath.Dir(summaryPath)), status, true
 }
 
 func summarizeChangedAreas(changedFiles []string, limit int) string {
@@ -2793,6 +2957,12 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 			fmt.Sprintf("- reason: `%s`", delivery.SkipReason),
 		)
 	} else {
+		if delivery.Incomplete {
+			lines = append(lines,
+				"- delivery: `incomplete-draft`",
+				fmt.Sprintf("- reason: `%s`", sanitizePublicText(strings.TrimSpace(delivery.IncompleteReason))),
+			)
+		}
 		lines = append(lines, fmt.Sprintf("- push refspec: `%s`", delivery.PushedRefspec))
 	}
 	lines = append(lines, "", "## round artifacts")

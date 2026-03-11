@@ -340,7 +340,7 @@ func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {
 
 	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
 	oversized := strings.Repeat("x", githubPRBodyTargetChars+4096)
-	out := o.capPRBodyForGitHub(oversized, []string{filepath.Join(roundDir, "round-summary.md")}, []string{"a.go", "b.go"})
+	out := o.capPRBodyForGitHub(oversized, []string{filepath.Join(roundDir, "round-summary.md")}, []string{"a.go", "b.go"}, prDeliveryOptions{})
 	if utf8.RuneCountInString(out) > githubPRBodyTargetChars {
 		t.Fatalf("expected capped pr body <= %d chars, got %d", githubPRBodyTargetChars, utf8.RuneCountInString(out))
 	}
@@ -352,7 +352,7 @@ func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {
 func TestCapPRBodyForGitHubKeepsNormalBody(t *testing.T) {
 	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
 	body := "## at a glance\n- short body\n"
-	out := o.capPRBodyForGitHub(body, nil, nil)
+	out := o.capPRBodyForGitHub(body, nil, nil, prDeliveryOptions{})
 	if out != body {
 		t.Fatalf("expected short body to remain unchanged")
 	}
@@ -387,6 +387,39 @@ func TestNormalizePRTitleCapsLengthForGitHubSafety(t *testing.T) {
 	}
 	if !strings.HasPrefix(strings.ToLower(out), "deepreview:") {
 		t.Fatalf("expected deepreview prefix after normalization, got: %q", out)
+	}
+}
+
+func TestEnsureIncompletePRTitlePrefixPrependsMarker(t *testing.T) {
+	out := ensureIncompletePRTitlePrefix("deepreview: tighten retry behavior")
+	if out != "[INCOMPLETE] deepreview: tighten retry behavior" {
+		t.Fatalf("unexpected incomplete title: %q", out)
+	}
+}
+
+func TestBuildIncompletePRBodyMentionsIncompleteStatus(t *testing.T) {
+	td := t.TempDir()
+	roundDir := filepath.Join(td, "round-01")
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-summary.md"), []byte("summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-status.json"), []byte(`{"decision":"continue","reason":"need one more blocker fix","next_focus":"finish blocker"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
+	body := o.buildIncompletePRBody([]string{filepath.Join(roundDir, "round-summary.md")}, []string{"internal/foo.go"}, "automatic audit found more work")
+	if !strings.Contains(body, "[INCOMPLETE]") {
+		t.Fatalf("expected incomplete marker in body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "do not merge this PR as-is") {
+		t.Fatalf("expected merge warning in body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "latest decision: `continue`") {
+		t.Fatalf("expected latest round decision in body, got:\n%s", body)
 	}
 }
 

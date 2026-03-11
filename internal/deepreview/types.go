@@ -60,12 +60,14 @@ type CodexRunResult struct {
 }
 
 type DeliveryResult struct {
-	Mode          string
-	PushedRefspec string
-	PRURL         string
-	CommitsURL    string
-	Skipped       bool
-	SkipReason    string
+	Mode             string
+	PushedRefspec    string
+	PRURL            string
+	CommitsURL       string
+	Incomplete       bool
+	IncompleteReason string
+	Skipped          bool
+	SkipReason       string
 }
 
 func BuildRunID(now time.Time) (string, error) {
