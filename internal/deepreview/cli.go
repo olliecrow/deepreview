@@ -209,7 +209,7 @@ func ReviewHelpText() string {
 Run a deep, multi-stage review pipeline against a source branch in an isolated workspace.
 
 What this command does:
-  1) Clones/fetches a managed copy of the repository under ~/deepreview (or override env).
+  1) Clones/fetches a branch-scoped managed copy of the repository under ~/deepreview (or override env).
   2) Runs independent review workers in isolated worktrees.
   3) Runs execute-stage prompts to consolidate, plan, execute, and verify changes.
   4) Repeats rounds up to max rounds while execute rounds produce repository changes.
@@ -851,9 +851,9 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 
 	fmt.Fprintln(out, "planned order:")
 	fmt.Fprintln(out, "1. preflight checks")
-	fmt.Fprintln(out, "2. acquire per-repo run lock")
+	fmt.Fprintln(out, "2. acquire per-repo+branch run lock")
 	fmt.Fprintln(out, "3. prepare stage")
-	fmt.Fprintln(out, "   - sync managed repository copy")
+	fmt.Fprintln(out, "   - sync branch-scoped managed repository copy")
 	fmt.Fprintln(out, "   - resolve default branch and source branch head")
 	fmt.Fprintln(out, "   - create candidate branch from source head")
 	if cfg.Mode == ModeYolo {

@@ -259,49 +259,50 @@ func TestBuildReviewSummaryInjectionPrefersVerdictAndIssueHeadings(t *testing.T)
 	}
 }
 
-func TestAcquireRepoRunLockPreventsConcurrentSameRepo(t *testing.T) {
+func TestAcquireRunLockPreventsConcurrentSameRepoBranch(t *testing.T) {
 	td := t.TempDir()
 	shared := Orchestrator{
 		workspaceRoot: td,
 		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
-		config:        ReviewConfig{RunID: "run-1"},
+		config:        ReviewConfig{RunID: "run-1", SourceBranch: "feature/a"},
 	}
-	if err := shared.acquireRepoRunLock(); err != nil {
+	if err := shared.acquireRunLock(); err != nil {
 		t.Fatalf("acquire lock failed: %v", err)
 	}
-	defer shared.releaseRepoRunLock()
+	defer shared.releaseRunLock()
 
 	second := Orchestrator{
 		workspaceRoot: td,
 		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
-		config:        ReviewConfig{RunID: "run-2"},
+		config:        ReviewConfig{RunID: "run-2", SourceBranch: "feature/a"},
 	}
-	err := second.acquireRepoRunLock()
+	err := second.acquireRunLock()
 	if err == nil {
-		second.releaseRepoRunLock()
-		t.Fatalf("expected lock acquisition to fail for concurrent same-repo run")
+		second.releaseRunLock()
+		t.Fatalf("expected lock acquisition to fail for concurrent same-repo same-branch run")
 	}
 	if !strings.Contains(err.Error(), "another deepreview run is active") {
 		t.Fatalf("unexpected lock error: %v", err)
 	}
 }
 
-func TestAcquireRepoRunLockReplacesStaleLock(t *testing.T) {
+func TestAcquireRunLockReplacesStaleLock(t *testing.T) {
 	td := t.TempDir()
 	o := Orchestrator{
 		workspaceRoot: td,
 		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
-		config:        ReviewConfig{RunID: "new-run"},
+		config:        ReviewConfig{RunID: "new-run", SourceBranch: "feature/a"},
 	}
-	lockPath := o.repoLockFilePath()
+	lockPath := o.runLockFilePath()
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	stale := repoRunLockRecord{
-		RunID:     "old-run",
-		PID:       999999,
-		Repo:      "example/repo",
-		CreatedAt: time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+	stale := runLockRecord{
+		RunID:        "old-run",
+		PID:          999999,
+		Repo:         "example/repo",
+		SourceBranch: "feature/a",
+		CreatedAt:    time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
 	}
 	payload, err := json.Marshal(stale)
 	if err != nil {
@@ -311,16 +312,16 @@ func TestAcquireRepoRunLockReplacesStaleLock(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := o.acquireRepoRunLock(); err != nil {
+	if err := o.acquireRunLock(); err != nil {
 		t.Fatalf("expected stale lock replacement, got error: %v", err)
 	}
-	defer o.releaseRepoRunLock()
+	defer o.releaseRunLock()
 
 	currentBytes, err := os.ReadFile(lockPath)
 	if err != nil {
 		t.Fatalf("expected fresh lock file, read failed: %v", err)
 	}
-	var current repoRunLockRecord
+	var current runLockRecord
 	if err := json.Unmarshal(currentBytes, &current); err != nil {
 		t.Fatalf("invalid lock json: %v", err)
 	}
@@ -329,26 +330,80 @@ func TestAcquireRepoRunLockReplacesStaleLock(t *testing.T) {
 	}
 }
 
-func TestAcquireRepoRunLockAllowsDifferentRepos(t *testing.T) {
+func TestAcquireRunLockAllowsDifferentRepos(t *testing.T) {
 	td := t.TempDir()
 	first := Orchestrator{
 		workspaceRoot: td,
 		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo-a"},
-		config:        ReviewConfig{RunID: "run-a"},
+		config:        ReviewConfig{RunID: "run-a", SourceBranch: "feature/shared"},
 	}
 	second := Orchestrator{
 		workspaceRoot: td,
 		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo-b"},
-		config:        ReviewConfig{RunID: "run-b"},
+		config:        ReviewConfig{RunID: "run-b", SourceBranch: "feature/shared"},
 	}
-	if err := first.acquireRepoRunLock(); err != nil {
+	if err := first.acquireRunLock(); err != nil {
 		t.Fatalf("first lock failed: %v", err)
 	}
-	defer first.releaseRepoRunLock()
-	if err := second.acquireRepoRunLock(); err != nil {
+	defer first.releaseRunLock()
+	if err := second.acquireRunLock(); err != nil {
 		t.Fatalf("second lock for different repo should succeed: %v", err)
 	}
-	defer second.releaseRepoRunLock()
+	defer second.releaseRunLock()
+}
+
+func TestAcquireRunLockAllowsDifferentBranchesSameRepo(t *testing.T) {
+	td := t.TempDir()
+	first := Orchestrator{
+		workspaceRoot: td,
+		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
+		config:        ReviewConfig{RunID: "run-a", SourceBranch: "feature/a"},
+	}
+	second := Orchestrator{
+		workspaceRoot: td,
+		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
+		config:        ReviewConfig{RunID: "run-b", SourceBranch: "feature/b"},
+	}
+	if err := first.acquireRunLock(); err != nil {
+		t.Fatalf("first lock failed: %v", err)
+	}
+	defer first.releaseRunLock()
+	if err := second.acquireRunLock(); err != nil {
+		t.Fatalf("second lock for different branch should succeed: %v", err)
+	}
+	defer second.releaseRunLock()
+}
+
+func TestNewOrchestratorIsolatesManagedRepoPathPerSourceBranch(t *testing.T) {
+	td := t.TempDir()
+	reporter := &NullProgressReporter{}
+	base := ReviewConfig{
+		Repo:          "example/repo",
+		WorkspaceRoot: td,
+		RunID:         "run-1",
+		GitBin:        "git",
+		CodexBin:      "codex",
+		SourceBranch:  "feature/a",
+	}
+
+	first, err := NewOrchestrator(base, reporter)
+	if err != nil {
+		t.Fatalf("NewOrchestrator first failed: %v", err)
+	}
+
+	secondCfg := base
+	secondCfg.SourceBranch = "feature/b"
+	second, err := NewOrchestrator(secondCfg, reporter)
+	if err != nil {
+		t.Fatalf("NewOrchestrator second failed: %v", err)
+	}
+
+	if first.managedRepoPath == second.managedRepoPath {
+		t.Fatalf("expected different managed repo paths for different branches, got %s", first.managedRepoPath)
+	}
+	if !strings.Contains(first.managedRepoPath, string(filepath.Separator)+"branches"+string(filepath.Separator)) {
+		t.Fatalf("expected managed repo path to include branch isolation directory, got %s", first.managedRepoPath)
+	}
 }
 
 func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {

@@ -2,6 +2,8 @@ package deepreview
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -10,6 +12,7 @@ import (
 )
 
 var sanitizeSegmentRe = regexp.MustCompile(`[^A-Za-z0-9._/-]+`)
+var filesystemSafeKeyRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 var worktreeOperationalExcludePatterns = []string{
 	".deepreview/",
@@ -37,6 +40,24 @@ func SanitizeSegment(text string) string {
 		return "value"
 	}
 	return sanitized
+}
+
+func FilesystemSafeKey(text string) string {
+	const maxLabelLen = 48
+
+	label := filesystemSafeKeyRe.ReplaceAllString(text, "-")
+	label = strings.Trim(label, "-.")
+	if label == "" {
+		label = "value"
+	}
+	if len(label) > maxLabelLen {
+		label = strings.TrimRight(label[:maxLabelLen], "-.")
+		if label == "" {
+			label = "value"
+		}
+	}
+	sum := sha256.Sum256([]byte(text))
+	return label + "-" + hex.EncodeToString(sum[:8])
 }
 
 func Git(repoPath, gitBin string, check bool, args ...string) (string, error) {
