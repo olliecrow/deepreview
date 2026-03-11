@@ -20,7 +20,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview operates only in managed workspace paths under `~/deepreview`.
 - deepreview must not operate in the user's own active checkout.
 - deepreview must isolate managed repository clones and run locks by repo plus source branch, so different branches of the same repo can run concurrently while same-branch runs remain serialized.
-- deepreview-managed commits must use the operator's resolved local Git identity (`user.name` / `user.email`) and must not depend on host GPG signing configuration.
+- deepreview-managed commits must use the operator's resolved Git identity, preferring explicit deepreview overrides outside the repo (`DEEPREVIEW_GIT_USER_NAME` / `DEEPREVIEW_GIT_USER_EMAIL`, then global `deepreview.userName` / `deepreview.userEmail`, then standard Git identity), and must not depend on host GPG signing configuration.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization.

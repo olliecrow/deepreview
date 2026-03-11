@@ -237,11 +237,11 @@ Deepreview-managed commits use the operator's local Git identity and explicitly 
 Context:
 Deepreview creates internal automation commits in managed repositories and worktrees. Depending on host-level GPG signing config can make otherwise-valid runs fail for operator-environment reasons.
 Rationale:
-Using the operator's configured `user.name` and `user.email` keeps authorship aligned with the local machine, while disabling signing for DeepReview-owned commits removes an unnecessary dependency on external signer setup.
+Using explicit deepreview identity overrides outside the repo when present, then falling back to machine-level Git identity, keeps authorship aligned with the operator without baking identity into the repository. Disabling signing for DeepReview-owned commits removes an unnecessary dependency on external signer setup.
 Trade-offs:
 Automation commits created by deepreview are intentionally unsigned even when the operator normally signs interactive commits.
 Enforcement:
-Managed-clone setup writes local Git identity plus `commit.gpgsign=false`, and commit helpers pass the resolved identity with no-sign flags on each deepreview-owned commit.
+Managed-clone setup writes the resolved Git identity plus `commit.gpgsign=false`, and commit helpers pass the resolved identity with no-sign flags on each deepreview-owned commit. Resolution prefers `DEEPREVIEW_GIT_USER_NAME` / `DEEPREVIEW_GIT_USER_EMAIL`, then global `deepreview.userName` / `deepreview.userEmail`, then standard Git identity.
 References:
 `internal/deepreview/git_identity.go`, `internal/deepreview/gitops.go`, `internal/deepreview/gitops_test.go`, `docs/spec.md`, `docs/architecture.md`
 

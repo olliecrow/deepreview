@@ -27,7 +27,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - replace stale managed checkout for the source branch with a fresh clone
 - fetch latest remote refs
 - resolve source-branch head SHA
-- resolve the operator's Git identity from local Git config and apply it to the managed clone with local signing disabled for deepreview-owned commits
+- resolve the operator's Git identity from explicit deepreview overrides first, then machine-level Git config, and apply it to the managed clone with local signing disabled for deepreview-owned commits
 - initialize candidate head to latest remote source branch
 - initialize or reuse local candidate branch `deepreview/candidate/<source-branch>/<run-id>`
 - in `yolo` mode when source branch is default branch, run push dry-run preflight before rounds
