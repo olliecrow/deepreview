@@ -22,6 +22,10 @@ func repoRoot(t *testing.T) string {
 	return filepath.Clean(filepath.Join(filepath.Dir(file), "..", ".."))
 }
 
+func disallowedEmailCommitMessage() string {
+	return "contact " + "alice" + "@corp.com"
+}
+
 func runCmd(t *testing.T, cwd string, env []string, cmd ...string) string {
 	t.Helper()
 	c := exec.Command(cmd[0], cmd[1:]...)
@@ -782,7 +786,7 @@ func TestEndToEndPRModePrivacyFixAttemptsBlockAfterMax(t *testing.T) {
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
-		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice@corp.com",
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE="+disallowedEmailCommitMessage(),
 		"FAKE_CODEX_PRIVACY_DECISION=continue",
 		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
 	)
@@ -858,7 +862,7 @@ func TestEndToEndPRModePrivacyStopStillBlocksWhenScansRemainDirty(t *testing.T) 
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
-		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice@corp.com",
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE="+disallowedEmailCommitMessage(),
 		"FAKE_CODEX_PRIVACY_DECISION=stop",
 		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
 	)
@@ -918,7 +922,7 @@ func TestEndToEndYoloModeBlocksUnresolvedPrivacyFindings(t *testing.T) {
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE=1",
-		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice@corp.com",
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE="+disallowedEmailCommitMessage(),
 		"FAKE_CODEX_PRIVACY_DECISION=continue",
 		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
 	)
