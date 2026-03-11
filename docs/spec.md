@@ -147,9 +147,9 @@ Cleanup policy:
 - if execute verification fails, fail the run and do not deliver.
 - if `pr` mode delivery fails after final round succeeds, emit remediation guidance and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.
-- in PR mode, deepreview should run at most 3 bounded privacy remediation attempts before delivery; each attempt can apply built-in local-path doc sanitization and/or Codex-guided fixes, then re-scan.
-- in PR mode, after bounded privacy attempts complete, delivery proceeds by policy (privacy findings no longer hard-block delivery).
-- if an automatic final audit round reports `continue` or produces repository changes, `pr` mode should publish an incomplete draft PR when deliverable repository changes exist; `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
+- before any outward-facing delivery action, deepreview should run at most 3 bounded privacy remediation attempts; each attempt can apply built-in local-path doc sanitization and/or Codex-guided fixes, then must re-scan changed files and delivery commit messages.
+- unresolved privacy findings after bounded remediation attempts hard-block delivery in both `pr` and `yolo` modes.
+- if an automatic final audit round reports `continue` or produces repository changes, `pr` mode may publish an incomplete draft PR only when the same delivery preconditions still pass (deliverable changes remain, privacy scans are clean, and delivery quality gates pass); `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)

@@ -127,6 +127,59 @@ func TestInferRepoAndBranchExplicitSourceBranchRejectsAheadOfRemote(t *testing.T
 	})
 }
 
+func TestEnsureBranchReadyForRemoteReviewRejectsStaleTrackingRef(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	user := filepath.Join(td, "user")
+	other := filepath.Join(td, "other")
+
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, seed)
+	runGitCommand(t, seed, "config", "user.email", "test@example.com")
+	runGitCommand(t, seed, "config", "user.name", "Test User")
+	runGitCommand(t, seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, seed, "add", "README.md")
+	runGitCommand(t, seed, "commit", "-m", "seed")
+	runGitCommand(t, seed, "push", "-u", "origin", "main")
+	runGitCommand(t, seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("v1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, seed, "add", "feature.txt")
+	runGitCommand(t, seed, "commit", "-m", "feature")
+	runGitCommand(t, seed, "push", "-u", "origin", "feature/test")
+
+	runGitCommand(t, td, "clone", remote, user)
+	runGitCommand(t, user, "checkout", "feature/test")
+
+	runGitCommand(t, td, "clone", remote, other)
+	runGitCommand(t, other, "checkout", "feature/test")
+	runGitCommand(t, other, "config", "user.email", "test@example.com")
+	runGitCommand(t, other, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(other, "feature.txt"), []byte("v2\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, other, "add", "feature.txt")
+	runGitCommand(t, other, "commit", "-m", "remote advance")
+	runGitCommand(t, other, "push", "origin", "feature/test")
+
+	state := &LocalGitHubRepoState{
+		Path:          user,
+		CurrentBranch: "feature/test",
+	}
+	err := ensureBranchReadyForRemoteReview("git", state, "feature/test")
+	if err == nil {
+		t.Fatalf("expected stale remote-tracking ref to be rejected")
+	}
+	if !strings.Contains(err.Error(), "not synchronized") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestInferRepoAndBranchExplicitDifferentBranchSkipsCurrentBranchReadinessCheck(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {

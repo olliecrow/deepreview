@@ -28,8 +28,8 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 11. The final PR title/body are Codex-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 12. In yolo mode, it pushes directly to your source branch.
 13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
-14. Before delivery, deepreview resolves candidate branch HEAD and runs repository quality gates in a detached worktree snapshot of that candidate (`pre-commit run --all-files` when configured, plus `./setup_env.sh` when present).
-15. In PR mode, deepreview runs a bounded privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree immediately before push/PR delivery, and then proceeds with PR delivery by policy after the bounded attempts.
+14. Before any outward-facing delivery action, deepreview resolves candidate branch HEAD and runs repository quality gates in a detached worktree snapshot of that candidate (`pre-commit run --all-files` when configured, plus `./setup_env.sh` when present).
+15. Before any outward-facing delivery action, deepreview also runs a bounded privacy remediation loop (up to 3 Codex-guided attempts) over delivery commit messages and changed files; unresolved findings block both PR delivery and yolo pushes.
 
 ## Requirements
 
@@ -48,7 +48,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 - Your current branch and working directory stay untouched in default mode.
 - yolo mode is available, and it is off by default.
 - Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
-- Public delivery surfaces are privacy-guarded (PR title/body and delivery summaries are redacted/guarded; PR mode also runs bounded pre-delivery privacy remediation attempts over delivery commit messages and changed files).
+- Public delivery surfaces are privacy-guarded (PR title/body and delivery summaries are redacted/guarded; all delivery modes also run bounded pre-delivery privacy remediation attempts over delivery commit messages and changed files, and delivery is blocked if findings remain).
 - Local terminal output is intentionally unredacted so operators can see literal paths and command errors while running deepreview.
 - You can cancel at any time with `Ctrl+C`; deepreview performs lock/worktree cleanup before exit.
 

@@ -607,7 +607,7 @@ Treating privacy as a bounded fix loop keeps privacy hygiene proactive while pre
 Trade-offs:
 Residual privacy findings may still exist when bounded attempts are exhausted; this approach prioritizes bounded autonomy and delivery continuity over hard-stop guarantees at this gate.
 Enforcement:
-PR-mode delivery runs a Codex-guided privacy remediation attempt loop (`max=3`) in a candidate-branch worktree before push/PR actions; attempts may stop early on Codex `stop`, and delivery proceeds by policy after bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
+Delivery now runs a Codex-guided privacy remediation attempt loop (`max=3`) in a candidate-branch worktree before any outward-facing push/PR action. Codex `stop` is advisory only until the final rescan is clean; unresolved findings hard-block delivery after the bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
 References:
 `internal/deepreview/orchestrator.go`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
 
@@ -672,7 +672,7 @@ Failing fast on unsynced local context prevents accidental reviews of outdated r
 Trade-offs:
 Adds strict pre-run checks that may require operator prep (`commit/push/pull`) before review can start.
 Enforcement:
-Inference path validates tracked-working-tree cleanliness and local/upstream SHA equality before run start.
+Inference path validates tracked-working-tree cleanliness and refreshes the upstream tracking ref before comparing local/upstream SHAs, so stale tracking refs do not masquerade as synchronized state.
 References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `README.md`
 
@@ -904,11 +904,11 @@ Block delivery unless repository quality gates pass, and keep docs local-path re
 Context:
 Runs could reach delivery with failing repository pre-commit hooks, and privacy scans could fail late on machine-local absolute paths inside changed docs files even when remediation was straightforward.
 Rationale:
-Hard-gating delivery on repo-local quality checks prevents deepreview from opening PRs that are already known-bad on mandatory local checks. Auto-remediating docs local-path violations keeps deterministic redaction built in while reducing unnecessary manual reruns.
+Hard-gating delivery on repo-local quality checks prevents deepreview from opening PRs that are already known-bad on mandatory local checks. Applying the same bounded privacy gate to every outward-facing delivery path avoids knowingly pushing unresolved sensitive content after a premature Codex `stop`, after max attempts, or via yolo/incomplete-draft fallbacks. Auto-remediating docs local-path violations keeps deterministic redaction built in while reducing unnecessary manual reruns.
 Trade-offs:
-Delivery can take longer when `setup_env.sh` exists, and some runs now fail earlier on quality-gate violations that were previously deferred to PR CI. Auto-remediation is intentionally narrow (docs text formats only) to avoid mutating code paths.
+Delivery can take longer when `setup_env.sh` exists, and some runs now fail earlier on quality-gate violations or unresolved privacy findings that were previously allowed through by policy. Auto-remediation is intentionally narrow (docs text formats only) to avoid mutating code paths.
 Enforcement:
-Delivery stage resolves the candidate branch HEAD and creates a detached `delivery/quality-worktree` snapshot from that commit, then runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and `./setup_env.sh` when present inside that snapshot; non-zero exit blocks delivery. The quality worktree is removed after checks (success or failure). In PR mode, privacy remediation attempts include a built-in docs-only local-path redaction pass (`/path/to/project` placeholder) before optional Codex remediation within each bounded attempt.
+Delivery stage resolves the candidate branch HEAD and runs one shared preflight before any push/PR creation: validate changed files, run bounded privacy remediation with mandatory final rescans of changed files plus delivery commit messages, and run `pre-commit run --all-files` when `.pre-commit-config.yaml` exists plus `./setup_env.sh` when present inside a detached `delivery/quality-worktree` snapshot. Unresolved privacy findings or non-zero quality-gate exits block both normal delivery and incomplete-draft publication. The quality worktree is removed after checks (success or failure).
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
 

@@ -428,16 +428,16 @@ func (o *Orchestrator) Run() (retErr error) {
 
 	deliveryStage := "delivery"
 	o.reporter.StageStarted(deliveryStage, nil, "validating delivery and publishing results")
-	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
+	preflight, err := o.runDeliveryPreflight(candidateBranch)
 	if err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 		return err
 	}
-	if len(changedFiles) == 0 {
+	if preflight.skipped {
 		delivery := DeliveryResult{
 			Mode:       o.config.Mode,
 			Skipped:    true,
-			SkipReason: "no deliverable repository changes were produced",
+			SkipReason: preflight.skipReason,
 		}
 		o.lastDelivery = &delivery
 		if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
@@ -448,34 +448,7 @@ func (o *Orchestrator) Run() (retErr error) {
 		successMessage = "run completed successfully (no deliverable repository changes)"
 		return nil
 	}
-	if o.config.Mode == ModePR {
-		changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
-		if err != nil {
-			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-			return err
-		}
-		if len(changedFiles) == 0 {
-			delivery := DeliveryResult{
-				Mode:       o.config.Mode,
-				Skipped:    true,
-				SkipReason: "privacy remediation removed all deliverable repository changes",
-			}
-			o.lastDelivery = &delivery
-			if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
-				o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-				return err
-			}
-			o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
-			successMessage = "run completed successfully (no deliverable repository changes)"
-			return nil
-		}
-	}
-	if err := o.runDeliveryQualityChecks(candidateBranch); err != nil {
-		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		return err
-	}
-
-	delivery, err := o.deliver(defaultBranch, candidateBranch, roundSummaries, changedFiles)
+	delivery, err := o.deliver(defaultBranch, candidateBranch, roundSummaries, preflight.changedFiles)
 	if err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 		return err
@@ -518,14 +491,14 @@ func (o *Orchestrator) preflight() error {
 	if _, err := os.Stat(filepath.Join(o.promptsRoot, "review", "independent-review.md")); err != nil {
 		return NewDeepReviewError("independent review prompt template missing")
 	}
+	privacyTemplate := filepath.Join(o.promptsRoot, "delivery", "privacy-fix.md")
+	if _, err := os.Stat(privacyTemplate); err != nil {
+		return NewDeepReviewError("delivery prompt template missing: %s", privacyTemplate)
+	}
 	if o.config.Mode == ModePR {
 		deliveryTemplate := filepath.Join(o.promptsRoot, "delivery", "pr-description-summary.md")
 		if _, err := os.Stat(deliveryTemplate); err != nil {
 			return NewDeepReviewError("delivery prompt template missing: %s", deliveryTemplate)
-		}
-		privacyTemplate := filepath.Join(o.promptsRoot, "delivery", "privacy-fix.md")
-		if _, err := os.Stat(privacyTemplate); err != nil {
-			return NewDeepReviewError("delivery prompt template missing: %s", privacyTemplate)
 		}
 	}
 	return nil
@@ -1789,7 +1762,46 @@ func (o *Orchestrator) validateDeliveryFiles(candidateBranch string) ([]string, 
 	return files, nil
 }
 
-func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles []string) ([]string, error) {
+type deliveryPreflightResult struct {
+	changedFiles []string
+	skipReason   string
+	skipped      bool
+}
+
+func (o *Orchestrator) runDeliveryPreflight(candidateBranch string) (deliveryPreflightResult, error) {
+	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
+	if err != nil {
+		return deliveryPreflightResult{}, err
+	}
+	if len(changedFiles) == 0 {
+		return deliveryPreflightResult{
+			skipped:    true,
+			skipReason: "no deliverable repository changes were produced",
+		}, nil
+	}
+
+	changedFiles, err = o.runDeliveryPrivacyGate(candidateBranch, changedFiles)
+	if err != nil {
+		return deliveryPreflightResult{}, err
+	}
+	if len(changedFiles) == 0 {
+		return deliveryPreflightResult{
+			skipped:    true,
+			skipReason: "privacy remediation removed all deliverable repository changes",
+		}, nil
+	}
+
+	if err := o.runDeliveryQualityChecks(candidateBranch); err != nil {
+		return deliveryPreflightResult{}, err
+	}
+	return deliveryPreflightResult{changedFiles: changedFiles}, nil
+}
+
+func (o *Orchestrator) scanDeliveryPrivacy(repoPath, candidateBranch string) (error, error) {
+	return o.deliveryCommitMessageScan(candidateBranch), o.secretHygieneScan(repoPath, candidateBranch)
+}
+
+func (o *Orchestrator) runDeliveryPrivacyGate(candidateBranch string, changedFiles []string) ([]string, error) {
 	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 	if err != nil {
 		return nil, err
@@ -1805,9 +1817,8 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 		return nil, err
 	}
 
+	commitScanErr, fileScanErr := o.scanDeliveryPrivacy(privacyWorktreePath, candidateBranch)
 	for attempt := 1; attempt <= prPrivacyMaxAttempts; attempt++ {
-		commitScanErr := o.deliveryCommitMessageScan(candidateBranch)
-		fileScanErr := o.secretHygieneScan(privacyWorktreePath, candidateBranch)
 		if commitScanErr == nil && fileScanErr == nil {
 			o.reporter.StageProgress(
 				"delivery",
@@ -1854,7 +1865,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 				o.reporter.StageProgress(
 					"delivery",
 					fmt.Sprintf(
-						"privacy remediation attempt %d/%d failed; continuing by policy: %s",
+						"privacy remediation attempt %d/%d failed; continuing to bounded retries: %s",
 						attempt,
 						prPrivacyMaxAttempts,
 						progressMessage(remediationErr),
@@ -1885,18 +1896,30 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 			return nil, err
 		}
 		changedFiles = updatedFiles
-
-		if codexRequestedStop {
+		if len(changedFiles) == 0 {
 			return changedFiles, nil
+		}
+
+		commitScanErr, fileScanErr = o.scanDeliveryPrivacy(privacyWorktreePath, candidateBranch)
+		if codexRequestedStop && (commitScanErr != nil || fileScanErr != nil) {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf(
+					"privacy remediation attempt %d/%d requested stop but issues remain: %s",
+					attempt,
+					prPrivacyMaxAttempts,
+					summarizePrivacyScanIssues(commitScanErr, fileScanErr),
+				),
+				nil,
+			)
 		}
 	}
 
-	o.reporter.StageProgress(
-		"delivery",
-		fmt.Sprintf("privacy fix gate reached max attempts (%d); proceeding with delivery by policy", prPrivacyMaxAttempts),
-		nil,
+	return nil, NewDeepReviewError(
+		"delivery blocked: privacy findings remained after %d remediation attempt(s): %s",
+		prPrivacyMaxAttempts,
+		summarizePrivacyScanIssues(commitScanErr, fileScanErr),
 	)
-	return changedFiles, nil
 }
 
 func summarizePrivacyScanIssues(commitScanErr, fileScanErr error) string {
@@ -2716,27 +2739,18 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 	}
 
 	o.reporter.StageStarted("delivery", nil, "publishing incomplete draft PR to preserve work")
-	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
+	preflight, err := o.runDeliveryPreflight(candidateBranch)
 	if err != nil {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 		return false, err
 	}
-	if len(changedFiles) == 0 {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
-		return false, nil
-	}
-	changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
-	if err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-		return false, err
-	}
-	if len(changedFiles) == 0 {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: privacy remediation removed all deliverable changes")
+	if preflight.skipped {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: "+preflight.skipReason)
 		return false, nil
 	}
 
 	reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(cause.Error(), "\n", " ")), 500)
-	delivery, err := o.deliverPR(defaultBranch, candidateBranch, summaries, changedFiles, prDeliveryOptions{
+	delivery, err := o.deliverPR(defaultBranch, candidateBranch, summaries, preflight.changedFiles, prDeliveryOptions{
 		draft:            true,
 		incomplete:       true,
 		incompleteReason: reason,

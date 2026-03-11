@@ -746,7 +746,7 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
+func TestEndToEndPRModePrivacyFixAttemptsBlockAfterMax(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -786,7 +786,7 @@ func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
 		"FAKE_CODEX_PRIVACY_DECISION=continue",
 		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
 	)
-	output, logs := runCmdCapture(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -796,14 +796,14 @@ func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "deepreview completed:") {
-		t.Fatalf("expected completion summary output, got: %s", output)
+	if !strings.Contains(output, "delivery blocked: privacy findings remained after 3 remediation attempt(s)") {
+		t.Fatalf("expected privacy hard-block failure, got: %s", output)
 	}
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
-		t.Fatalf("expected PR creation despite unresolved privacy scan findings, got: %s", output)
-	}
-	if !strings.Contains(logs, "privacy fix gate reached max attempts (3); proceeding with delivery by policy") {
-		t.Fatalf("expected max-attempt privacy policy log, got:\n%s", logs)
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	if strings.TrimSpace(refsOut) != "" {
+		t.Fatalf("expected no delivery branch push when privacy remains unresolved, got:\n%s", refsOut)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -819,6 +819,127 @@ func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
 		if _, err := os.Stat(statusPath); err != nil {
 			t.Fatalf("missing privacy status artifact %s: %v", statusPath, err)
 		}
+	}
+}
+
+func TestEndToEndPRModePrivacyStopStillBlocksWhenScansRemainDirty(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice@corp.com",
+		"FAKE_CODEX_PRIVACY_DECISION=stop",
+		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery blocked: privacy findings remained after 3 remediation attempt(s)") {
+		t.Fatalf("expected privacy hard-block failure after stop, got: %s", output)
+	}
+	if !strings.Contains(output, "requested stop but issues remain") {
+		t.Fatalf("expected stop-with-dirty-state log, got:\n%s", output)
+	}
+}
+
+func TestEndToEndYoloModeBlocksUnresolvedPrivacyFindings(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE=1",
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice@corp.com",
+		"FAKE_CODEX_PRIVACY_DECISION=continue",
+		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "yolo",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery blocked: privacy findings remained after 3 remediation attempt(s)") {
+		t.Fatalf("expected yolo privacy hard-block failure, got: %s", output)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+	if before != after {
+		t.Fatalf("expected blocked yolo delivery to leave remote source branch unchanged")
 	}
 }
 
@@ -1492,6 +1613,78 @@ func TestRunPRModePublishesIncompleteDraftPRAfterAuditContinue(t *testing.T) {
 	}
 	if !strings.Contains(finalSummary, "## pull request") {
 		t.Fatalf("expected pull request section in final summary, got:\n%s", finalSummary)
+	}
+}
+
+func TestRunPRModeDoesNotPublishIncompleteDraftPRAfterDeliveryQualityFailure(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "setup_env.sh"), []byte("#!/usr/bin/env bash\necho 'quality failed' >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt", "setup_env.sh")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery blocked: setup_env.sh failed") {
+		t.Fatalf("expected delivery-quality failure, got: %s", output)
+	}
+	if strings.Contains(output, "Draft PR created:") {
+		t.Fatalf("blocked delivery must not publish incomplete draft PR, got: %s", output)
+	}
+	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
+		t.Fatalf("expected no gh PR creation after delivery-quality failure, stat err=%v", err)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+	if before != after {
+		t.Fatalf("expected delivery-quality failure to leave remote source branch unchanged")
+	}
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	if strings.TrimSpace(refsOut) != "" {
+		t.Fatalf("expected no delivery branch push after delivery-quality failure, got:\n%s", refsOut)
 	}
 }
 
