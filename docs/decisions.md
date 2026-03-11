@@ -529,9 +529,22 @@ Go provides strong fit for this shape: simple static binaries, reliable concurre
 Trade-offs:
 Initial rewrite/migration cost and short-term delivery slowdown while stabilizing the Go implementation.
 Enforcement:
-Primary entrypoint is implemented in `cmd/deepreview` and runtime code is in `internal/deepreview`; Go tests cover parser, template, status validation, and integration flows.
+Primary CLI/runtime code lives in Go under `cmd/` and `internal/deepreview/`; architecture/spec describe the shipped CLI behavior.
 References:
-`cmd/deepreview/main.go`, `internal/deepreview/`, `internal/deepreview/integration_test.go`
+`cmd/deepreview/main.go`, `internal/deepreview/`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+When `pr` mode has already produced deliverable repository changes but the run cannot finish cleanly, publish a draft `[INCOMPLETE]` PR instead of dropping the candidate branch.
+Context:
+Multi-round runs can spend significant time implementing and verifying high-severity fixes, then still stop short of a normal terminal `stop` state or later delivery gates.
+Rationale:
+Preserving tangible work in a visible draft PR keeps hard-won fixes reviewable and recoverable, while the explicit `[INCOMPLETE]` marker prevents the branch from being mistaken for merge-ready output.
+Trade-offs:
+Draft PRs may surface partially complete work on GitHub and add some branch/PR churn compared with the previous fail-without-PR behavior.
+Enforcement:
+PR-mode failure recovery should publish a draft PR with explicit incomplete title/body markers whenever deliverable repo changes exist and public-surface hygiene checks pass.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Keep `README.md` explicitly user-facing: purpose, requirements, quickstart, CLI usage/help, managed directories, and practical operator ergonomics.

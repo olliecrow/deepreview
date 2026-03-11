@@ -919,6 +919,111 @@ func TestRunAutoSchedulesFinalAuditRoundWhenLastAllowedExecuteRoundChangesCode(t
 	}
 }
 
+func TestRunPRModePublishesIncompleteDraftPRAfterAuditContinue(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_DECISION=continue",
+		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected incomplete draft PR summary output, got: %s", output)
+	}
+	if !strings.Contains(output, "delivery status: incomplete") {
+		t.Fatalf("expected incomplete delivery status output, got: %s", output)
+	}
+
+	argsBytes, err := os.ReadFile(ghArgsPath)
+	if err != nil {
+		t.Fatalf("missing gh args capture: %v", err)
+	}
+	argsText := string(argsBytes)
+	if !strings.Contains(argsText, "--draft") {
+		t.Fatalf("expected draft flag in gh pr create args, got:\n%s", argsText)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	titleBytes, err := os.ReadFile(filepath.Join(runDir, "pr-title.txt"))
+	if err != nil {
+		t.Fatalf("missing pr-title.txt: %v", err)
+	}
+	if !strings.HasPrefix(strings.TrimSpace(string(titleBytes)), "[INCOMPLETE] deepreview:") {
+		t.Fatalf("expected incomplete title prefix, got: %s", string(titleBytes))
+	}
+	bodyBytes, err := os.ReadFile(filepath.Join(runDir, "pr-body.md"))
+	if err != nil {
+		t.Fatalf("missing pr-body.md: %v", err)
+	}
+	body := string(bodyBytes)
+	if !strings.Contains(body, "do not merge this PR as-is") {
+		t.Fatalf("expected incomplete warning in pr body, got:\n%s", body)
+	}
+	if !strings.Contains(body, "latest decision: `continue`") {
+		t.Fatalf("expected latest continue status in pr body, got:\n%s", body)
+	}
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing final-summary.md: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "- delivery: `incomplete-draft`") {
+		t.Fatalf("expected incomplete draft marker in final summary, got:\n%s", finalSummary)
+	}
+	if !strings.Contains(finalSummary, "## pull request") {
+		t.Fatalf("expected pull request section in final summary, got:\n%s", finalSummary)
+	}
+}
+
 func TestRunAuditRoundFailsWhenCandidateHeadMovesWithoutTreeChanges(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)

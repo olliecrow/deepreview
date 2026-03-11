@@ -963,7 +963,19 @@ func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, conf
 			_, _ = fmt.Fprintf(out, "latest review summary: %s\n", reason)
 		}
 	}
-	_, _ = fmt.Fprintln(out, "run exited before delivery; no push or PR was created.")
+	delivery := orchestrator.LastDelivery()
+	switch {
+	case delivery == nil || delivery.Skipped:
+		_, _ = fmt.Fprintln(out, "run exited before delivery; no push or PR was created.")
+	default:
+		_, _ = fmt.Fprintln(out, "run failed after delivery artifacts were created.")
+		if strings.TrimSpace(delivery.PRURL) != "" {
+			_, _ = fmt.Fprintf(out, "latest PR: %s\n", delivery.PRURL)
+		}
+		if strings.TrimSpace(delivery.CommitsURL) != "" {
+			_, _ = fmt.Fprintf(out, "latest delivery commits: %s\n", delivery.CommitsURL)
+		}
+	}
 	_, _ = fmt.Fprintln(out, "inspect these paths to review what deepreview produced:")
 	_, _ = fmt.Fprintf(out, "run artifacts: %s\n", runRoot)
 	_, _ = fmt.Fprintf(out, "logs: %s\n", logsPath)
@@ -1025,6 +1037,23 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 	if delivery.Skipped {
 		_, _ = fmt.Fprintf(os.Stdout, "delivery skipped: %s\n", delivery.SkipReason)
 		_, _ = fmt.Fprintf(os.Stdout, "no push or PR was created because no deliverable repository changes were found.\n")
+		printArtifactPaths()
+		return
+	}
+	if delivery.Incomplete {
+		if strings.TrimSpace(delivery.PRURL) != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "Draft PR created: %s\n", delivery.PRURL)
+		} else {
+			_, _ = fmt.Fprintf(os.Stdout, "incomplete draft PR delivery completed, but no PR URL was returned.\n")
+		}
+		if strings.TrimSpace(delivery.IncompleteReason) != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "delivery status: incomplete (%s)\n", delivery.IncompleteReason)
+		} else {
+			_, _ = fmt.Fprintf(os.Stdout, "delivery status: incomplete\n")
+		}
+		if strings.TrimSpace(delivery.CommitsURL) != "" {
+			_, _ = fmt.Fprintf(os.Stdout, "delivery commits: %s\n", delivery.CommitsURL)
+		}
 		printArtifactPaths()
 		return
 	}

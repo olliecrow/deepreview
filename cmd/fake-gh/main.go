@@ -3,10 +3,14 @@ package main
 import (
 	"fmt"
 	"os"
+	"strings"
 )
 
 func main() {
 	args := os.Args[1:]
+	if capturePath := os.Getenv("FAKE_GH_CAPTURE_ARGS_PATH"); capturePath != "" {
+		_ = os.WriteFile(capturePath, []byte(strings.Join(args, "\n")+"\n"), 0o644)
+	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "create" {
 		hasTitle := false
 		for i := 0; i < len(args); i++ {

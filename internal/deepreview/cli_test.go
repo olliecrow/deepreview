@@ -411,6 +411,39 @@ func TestPrintFailureArtifactSummary(t *testing.T) {
 	}
 }
 
+func TestPrintFailureArtifactSummaryMentionsExistingDeliveryArtifacts(t *testing.T) {
+	var out strings.Builder
+	config := ReviewConfig{
+		WorkspaceRoot: t.TempDir(),
+		RunID:         "20260228T002535Z-39dab37e",
+		Repo:          "owner/repo",
+		SourceBranch:  "main",
+	}
+	orchestrator := &Orchestrator{
+		runRoot: filepath.Join(config.WorkspaceRoot, "runs", config.RunID),
+		lastDelivery: &DeliveryResult{
+			Mode:       ModePR,
+			PRURL:      "https://example.com/owner/repo/pull/123",
+			CommitsURL: "https://example.com/owner/repo/commits/deepreview/main/run",
+		},
+	}
+
+	printFailureArtifactSummary(&out, orchestrator, config)
+	text := out.String()
+	for _, want := range []string{
+		"run failed after delivery artifacts were created.\n",
+		"latest PR: https://example.com/owner/repo/pull/123\n",
+		"latest delivery commits: https://example.com/owner/repo/commits/deepreview/main/run\n",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected failure summary to include %q, got:\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "run exited before delivery; no push or PR was created.") {
+		t.Fatalf("expected delivery-aware failure summary, got:\n%s", text)
+	}
+}
+
 func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {
 	runRoot := t.TempDir()
 	round1 := filepath.Join(runRoot, "round-01")

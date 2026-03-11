@@ -60,6 +60,9 @@ This document defines the canonical runtime and product contract for `deepreview
 - in `pr` mode, privacy remediation attempts may stop early when Codex reports `stop`; otherwise proceed automatically after the configured max attempts.
 - in `pr` mode, privacy remediation is a fix gate (attempted remediation + scan feedback), not a hard terminal blocker after max attempts.
 - in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.
+- in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
+- incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
+- incomplete draft PR bodies must explicitly state that the PR is incomplete, why delivery did not finish cleanly, and what remains to be done before merge.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
@@ -140,7 +143,7 @@ Cleanup policy:
 - in `yolo` mode, do not push when verification fails.
 - in PR mode, deepreview should run at most 3 bounded privacy remediation attempts before delivery; each attempt can apply built-in local-path doc sanitization and/or Codex-guided fixes, then re-scan.
 - in PR mode, after bounded privacy attempts complete, delivery proceeds by policy (privacy findings no longer hard-block delivery).
-- if an automatic final audit round reports `continue` or produces repository changes, fail the run with guidance to rerun deepreview using a higher `--max-rounds`.
+- if an automatic final audit round reports `continue` or produces repository changes, `pr` mode should publish an incomplete draft PR when deliverable repository changes exist; `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)
@@ -151,6 +154,7 @@ PR bodies should include these sections in the final Codex-generated output:
 - `## verification`
 - `## risks and follow-ups`
 - `## final status`
+- incomplete draft PR bodies must also include an explicit warning not to merge yet plus the blocking reason and latest round state
 - do not embed individual independent-review reports or full execute artifact dumps in PR description
 - final PR body text must pass privacy checks (no personal information, secrets, or private local machine paths)
 - if generated PR text exceeds GitHub PR body limits, deepreview must fall back to a compact body automatically
@@ -159,6 +163,7 @@ PR bodies should include these sections in the final Codex-generated output:
 - final PR title is Codex-generated in post-delivery stage and then applied via `gh pr edit`.
 - final PR title must remain prefixed with `deepreview:`.
 - final PR title must be concise, concrete, and human-readable (not generic boilerplate).
+- incomplete draft PR titles must be prefixed with `[INCOMPLETE] ` ahead of the normal `deepreview:` prefix.
 - final PR title text must pass privacy checks (no personal information, secrets, or private local machine paths).
 
 ## Prompt-template contract
