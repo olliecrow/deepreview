@@ -3,6 +3,7 @@ package deepreview
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -62,5 +63,65 @@ func TestDryRunPushRefspec(t *testing.T) {
 
 	if err := DryRunPushRefspec(repo, "git", "HEAD:main"); err != nil {
 		t.Fatalf("DryRunPushRefspec failed: %v", err)
+	}
+}
+
+func TestEnsureWorktreeOperationalExcludesResolvesRelativeGitPathAgainstRepo(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	caller := filepath.Join(td, "caller")
+
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(caller, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(caller, ".git"), []byte("not-a-directory\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+
+	excludePath := filepath.Join(repo, ".git", "info", "exclude")
+	withWorkingDir(t, caller, func() {
+		if err := EnsureWorktreeOperationalExcludes(repo, "git"); err != nil {
+			t.Fatalf("EnsureWorktreeOperationalExcludes failed: %v", err)
+		}
+	})
+
+	excludeBytes, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("expected repo exclude file to be written: %v", err)
+	}
+	excludeContent := string(excludeBytes)
+	if !strings.Contains(excludeContent, operationalExcludeBlockStart) {
+		t.Fatalf("expected managed exclude block start; content follows\n%s", excludeContent)
+	}
+	if !strings.Contains(excludeContent, operationalExcludeBlockEnd) {
+		t.Fatalf("expected managed exclude block end; content follows\n%s", excludeContent)
+	}
+	if !strings.Contains(excludeContent, ".deepreview/") {
+		t.Fatalf("expected .deepreview pattern in exclude block; content follows\n%s", excludeContent)
+	}
+
+	withWorkingDir(t, caller, func() {
+		if err := EnsureWorktreeOperationalExcludes(repo, "git"); err != nil {
+			t.Fatalf("EnsureWorktreeOperationalExcludes second run failed: %v", err)
+		}
+	})
+	excludeBytesAfter, err := os.ReadFile(excludePath)
+	if err != nil {
+		t.Fatalf("expected repo exclude file after second run: %v", err)
+	}
+	if string(excludeBytesAfter) != excludeContent {
+		t.Fatalf("expected idempotent exclude content\nprevious content\n%s\ncurrent content\n%s", excludeContent, string(excludeBytesAfter))
 	}
 }
