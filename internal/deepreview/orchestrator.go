@@ -286,6 +286,10 @@ func (o *Orchestrator) Run() (retErr error) {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
 	}
+	if err := EnsureWorktreeOperationalExcludes(o.managedRepoPath, o.config.GitBin); err != nil {
+		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
+		return err
+	}
 	var err error
 	defaultBranch, err = ResolveDefaultBranch(o.managedRepoPath, o.config.GitBin)
 	if err != nil {
@@ -1001,10 +1005,13 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		if err := AddDetachedWorktree(o.managedRepoPath, o.config.GitBin, worktreePath, candidateHead); err != nil {
 			return nil, err
 		}
+		worktrees = append(worktrees, worktreePath)
+		if err := EnsureWorktreeOperationalExcludes(worktreePath, o.config.GitBin); err != nil {
+			return nil, err
+		}
 		if err := os.MkdirAll(filepath.Dir(workerReviewPath), 0o755); err != nil {
 			return nil, err
 		}
-		worktrees = append(worktrees, worktreePath)
 		reviewPaths = append(reviewPaths, reviewPath)
 		workerReviewPaths = append(workerReviewPaths, workerReviewPath)
 		workerNotesPaths = append(workerNotesPaths, workerNotesPath)
@@ -1193,6 +1200,10 @@ func (o *Orchestrator) runExecuteStage(
 	defer func() {
 		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, executeWorktree)
 	}()
+	if err := EnsureWorktreeOperationalExcludes(executeWorktree, o.config.GitBin); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
 
 	roundStatusPath := filepath.Join(roundDir, "round-status.json")
 	roundSummaryPath := filepath.Join(roundDir, "round-summary.md")
@@ -1392,6 +1403,10 @@ Audit-round override:
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
+	if err := CleanupUntrackedOperationalArtifacts(executeWorktree, o.config.GitBin); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
 
 	var candidateHeadAfter string
 	if auditOnly {
@@ -1453,7 +1468,7 @@ Audit-round override:
 			return RoundStatus{}, "", err
 		}
 	}
-	if err := o.validateNoInternalArtifactChanges(candidateHead, candidateHeadAfter); err != nil {
+	if err := o.validateNoManagedOperationalArtifactChanges(candidateHead, candidateHeadAfter); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1659,7 +1674,27 @@ func isInternalArtifactPath(path string) bool {
 	return strings.HasPrefix(normalized, ".deepreview/")
 }
 
-func (o *Orchestrator) validateNoInternalArtifactChanges(baseRef, headRef string) error {
+func managedOperationalArtifactRoot(path string) (string, bool) {
+	normalized := filepath.ToSlash(strings.TrimSpace(path))
+	longest := ""
+	for _, pattern := range worktreeOperationalExcludePatterns {
+		root := strings.TrimSuffix(strings.TrimSpace(pattern), "/")
+		if root == "" {
+			continue
+		}
+		if normalized == root || strings.HasPrefix(normalized, root+"/") {
+			if len(root) > len(longest) {
+				longest = root
+			}
+		}
+	}
+	if longest == "" {
+		return "", false
+	}
+	return longest, true
+}
+
+func (o *Orchestrator) validateNoManagedOperationalArtifactChanges(baseRef, headRef string) error {
 	files, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, baseRef, headRef)
 	if err != nil {
 		return err
@@ -1668,6 +1703,18 @@ func (o *Orchestrator) validateNoInternalArtifactChanges(baseRef, headRef string
 		if isInternalArtifactPath(file) {
 			return NewDeepReviewError("internal deepreview artifacts must not be committed: %s", file)
 		}
+		root, ok := managedOperationalArtifactRoot(file)
+		if !ok {
+			continue
+		}
+		trackedAtBase, err := RefHasTrackedEntries(o.managedRepoPath, o.config.GitBin, baseRef, root)
+		if err != nil {
+			return err
+		}
+		if trackedAtBase {
+			continue
+		}
+		return NewDeepReviewError("operational artifacts must not be committed: %s", file)
 	}
 	return nil
 }
@@ -1681,14 +1728,41 @@ func (o *Orchestrator) validateDeliveryFiles(candidateBranch string) ([]string, 
 		if isInternalArtifactPath(file) {
 			return nil, NewDeepReviewError("delivery blocked: internal deepreview artifacts detected in branch diff: %s", file)
 		}
+		root, ok := managedOperationalArtifactRoot(file)
+		if !ok {
+			continue
+		}
+		trackedAtSource, err := RefHasTrackedEntries(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, root)
+		if err != nil {
+			return nil, err
+		}
+		if trackedAtSource {
+			continue
+		}
+		return nil, NewDeepReviewError("delivery blocked: operational artifacts detected in branch diff: %s", file)
 	}
 	return files, nil
 }
 
 func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles []string) ([]string, error) {
+	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return nil, err
+	}
+	privacyWorktreePath := filepath.Join(o.runRoot, "delivery", "privacy-fix", "worktree")
+	if err := AddBranchWorktree(o.managedRepoPath, o.config.GitBin, privacyWorktreePath, candidateBranch, candidateHead); err != nil {
+		return nil, err
+	}
+	defer func() {
+		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, privacyWorktreePath)
+	}()
+	if err := EnsureWorktreeOperationalExcludes(privacyWorktreePath, o.config.GitBin); err != nil {
+		return nil, err
+	}
+
 	for attempt := 1; attempt <= prPrivacyMaxAttempts; attempt++ {
 		commitScanErr := o.deliveryCommitMessageScan(candidateBranch)
-		fileScanErr := o.secretHygieneScan(candidateBranch)
+		fileScanErr := o.secretHygieneScan(privacyWorktreePath, candidateBranch)
 		if commitScanErr == nil && fileScanErr == nil {
 			o.reporter.StageProgress(
 				"delivery",
@@ -1711,7 +1785,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 
 		remediatedByBuiltin := false
 		if fileScanErr != nil {
-			remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(candidateBranch, fileScanErr)
+			remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(privacyWorktreePath, candidateBranch, fileScanErr)
 			if remediationErr != nil {
 				o.reporter.StageProgress(
 					"delivery",
@@ -1730,7 +1804,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 
 		codexRequestedStop := false
 		if !remediatedByBuiltin {
-			stop, reason, remediationErr := o.runPrivacyFixAttempt(candidateBranch, attempt, prPrivacyMaxAttempts, commitScanErr, fileScanErr)
+			stop, reason, remediationErr := o.runPrivacyFixAttempt(privacyWorktreePath, candidateBranch, attempt, prPrivacyMaxAttempts, commitScanErr, fileScanErr)
 			if remediationErr != nil {
 				o.reporter.StageProgress(
 					"delivery",
@@ -1794,7 +1868,7 @@ func summarizePrivacyScanIssues(commitScanErr, fileScanErr error) string {
 	return strings.Join(issues, " | ")
 }
 
-func (o *Orchestrator) runPrivacyFixAttempt(candidateBranch string, attempt, maxAttempts int, commitScanErr, fileScanErr error) (bool, string, error) {
+func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string, attempt, maxAttempts int, commitScanErr, fileScanErr error) (bool, string, error) {
 	templatePath := filepath.Join(o.promptsRoot, "delivery", "privacy-fix.md")
 	templateText, err := ReadTemplate(templatePath)
 	if err != nil {
@@ -1807,12 +1881,12 @@ func (o *Orchestrator) runPrivacyFixAttempt(candidateBranch string, attempt, max
 	}
 
 	statusPath := filepath.Join(attemptDir, "privacy-status.json")
-	managedRepoRelPath, relErr := filepath.Rel(o.runRoot, o.managedRepoPath)
+	worktreeRelPath, relErr := filepath.Rel(o.runRoot, worktreePath)
 	if relErr != nil {
-		managedRepoRelPath = o.managedRepoPath
+		worktreeRelPath = worktreePath
 	}
-	if strings.TrimSpace(managedRepoRelPath) == "" {
-		managedRepoRelPath = "."
+	if strings.TrimSpace(worktreeRelPath) == "" {
+		worktreeRelPath = "."
 	}
 
 	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch)
@@ -1835,7 +1909,7 @@ func (o *Orchestrator) runPrivacyFixAttempt(candidateBranch string, attempt, max
 		"RUN_ID":             o.config.RunID,
 		"ATTEMPT_NUMBER":     fmt.Sprintf("%d", attempt),
 		"MAX_ATTEMPTS":       fmt.Sprintf("%d", maxAttempts),
-		"MANAGED_REPO_PATH":  filepath.ToSlash(managedRepoRelPath),
+		"MANAGED_REPO_PATH":  filepath.ToSlash(worktreeRelPath),
 		"CHANGED_FILES":      changedFilesValue,
 		"PRIVACY_ISSUES":     sanitizePublicText(summarizePrivacyScanIssues(commitScanErr, fileScanErr)),
 		"OUTPUT_STATUS_PATH": filepath.ToSlash(statusPath),
@@ -1850,7 +1924,7 @@ func (o *Orchestrator) runPrivacyFixAttempt(candidateBranch string, attempt, max
 		currentRunCommandContext(),
 		monitoredPromptRequest{
 			label:        fmt.Sprintf("delivery/privacy-fix-attempt-%02d", attempt),
-			cwd:          o.managedRepoPath,
+			cwd:          worktreePath,
 			prompt:       prompt,
 			threadID:     nil,
 			logPrefix:    logPrefix,
@@ -2079,14 +2153,14 @@ func readRoundStatus(path string) (RoundStatus, error) {
 	return status, nil
 }
 
-func (o *Orchestrator) secretHygieneScan(candidateBranch string) error {
+func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error {
 	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch)
 	if err != nil {
 		return err
 	}
 
 	for _, rel := range changedFiles {
-		path := filepath.Join(o.managedRepoPath, rel)
+		path := filepath.Join(repoPath, rel)
 		st, err := os.Stat(path)
 		if err != nil || st.IsDir() {
 			continue
@@ -2120,7 +2194,7 @@ func (o *Orchestrator) secretHygieneScan(candidateBranch string) error {
 
 const localPathScanFailurePrefix = "privacy scan failed: local path pattern matched in "
 
-func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(candidateBranch string, scanErr error) (bool, error) {
+func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(repoPath, candidateBranch string, scanErr error) (bool, error) {
 	relPath, ok := extractLocalPathScanFailurePath(scanErr)
 	if !ok {
 		return false, nil
@@ -2128,7 +2202,7 @@ func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(candidateBranch
 	if !isAutoSanitizableDocPath(relPath) {
 		return false, nil
 	}
-	targetPath := filepath.Join(o.managedRepoPath, relPath)
+	targetPath := filepath.Join(repoPath, relPath)
 	content, err := os.ReadFile(targetPath)
 	if err != nil {
 		return false, err
@@ -2140,10 +2214,13 @@ func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(candidateBranch
 	if err := os.WriteFile(targetPath, []byte(sanitized), 0o644); err != nil {
 		return false, err
 	}
-	if err := CommitAllChanges(o.managedRepoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan"); err != nil {
+	if err := CommitAllChanges(repoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan"); err != nil {
 		return false, err
 	}
-	if err := o.validateNoInternalArtifactChanges("origin/"+o.config.SourceBranch, candidateBranch); err != nil {
+	if err := CleanupUntrackedOperationalArtifacts(repoPath, o.config.GitBin); err != nil {
+		return false, err
+	}
+	if err := o.validateNoManagedOperationalArtifactChanges("origin/"+o.config.SourceBranch, candidateBranch); err != nil {
 		return false, err
 	}
 	return true, nil
@@ -2205,6 +2282,9 @@ func (o *Orchestrator) runDeliveryQualityChecks(candidateBranch string) error {
 	defer func() {
 		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, qualityWorktreePath)
 	}()
+	if err := EnsureWorktreeOperationalExcludes(qualityWorktreePath, o.config.GitBin); err != nil {
+		return err
+	}
 
 	if err := o.runPreCommitAllFilesIfConfigured(qualityWorktreePath); err != nil {
 		return err

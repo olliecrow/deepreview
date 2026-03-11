@@ -113,7 +113,7 @@ func TestSecretHygieneScanRejectsPersonalInfoInChangedFiles(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "data.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add data")
 
-	err := o.secretHygieneScan("candidate")
+	err := o.secretHygieneScan(repoPath, "candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for personal info pattern")
 	}
@@ -139,7 +139,7 @@ func TestSecretHygieneScanRejectsSecretPatternInChangedFiles(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add secret pattern")
 
-	err := o.secretHygieneScan("candidate")
+	err := o.secretHygieneScan(repoPath, "candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for secret pattern")
 	}
@@ -159,7 +159,7 @@ func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "docs.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "docs")
 
-	if err := o.secretHygieneScan("candidate"); err != nil {
+	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
 		t.Fatalf("expected placeholder email to pass scan, got: %v", err)
 	}
 }
@@ -198,6 +198,7 @@ func TestTryAutoRemediateLocalPathPrivacyViolationInDocs(t *testing.T) {
 	}()
 
 	remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(
+		repoPath,
 		"candidate",
 		NewDeepReviewError("privacy scan failed: local path pattern matched in docs/decision_capture.md"),
 	)
@@ -207,7 +208,7 @@ func TestTryAutoRemediateLocalPathPrivacyViolationInDocs(t *testing.T) {
 	if !remediated {
 		t.Fatalf("expected docs local-path violation to be auto-remediated")
 	}
-	if err := o.secretHygieneScan("candidate"); err != nil {
+	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
 		t.Fatalf("expected privacy scan to pass after remediation, got: %v", err)
 	}
 
