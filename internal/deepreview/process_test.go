@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -104,5 +105,24 @@ func TestIsIgnorableStreamCopyError(t *testing.T) {
 				t.Fatalf("isIgnorableStreamCopyError(%v) = %v, want %v", tc.err, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestRunCommandContextWithEnvAndCallbacksSetsEnvironment(t *testing.T) {
+	completed, err := RunCommandContextWithEnvAndCallbacks(
+		context.Background(),
+		[]string{"/usr/bin/env", "sh", "-lc", "printf %s \"$DEEPREVIEW_TEST_ENV\""},
+		"",
+		[]string{"DEEPREVIEW_TEST_ENV=expected"},
+		"",
+		true,
+		0,
+		nil,
+	)
+	if err != nil {
+		t.Fatalf("expected command to succeed, got error: %v", err)
+	}
+	if got := strings.TrimSpace(completed.Stdout); got != "expected" {
+		t.Fatalf("expected environment override to propagate, got %q", got)
 	}
 }

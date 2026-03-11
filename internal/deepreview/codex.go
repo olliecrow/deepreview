@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +42,63 @@ func (c *CodexRunner) buildCommand(threadID *string) []string {
 	return command
 }
 
+func (c *CodexRunner) buildEnvironment(cwd string) ([]string, error) {
+	sandboxRoot, err := filepath.Abs(filepath.Join(cwd, ".deepreview", "runtime"))
+	if err != nil {
+		return nil, err
+	}
+	goCache := filepath.Join(sandboxRoot, "go-build-cache")
+	goModCache := filepath.Join(sandboxRoot, "go-mod-cache")
+	goTmpDir := filepath.Join(sandboxRoot, "go-tmp")
+	tmpDir := filepath.Join(sandboxRoot, "tmp")
+	for _, dir := range []string{sandboxRoot, goCache, goModCache, goTmpDir, tmpDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return nil, err
+		}
+	}
+
+	return mergeCommandEnv(os.Environ(), map[string]string{
+		"GOCACHE":    goCache,
+		"GOMODCACHE": goModCache,
+		"GOTMPDIR":   goTmpDir,
+		"TMPDIR":     tmpDir,
+		"TMP":        tmpDir,
+		"TEMP":       tmpDir,
+	}), nil
+}
+
+func mergeCommandEnv(base []string, overrides map[string]string) []string {
+	env := make(map[string]string, len(base)+len(overrides))
+	order := make([]string, 0, len(base)+len(overrides))
+	for _, entry := range base {
+		key, value, ok := strings.Cut(entry, "=")
+		if !ok {
+			continue
+		}
+		if _, seen := env[key]; !seen {
+			order = append(order, key)
+		}
+		env[key] = value
+	}
+	overrideKeys := make([]string, 0, len(overrides))
+	for key := range overrides {
+		overrideKeys = append(overrideKeys, key)
+		if _, seen := env[key]; !seen {
+			order = append(order, key)
+		}
+	}
+	sort.Strings(overrideKeys)
+	for _, key := range overrideKeys {
+		env[key] = overrides[key]
+	}
+
+	merged := make([]string, 0, len(order))
+	for _, key := range order {
+		merged = append(merged, key+"="+env[key])
+	}
+	return merged
+}
+
 func (c *CodexRunner) RunPrompt(cwd, prompt string, threadID *string, logPrefixPath string) (CodexRunResult, error) {
 	return c.RunPromptWithHooks(cwd, prompt, threadID, logPrefixPath, nil)
 }
@@ -50,6 +108,10 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 		return CodexRunResult{}, NewDeepReviewError("codex binary must be configured")
 	}
 	command := c.buildCommand(threadID)
+	commandEnv, err := c.buildEnvironment(cwd)
+	if err != nil {
+		return CodexRunResult{}, err
+	}
 
 	stdoutPath := logPrefixPath + ".stdout.jsonl"
 	stderrPath := logPrefixPath + ".stderr.log"
@@ -103,7 +165,7 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 	if hooks != nil && hooks.Context != nil {
 		parentCtx = hooks.Context
 	}
-	completed, err := RunCommandContextWithCallbacks(parentCtx, command, cwd, prompt, true, c.Timeout, streamCallbacks)
+	completed, err := RunCommandContextWithEnvAndCallbacks(parentCtx, command, cwd, commandEnv, prompt, true, c.Timeout, streamCallbacks)
 	if err != nil {
 		return CodexRunResult{}, err
 	}

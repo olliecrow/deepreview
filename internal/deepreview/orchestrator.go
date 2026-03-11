@@ -939,6 +939,32 @@ func pathActivitySignature(path string) string {
 	return strings.Join(entries, ";")
 }
 
+type reviewPromptScope struct {
+	ModeLabel    string
+	ModeNote     string
+	ProcessStep1 string
+}
+
+func buildReviewPromptScope(sourceBranch, defaultBranch string) reviewPromptScope {
+	if strings.TrimSpace(sourceBranch) == strings.TrimSpace(defaultBranch) {
+		return reviewPromptScope{
+			ModeLabel: "current-state repository audit",
+			ModeNote: strings.TrimSpace(`
+Self-audit note:
+- Source branch and default branch are the same for this run.
+- Treat branch-diff inspection as orientation only; do not stop at "no diff" or "already on main".
+- Continue with a current-state repository audit of the codebase as it exists now, including likely high-risk integration and verification paths.
+`),
+			ProcessStep1: "Use source-branch vs default-branch diff only as orientation; if it is empty, continue into a current-state repository audit rather than concluding there is nothing to review.",
+		}
+	}
+	return reviewPromptScope{
+		ModeLabel:    "source-branch change review",
+		ModeNote:     "",
+		ProcessStep1: "Build a concrete change map from source branch vs default branch.",
+	}
+}
+
 func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaultBranch string) ([]string, error) {
 	o.reporter.StageStarted("independent review stage", roundPtr(round), "launching independent reviewers in parallel")
 	reviewDir := filepath.Join(roundDir, "review")
@@ -1026,6 +1052,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 			worktreePath := worktrees[i]
 			workerReviewRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID)))
 			workerNotesRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.notes.md", workerID)))
+			scope := buildReviewPromptScope(o.config.SourceBranch, defaultBranch)
 			variables := map[string]string{
 				"REPO_SLUG":          o.repoIdentity.Slug(),
 				"SOURCE_BRANCH":      o.config.SourceBranch,
@@ -1035,6 +1062,9 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 				"WORKTREE_PATH":      ".",
 				"OUTPUT_REVIEW_PATH": workerReviewRelPath,
 				"WORKER_NOTES_PATH":  workerNotesRelPath,
+				"REVIEW_MODE_LABEL":  scope.ModeLabel,
+				"REVIEW_MODE_NOTE":   scope.ModeNote,
+				"REVIEW_PROCESS_1":   scope.ProcessStep1,
 			}
 			prompt, err := RenderTemplate(templateText, variables)
 			if err != nil {
@@ -1879,7 +1909,8 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 	statusArtifactPath := filepath.Join(attemptDir, "privacy-status.json")
 	// Codex can only write inside its worktree sandbox, so persist the worker-written
 	// status there first and copy it back into the run artifact directory after execution.
-	statusWorktreePath := filepath.Join(worktreePath, ".tmp", "deepreview", "privacy-fix", fmt.Sprintf("attempt-%02d", attempt), "privacy-status.json")
+	statusWorktreeRelPath := filepath.ToSlash(filepath.Join(".tmp", "deepreview", "privacy-fix", fmt.Sprintf("attempt-%02d", attempt), "privacy-status.json"))
+	statusWorktreePath := filepath.Join(worktreePath, filepath.FromSlash(statusWorktreeRelPath))
 	worktreeRelPath, relErr := filepath.Rel(o.runRoot, worktreePath)
 	if relErr != nil {
 		worktreeRelPath = worktreePath
@@ -1911,7 +1942,7 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 		"MANAGED_REPO_PATH":  filepath.ToSlash(worktreeRelPath),
 		"CHANGED_FILES":      changedFilesValue,
 		"PRIVACY_ISSUES":     sanitizePublicText(summarizePrivacyScanIssues(commitScanErr, fileScanErr)),
-		"OUTPUT_STATUS_PATH": filepath.ToSlash(statusWorktreePath),
+		"OUTPUT_STATUS_PATH": statusWorktreeRelPath,
 	}
 	prompt, err := RenderTemplate(templateText, variables)
 	if err != nil {

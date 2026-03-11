@@ -100,6 +100,32 @@ func TestPromptWatchdogPolicyRejectsNegativeValues(t *testing.T) {
 	}
 }
 
+func TestBuildReviewPromptScopeUsesCurrentStateAuditForDefaultBranchRuns(t *testing.T) {
+	scope := buildReviewPromptScope("main", "main")
+	if scope.ModeLabel != "current-state repository audit" {
+		t.Fatalf("expected current-state audit mode, got %q", scope.ModeLabel)
+	}
+	if !strings.Contains(scope.ModeNote, "Treat branch-diff inspection as orientation only") {
+		t.Fatalf("expected self-audit guidance in mode note, got: %s", scope.ModeNote)
+	}
+	if !strings.Contains(scope.ProcessStep1, "current-state repository audit") {
+		t.Fatalf("expected self-audit process step, got: %s", scope.ProcessStep1)
+	}
+}
+
+func TestBuildReviewPromptScopeUsesBranchDiffReviewForFeatureBranches(t *testing.T) {
+	scope := buildReviewPromptScope("feature/test", "main")
+	if scope.ModeLabel != "source-branch change review" {
+		t.Fatalf("expected branch-diff review mode, got %q", scope.ModeLabel)
+	}
+	if scope.ModeNote != "" {
+		t.Fatalf("expected no extra self-audit note, got: %s", scope.ModeNote)
+	}
+	if scope.ProcessStep1 != "Build a concrete change map from source branch vs default branch." {
+		t.Fatalf("unexpected process step: %s", scope.ProcessStep1)
+	}
+}
+
 func TestExecutePromptLabel(t *testing.T) {
 	cases := []struct {
 		templateName string

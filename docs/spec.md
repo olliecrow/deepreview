@@ -35,6 +35,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - if a worker is inactive for the configured timeout, deepreview cancels and restarts that worker up to the configured restart cap.
 - each execute pass runs in a fresh worktree.
 - independent-review workers use one shared independent-review prompt template.
+- when the source branch equals the default branch, independent review treats branch diff as orientation only and continues as a current-state repository audit.
 - each execute pass runs an ordered multi-prompt queue in one Codex chat context.
 - execute prompt-1 receives compact injected review summaries plus on-disk review report paths so Codex can inspect full reports directly when needed.
 - execute prompt-1 (consolidate reviews) treats independent reviews as inputs, not gospel, and only accepts independently-validated, high-confidence `critical|high` items.
@@ -44,6 +45,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and produce complete round artifacts for orchestrator post-processing.
 - execute-stage finalization (prompt-4 outputs plus orchestrator post-processing) must ensure changed work is committed locally.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` remains reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
+- all Codex prompt executions must receive writable worktree-local temp/cache defaults for tool execution, including Go cache/temp envs (`TMPDIR`, `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`), so verification commands do not fall back to host-local caches outside the sandbox.
 - round progression is determined by repository changes produced in execute stage.
 - if an execute round produces repository changes, deepreview must run at least one additional review round.
 - if the last allowed execute round produces repository changes, deepreview must schedule one automatic final audit round with the same review strictness and no repository edits.
