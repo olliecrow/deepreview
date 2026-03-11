@@ -275,9 +275,15 @@ func pathWithinBase(basePath, targetPath string) bool {
 	if err != nil {
 		return false
 	}
+	if resolved, err := filepath.EvalSymlinks(baseAbs); err == nil {
+		baseAbs = resolved
+	}
 	targetAbs, err := filepath.Abs(targetPath)
 	if err != nil {
 		return false
+	}
+	if resolved, err := filepath.EvalSymlinks(targetAbs); err == nil {
+		targetAbs = resolved
 	}
 	rel, err := filepath.Rel(baseAbs, targetAbs)
 	if err != nil {
@@ -363,6 +369,46 @@ func hasArg(args []string, target string) bool {
 	return false
 }
 
+func requireSandboxGoEnvWithinCWD() error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	required := []string{"GOCACHE", "GOMODCACHE", "GOTMPDIR", "TMPDIR"}
+	for _, key := range required {
+		value := strings.TrimSpace(os.Getenv(key))
+		if value == "" {
+			return fmt.Errorf("missing required %s", key)
+		}
+		if !pathWithinBase(cwd, value) {
+			return fmt.Errorf("%s must stay within cwd: %s", key, value)
+		}
+		info, err := os.Stat(value)
+		if err != nil {
+			return fmt.Errorf("%s path stat failed: %w", key, err)
+		}
+		if !info.IsDir() {
+			return fmt.Errorf("%s must point to a directory: %s", key, value)
+		}
+	}
+	return nil
+}
+
+func requireSelfAuditReviewPrompt(prompt string) error {
+	sourceBranch := regexGet("Source branch: `([^`]+)`", prompt)
+	defaultBranch := regexGet("Default branch: `([^`]+)`", prompt)
+	if sourceBranch == "" || defaultBranch == "" || sourceBranch != defaultBranch {
+		return nil
+	}
+	if !strings.Contains(prompt, "Review mode: `current-state repository audit`") {
+		return fmt.Errorf("self-audit review prompt missing current-state review mode")
+	}
+	if !strings.Contains(prompt, "Treat branch-diff inspection as orientation only") {
+		return fmt.Errorf("self-audit review prompt missing branch-diff orientation note")
+	}
+	return nil
+}
+
 func main() {
 	promptBytes, err := io.ReadAll(os.Stdin)
 	if err != nil {
@@ -377,6 +423,18 @@ func main() {
 	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK")) != "" && !hasArg(args, "--skip-git-repo-check") {
 		fmt.Fprintln(os.Stderr, "missing required --skip-git-repo-check")
 		os.Exit(1)
+	}
+	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD")) != "" {
+		if err := requireSandboxGoEnvWithinCWD(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SELF_AUDIT_REVIEW_PROMPT")) != "" && strings.Contains(prompt, "independent deepreview reviewer in the independent review stage") {
+		if err := requireSelfAuditReviewPrompt(prompt); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
 	}
 	if len(args) >= 3 && args[0] == "exec" && args[1] == "resume" {
 		threadID = args[2]

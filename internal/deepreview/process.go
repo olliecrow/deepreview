@@ -60,10 +60,36 @@ func RunCommandContext(parent context.Context, command []string, cwd string, inp
 	return RunCommandContextWithCallbacks(parent, command, cwd, input, check, timeout, nil)
 }
 
+func RunCommandContextWithEnvAndCallbacks(
+	parent context.Context,
+	command []string,
+	cwd string,
+	env []string,
+	input string,
+	check bool,
+	timeout time.Duration,
+	callbacks *CommandStreamCallbacks,
+) (CompletedProcess, error) {
+	return runCommandInvocation(parent, command, cwd, env, input, check, timeout, callbacks)
+}
+
 func RunCommandContextWithCallbacks(
 	parent context.Context,
 	command []string,
 	cwd string,
+	input string,
+	check bool,
+	timeout time.Duration,
+	callbacks *CommandStreamCallbacks,
+) (CompletedProcess, error) {
+	return runCommandInvocation(parent, command, cwd, nil, input, check, timeout, callbacks)
+}
+
+func runCommandInvocation(
+	parent context.Context,
+	command []string,
+	cwd string,
+	env []string,
 	input string,
 	check bool,
 	timeout time.Duration,
@@ -90,6 +116,9 @@ func RunCommandContextWithCallbacks(
 	configureCommandForManagedCancellation(cmd)
 	if cwd != "" {
 		cmd.Dir = cwd
+	}
+	if len(env) > 0 {
+		cmd.Env = env
 	}
 	if input != "" {
 		cmd.Stdin = strings.NewReader(input)

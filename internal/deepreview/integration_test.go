@@ -800,6 +800,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		"FAKE_CODEX_REQUIRE_SELF_AUDIT_REVIEW_PROMPT=1",
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
 		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
 		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
@@ -836,6 +837,55 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-02.md")); err != nil {
 		t.Fatalf("expected worker-02 review artifact after restart, got: %v", err)
+	}
+}
+
+func TestEndToEndPRModeSetsSandboxSafeGoEnvForCodexRuns(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "go.mod"), []byte("module example.com/testrepo\n\ngo 1.25.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "go.mod")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD=1",
+	)
+	output, _ := runCmdCapture(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
 	}
 }
 

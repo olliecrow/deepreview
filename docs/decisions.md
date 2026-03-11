@@ -932,3 +932,29 @@ Enforcement:
 - Integration and unit tests assert inactivity restart behavior and policy clamping behavior; restart-path integration assertions should prefer deterministic log evidence over strict wall-time thresholds to reduce flake risk.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Run all Codex prompts with worktree-local temp/cache defaults, including Go cache/temp envs.
+Context:
+Recent real deepreview artifacts showed Codex workers running `go test` against host-local cache paths like `$HOME/Library/Caches/go-build`, which failed under the sandbox until the model rediscovered ad hoc `GOCACHE` overrides mid-run.
+Rationale:
+Providing writable worktree-local temp/cache envs up front makes verification commands deterministic, avoids false-negative sandbox failures, and keeps runtime artifacts inside deepreview-managed paths.
+Trade-offs:
+Every Codex run now creates worktree-local runtime cache directories under `.deepreview/runtime/`, which adds transient local filesystem noise but keeps it isolated and excluded from delivery.
+Enforcement:
+Codex runner creates `.deepreview/runtime/` under the current working directory and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Tests assert env propagation and end-to-end fake-codex validation requires those paths to stay within the worktree.
+References:
+`internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `docs/spec.md`
+
+Decision:
+Treat `source branch == default branch` runs as current-state repository audits rather than zero-diff branch reviews.
+Context:
+Self-review runs against `main` can have no branch diff even when the repository still has current-state issues worth auditing. Recent artifacts showed some reviewers stopping at "no diff" and missing repo-level findings unless another worker ignored that framing.
+Rationale:
+Reframing self-review runs as repo audits preserves reviewer effort for the actual current codebase instead of wasting capacity on proving the diff is empty.
+Trade-offs:
+Default-branch reviews may inspect more repository surface area and take longer than a strict diff-only pass.
+Enforcement:
+Independent-review prompt rendering now injects explicit self-audit mode guidance when source and default branch names match, and integration tests require fake-codex to see that prompt mode.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/integration_test.go`, `prompts/review/independent-review.md`, `docs/spec.md`

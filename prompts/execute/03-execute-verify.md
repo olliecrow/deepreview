@@ -35,6 +35,7 @@ Rules:
 - Do not push.
 - Do not open PRs.
 - Keep behavior simple; no retry loops.
+- If you use Go tooling, the inherited environment already points temp/cache paths at writable worktree-local directories; use that environment instead of host cache paths.
 - You may use multiple sub-agents or staged execution inside this prompt if useful.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.
