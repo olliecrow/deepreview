@@ -42,6 +42,8 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 ## Safety and isolation
 
 - Review and execute work happen under `~/deepreview`, not in your local checkout.
+- Managed repository state is isolated per repo and source branch, so different branches of the same repo can run concurrently without sharing a checkout.
+- deepreview blocks concurrent runs only when both the repo and source branch match.
 - Default mode works on a delivery branch and opens a pull request.
 - Your current branch and working directory stay untouched in default mode.
 - yolo mode is available, and it is off by default.
@@ -149,7 +151,7 @@ mode: pr
 
 planned order:
 1. preflight checks
-2. acquire per-repo run lock
+2. acquire per-repo+branch run lock
 3. prepare stage
 4. round loop
 5. delivery stage

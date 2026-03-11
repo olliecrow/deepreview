@@ -677,15 +677,15 @@ References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `README.md`
 
 Decision:
-Replace managed workspace clone with a fresh clone each run.
+Replace the branch-scoped managed workspace clone with a fresh clone each run.
 Context:
-Interrupted or abandoned previous runs can leave stale checkout/worktree state under `~/deepreview/repos/...`.
+Interrupted or abandoned previous runs can leave stale checkout/worktree state under `~/deepreview/repos/.../branches/...`.
 Rationale:
 Fresh clone replacement is simpler and more reliable than trying to recover unknown stale state.
 Trade-offs:
 Slightly higher clone/fetch cost per run.
 Enforcement:
-Managed repo path is removed and recloned during prepare stage before fetching refs.
+The source-branch managed repo path is removed and recloned during prepare stage before fetching refs.
 References:
 `internal/deepreview/gitops.go`, `internal/deepreview/gitops_test.go`, `docs/architecture.md`
 
@@ -768,15 +768,15 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`
 
 Decision:
-Allow concurrent deepreview runs across different repositories, but enforce a per-repository run lock to prevent concurrent runs on the same repository.
+Allow concurrent deepreview runs across different repositories and across different source branches of the same repository, but enforce a per-repository+source-branch run lock.
 Context:
-Managed repository cloning/worktree operations mutate shared per-repo workspace paths (`~/deepreview/repos/<owner>/<repo>`), which can race if two runs target the same repo at once.
+Users need same-project concurrency for different branches, but deepreview startup replaces its managed clone and creates candidate refs/worktrees. Shared same-branch state would race, while branch-isolated state can safely proceed in parallel.
 Rationale:
-Cross-repo concurrency is desirable for user throughput, while same-repo serialization prevents destructive races and stale state corruption.
+Cross-repo and cross-branch concurrency improve throughput. Branch-scoped managed clones plus branch-scoped locks keep fresh-clone setup, candidate refs, and worktree cleanup isolated while still blocking duplicate runs against the exact same repo+branch.
 Trade-offs:
-Operators cannot run two same-repo deepreview sessions at the exact same time; they must wait for the active run to complete (or stale lock recovery to occur).
+Branch isolation uses more disk because the workspace now keeps separate managed clones per active source branch. Operators still cannot run two deepreview sessions for the exact same repo+branch at the same time; they must wait for the active run to complete (or stale lock recovery to occur).
 Enforcement:
-Run startup acquires a repo-scoped lock file under `~/deepreview/locks/<owner>/<repo>.lock`; lock creation fails with a clear error if another active run holds it; stale locks are reclaimed.
+Run startup acquires a repo+branch-scoped lock file under `~/deepreview/locks/<owner>/<repo>/<branch-key>.lock`, and each source branch uses its own managed clone path under `~/deepreview/repos/<owner>/<repo>/branches/<branch-key>`. Lock creation fails with a clear error if another active run holds the same repo+branch lock; stale locks are reclaimed.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `README.md`
 

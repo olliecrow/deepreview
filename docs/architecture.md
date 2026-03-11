@@ -24,7 +24,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - local branch exactly synchronized with upstream remote branch
 
 2. Prepare managed workspace under `~/deepreview`:
-- replace stale managed checkout with a fresh clone
+- replace stale managed checkout for the source branch with a fresh clone
 - fetch latest remote refs
 - resolve source-branch head SHA
 - initialize candidate head to latest remote source branch
@@ -69,6 +69,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 ## Isolation model
 - deepreview never edits the user's own active checkout.
+- deepreview isolates managed clone state per repo plus source branch; concurrent same-repo runs are allowed only when source branches differ.
 - each independent review runs in a separate worktree.
 - each execute pass runs in a separate fresh worktree.
 - each round uses fresh worktrees to minimize cross-round context carryover.

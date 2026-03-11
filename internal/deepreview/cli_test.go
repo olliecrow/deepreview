@@ -237,6 +237,41 @@ func TestDryRunHelpTextIncludesCoreSections(t *testing.T) {
 	}
 }
 
+func TestReviewHelpTextMentionsBranchScopedManagedCopy(t *testing.T) {
+	help := ReviewHelpText()
+	if !strings.Contains(help, "branch-scoped managed copy") {
+		t.Fatalf("expected review help to mention branch-scoped managed copy, got:\n%s", help)
+	}
+}
+
+func TestPrintDryRunPlanUsesRepoBranchLockLanguage(t *testing.T) {
+	o := &Orchestrator{
+		config: ReviewConfig{
+			SourceBranch: "feature/test",
+			Mode:         ModePR,
+			Concurrency:  2,
+			MaxRounds:    3,
+		},
+		repoIdentity:    RepoIdentity{Owner: "example", Name: "repo"},
+		workspaceRoot:   "/tmp/workspace",
+		managedRepoPath: "/tmp/workspace/repos/example/repo/branches/feature-test-1234567890abcdef",
+		promptsRoot:     filepath.Join(repoRoot(t), "prompts"),
+	}
+
+	var out strings.Builder
+	printDryRunPlan(&out, o)
+	text := out.String()
+	if !strings.Contains(text, "acquire per-repo+branch run lock") {
+		t.Fatalf("expected dry-run plan to mention repo+branch lock, got:\n%s", text)
+	}
+	if !strings.Contains(text, "managed repo path: /tmp/workspace/repos/example/repo/branches/") {
+		t.Fatalf("expected dry-run plan to show branch-scoped managed repo path, got:\n%s", text)
+	}
+	if !strings.Contains(text, "sync branch-scoped managed repository copy") {
+		t.Fatalf("expected dry-run plan to describe branch-scoped managed repo sync, got:\n%s", text)
+	}
+}
+
 func TestCompletionHelpTextIncludesInstallExamples(t *testing.T) {
 	help := CompletionHelpText()
 	for _, want := range []string{

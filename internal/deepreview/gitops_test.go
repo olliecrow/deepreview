@@ -3,9 +3,29 @@ package deepreview
 import (
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
+
+func TestFilesystemSafeKeyIsStableDistinctAndPathSafe(t *testing.T) {
+	first := FilesystemSafeKey("feature/test")
+	second := FilesystemSafeKey("feature:test")
+	repeat := FilesystemSafeKey("feature/test")
+
+	if first != repeat {
+		t.Fatalf("expected stable key, got %q and %q", first, repeat)
+	}
+	if first == second {
+		t.Fatalf("expected distinct keys for distinct branches, both were %q", first)
+	}
+	if matched := regexp.MustCompile(`^[A-Za-z0-9._-]+$`).MatchString(first); !matched {
+		t.Fatalf("expected path-safe key, got %q", first)
+	}
+	if strings.Contains(first, "..") || strings.Contains(first, "/") {
+		t.Fatalf("expected key without traversal/path separators, got %q", first)
+	}
+}
 
 func TestCloneOrFetchReplacesStaleDirectory(t *testing.T) {
 	td := t.TempDir()

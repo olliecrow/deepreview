@@ -31,7 +31,7 @@ type Orchestrator struct {
 	reporter        ProgressReporter
 	pushCount       int
 	lastDelivery    *DeliveryResult
-	repoLockPath    string
+	runLockPath     string
 }
 
 const stageHeartbeatInterval = 15 * time.Second
@@ -56,7 +56,14 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	}
 
 	runRoot := filepath.Join(workspaceRoot, "runs", config.RunID)
-	managedRepoPath := filepath.Join(workspaceRoot, "repos", repoIdentity.Owner, repoIdentity.Name)
+	managedRepoPath := filepath.Join(
+		workspaceRoot,
+		"repos",
+		repoIdentity.Owner,
+		repoIdentity.Name,
+		"branches",
+		FilesystemSafeKey(config.SourceBranch),
+	)
 	if config.CodexTimeout <= 0 {
 		config.CodexTimeout = time.Duration(config.CodexTimeoutSeconds) * time.Second
 	}
@@ -238,10 +245,10 @@ func (o *Orchestrator) Run() (retErr error) {
 	if err := o.preflight(); err != nil {
 		return err
 	}
-	if err := o.acquireRepoRunLock(); err != nil {
+	if err := o.acquireRunLock(); err != nil {
 		return err
 	}
-	defer o.releaseRepoRunLock()
+	defer o.releaseRunLock()
 	if err := os.MkdirAll(filepath.Join(o.runRoot, "logs"), 0o755); err != nil {
 		return err
 	}
@@ -280,7 +287,7 @@ func (o *Orchestrator) Run() (retErr error) {
 	}()
 
 	prepareStage := "prepare"
-	o.reporter.StageStarted(prepareStage, nil, "syncing managed repository copy")
+	o.reporter.StageStarted(prepareStage, nil, "syncing branch-scoped managed repository copy")
 	if err := CloneOrFetch(o.managedRepoPath, o.repoIdentity.CloneSource, o.config.GitBin); err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
@@ -524,27 +531,35 @@ func (o *Orchestrator) preflight() error {
 	return nil
 }
 
-type repoRunLockRecord struct {
-	RunID     string `json:"run_id"`
-	PID       int    `json:"pid"`
-	Repo      string `json:"repo"`
-	CreatedAt string `json:"created_at"`
+type runLockRecord struct {
+	RunID        string `json:"run_id"`
+	PID          int    `json:"pid"`
+	Repo         string `json:"repo"`
+	SourceBranch string `json:"source_branch"`
+	CreatedAt    string `json:"created_at"`
 }
 
-func (o *Orchestrator) repoLockFilePath() string {
-	return filepath.Join(o.workspaceRoot, "locks", o.repoIdentity.Owner, o.repoIdentity.Name+".lock")
+func (o *Orchestrator) runLockFilePath() string {
+	return filepath.Join(
+		o.workspaceRoot,
+		"locks",
+		o.repoIdentity.Owner,
+		o.repoIdentity.Name,
+		FilesystemSafeKey(o.config.SourceBranch)+".lock",
+	)
 }
 
-func (o *Orchestrator) acquireRepoRunLock() error {
-	lockPath := o.repoLockFilePath()
+func (o *Orchestrator) acquireRunLock() error {
+	lockPath := o.runLockFilePath()
 	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
 		return err
 	}
-	record := repoRunLockRecord{
-		RunID:     o.config.RunID,
-		PID:       os.Getpid(),
-		Repo:      o.repoIdentity.Slug(),
-		CreatedAt: time.Now().UTC().Format(time.RFC3339),
+	record := runLockRecord{
+		RunID:        o.config.RunID,
+		PID:          os.Getpid(),
+		Repo:         o.repoIdentity.Slug(),
+		SourceBranch: o.config.SourceBranch,
+		CreatedAt:    time.Now().UTC().Format(time.RFC3339),
 	}
 	payload, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
@@ -564,7 +579,7 @@ func (o *Orchestrator) acquireRepoRunLock() error {
 	}
 
 	if err := writeLock(); err == nil {
-		o.repoLockPath = lockPath
+		o.runLockPath = lockPath
 		return nil
 	} else if !os.IsExist(err) {
 		return err
@@ -577,28 +592,32 @@ func (o *Orchestrator) acquireRepoRunLock() error {
 	if lockLooksStale(lockPath, existingPayload) {
 		_ = os.Remove(lockPath)
 		if err := writeLock(); err == nil {
-			o.repoLockPath = lockPath
+			o.runLockPath = lockPath
 			return nil
 		} else if !os.IsExist(err) {
 			return err
 		}
 	}
 
-	return NewDeepReviewError("another deepreview run is active for repo `%s`; wait for it to finish before starting another run", o.repoIdentity.Slug())
+	return NewDeepReviewError(
+		"another deepreview run is active for repo `%s` on source branch `%s`; wait for it to finish before starting another run",
+		o.repoIdentity.Slug(),
+		o.config.SourceBranch,
+	)
 }
 
-func (o *Orchestrator) releaseRepoRunLock() {
-	if strings.TrimSpace(o.repoLockPath) == "" {
+func (o *Orchestrator) releaseRunLock() {
+	if strings.TrimSpace(o.runLockPath) == "" {
 		return
 	}
-	if err := os.Remove(o.repoLockPath); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(o.runLockPath); err != nil && !os.IsNotExist(err) {
 		// best-effort cleanup
 	}
-	o.repoLockPath = ""
+	o.runLockPath = ""
 }
 
 func lockLooksStale(lockPath string, payload []byte) bool {
-	var record repoRunLockRecord
+	var record runLockRecord
 	if len(payload) > 0 && json.Unmarshal(payload, &record) == nil && record.PID > 0 {
 		if !isPIDAlive(record.PID) {
 			return true

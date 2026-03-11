@@ -73,6 +73,37 @@ func runCmdExpectFailure(t *testing.T, cwd string, env []string, cmd ...string) 
 	return strings.TrimSpace(stdout.String() + "\n" + stderr.String())
 }
 
+func startCmd(t *testing.T, cwd string, env []string, cmd ...string) (*exec.Cmd, *bytes.Buffer, *bytes.Buffer) {
+	t.Helper()
+	c := exec.Command(cmd[0], cmd[1:]...)
+	c.Dir = cwd
+	if env != nil {
+		c.Env = env
+	}
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	c.Stdout = &stdout
+	c.Stderr = &stderr
+	if err := c.Start(); err != nil {
+		t.Fatalf("command start failed: %v\ncmd=%v", err, cmd)
+	}
+	return c, &stdout, &stderr
+}
+
+func waitForPath(t *testing.T, path string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("path stat failed for %s: %v", path, err)
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for path %s", path)
+}
+
 func runCmdWithInterrupt(t *testing.T, cwd string, env []string, interruptAfter time.Duration, cmd ...string) (stdout string, stderr string, exitCode int) {
 	t.Helper()
 	c := exec.Command(cmd[0], cmd[1:]...)
@@ -234,6 +265,112 @@ func TestEndToEndYoloWithFakeCodex(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review", "worker-01", "worktree")); !os.IsNotExist(err) {
 		t.Fatalf("expected review worker worktree cleanup")
+	}
+}
+
+func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/a")
+	if err := os.WriteFile(filepath.Join(seed, "branch-a.txt"), []byte("branch a\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "branch-a.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature a")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/a")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "main")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/b")
+	if err := os.WriteFile(filepath.Join(seed, "branch-b.txt"), []byte("branch b\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "branch-b.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature b")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/b")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/a")
+
+	beforeA := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/a")
+	beforeB := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/b")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_SLEEP_MS=200")
+
+	cmdA, stdoutA, stderrA := startCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/a",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "yolo",
+		"--no-tui",
+	)
+	lockA := filepath.Join(workspace, "locks", "local", "user", FilesystemSafeKey("feature/a")+".lock")
+	waitForPath(t, lockA, 5*time.Second)
+
+	cmdB, stdoutB, stderrB := startCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/b",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "yolo",
+		"--no-tui",
+	)
+
+	if err := cmdA.Wait(); err != nil {
+		t.Fatalf("first concurrent run failed: %v\nstdout=\n%s\nstderr=\n%s", err, stdoutA.String(), stderrA.String())
+	}
+	if err := cmdB.Wait(); err != nil {
+		t.Fatalf("second concurrent run failed: %v\nstdout=\n%s\nstderr=\n%s", err, stdoutB.String(), stderrB.String())
+	}
+	if !strings.Contains(stdoutA.String(), "deepreview completed:") {
+		t.Fatalf("expected first run completion summary, got stdout:\n%s\nstderr:\n%s", stdoutA.String(), stderrA.String())
+	}
+	if !strings.Contains(stdoutB.String(), "deepreview completed:") {
+		t.Fatalf("expected second run completion summary, got stdout:\n%s\nstderr:\n%s", stdoutB.String(), stderrB.String())
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	afterA := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/a")
+	afterB := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/b")
+	if beforeA == afterA {
+		t.Fatalf("expected concurrent branch-a run to update remote branch")
+	}
+	if beforeB == afterB {
+		t.Fatalf("expected concurrent branch-b run to update remote branch")
+	}
+
+	managedA := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/a"))
+	managedB := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/b"))
+	if _, err := os.Stat(filepath.Join(managedA, ".git")); err != nil {
+		t.Fatalf("expected branch-a managed repo to exist, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(managedB, ".git")); err != nil {
+		t.Fatalf("expected branch-b managed repo to exist, got %v", err)
 	}
 }
 
@@ -1415,7 +1552,7 @@ func TestRunAuditRoundFailsWhenCandidateHeadMovesWithoutTreeChanges(t *testing.T
 		t.Fatalf("expected failed audit round to leave remote source branch unchanged")
 	}
 
-	managedRepo := filepath.Join(workspace, "repos", "local", "user")
+	managedRepo := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/test"))
 	logs := runCmd(t, td, nil, "git", "-C", managedRepo, "log", "--oneline", "--all", "-n", "10")
 	if !strings.Contains(logs, "audit empty commit") {
 		t.Fatalf("expected audit-only empty commit repro to move candidate history, got:\n%s", logs)
@@ -1479,7 +1616,7 @@ func TestRunAuditRoundFailsBeforeAutoCommitOnDirtyWorktree(t *testing.T) {
 		t.Fatalf("expected failed audit round to leave remote source branch unchanged")
 	}
 
-	managedRepo := filepath.Join(workspace, "repos", "local", "user")
+	managedRepo := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/test"))
 	logs := runCmd(t, td, nil, "git", "-C", managedRepo, "log", "--oneline", "--all", "-n", "10")
 	if strings.Contains(logs, "deepreview: round 02 execute updates") {
 		t.Fatalf("expected dirty audit round to fail before deepreview auto-commit, got:\n%s", logs)
