@@ -522,7 +522,7 @@ func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {
 	}
 }
 
-func TestReadCompletionReviewSnapshotSkipsInvalidRoundStatus(t *testing.T) {
+func TestReadCompletionReviewSnapshotSkipsInvalidRoundRecord(t *testing.T) {
 	runRoot := t.TempDir()
 	round1 := filepath.Join(runRoot, "round-01")
 	round2 := filepath.Join(runRoot, "round-02")
@@ -544,8 +544,8 @@ func TestReadCompletionReviewSnapshotSkipsInvalidRoundStatus(t *testing.T) {
 	}
 
 	snapshot := readCompletionReviewSnapshot(runRoot)
-	if snapshot.CompletedRounds != 2 {
-		t.Fatalf("expected 2 completed rounds, got %d", snapshot.CompletedRounds)
+	if snapshot.CompletedRounds != 1 {
+		t.Fatalf("expected only valid round records to count, got %d", snapshot.CompletedRounds)
 	}
 	if !snapshot.HasFinalStatus {
 		t.Fatalf("expected final status to be present")
@@ -555,6 +555,43 @@ func TestReadCompletionReviewSnapshotSkipsInvalidRoundStatus(t *testing.T) {
 	}
 	if snapshot.FinalStatus.Reason != "done" {
 		t.Fatalf("expected final reason done, got %s", snapshot.FinalStatus.Reason)
+	}
+}
+
+func TestReadCompletionReviewSnapshotSkipsRoundRecordWithInvalidStatus(t *testing.T) {
+	runRoot := t.TempDir()
+	round1 := filepath.Join(runRoot, "round-01")
+	round2 := filepath.Join(runRoot, "round-02")
+	if err := os.MkdirAll(round1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(round2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(round1, "round.json"),
+		[]byte("{\"round\":1,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"pause\",\"reason\":\"bad\"}}\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(round2, "round.json"),
+		[]byte("{\"round\":2,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"done\"}}\n"),
+		0o644,
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	snapshot := readCompletionReviewSnapshot(runRoot)
+	if snapshot.CompletedRounds != 1 {
+		t.Fatalf("expected invalid status record to be skipped, got %d", snapshot.CompletedRounds)
+	}
+	if !snapshot.HasFinalStatus {
+		t.Fatalf("expected final status from valid round record")
+	}
+	if snapshot.FinalStatus.Reason != "done" {
+		t.Fatalf("expected valid round record to win, got %q", snapshot.FinalStatus.Reason)
 	}
 }
 

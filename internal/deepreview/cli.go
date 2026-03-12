@@ -1084,12 +1084,12 @@ func readCompletionReviewSnapshot(runRoot string) completionReviewSnapshot {
 		return snapshot
 	}
 	sort.Strings(recordPaths)
-	snapshot.CompletedRounds = len(recordPaths)
 	for _, recordPath := range recordPaths {
 		record, err := readRoundRecord(recordPath)
 		if err != nil {
 			continue
 		}
+		snapshot.CompletedRounds++
 		snapshot.FinalStatus = record.Status
 		snapshot.HasFinalStatus = true
 	}
