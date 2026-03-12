@@ -311,10 +311,10 @@ func TestInferRepoAndBranchOldPWDFallbackIgnoredOutsideSourceRoot(t *testing.T) 
 	})
 }
 
-func TestInferRepoAndBranchIgnoresCallerCWDOutsideSourceRoot(t *testing.T) {
+func TestInferRepoAndBranchHonorsCallerCWDOutsideSourceRoot(t *testing.T) {
 	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
-	currentRepoAbs := canonicalPath(t, currentRepo)
+	callerRepoAbs := canonicalPath(t, callerRepo)
 	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
 
 	withWorkingDir(t, currentRepo, func() {
@@ -322,22 +322,22 @@ func TestInferRepoAndBranchIgnoresCallerCWDOutsideSourceRoot(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inferRepoAndBranch failed: %v", err)
 		}
-		if resolvedRepo != currentRepoAbs {
-			t.Fatalf("expected inferred repo %s, got %s", currentRepoAbs, resolvedRepo)
+		if resolvedRepo != callerRepoAbs {
+			t.Fatalf("expected inferred repo %s, got %s", callerRepoAbs, resolvedRepo)
 		}
-		if resolvedBranch != "feature/current" {
-			t.Fatalf("expected inferred branch feature/current, got %s", resolvedBranch)
+		if resolvedBranch != "feature/caller" {
+			t.Fatalf("expected inferred branch feature/caller, got %s", resolvedBranch)
 		}
 	})
 }
 
-func TestValidateLocalBranchReadyForRemoteReviewIgnoresCallerCWDOutsideSourceRoot(t *testing.T) {
+func TestValidateLocalBranchReadyForRemoteReviewHonorsCallerCWDOutsideSourceRoot(t *testing.T) {
 	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
 	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
 
 	withWorkingDir(t, currentRepo, func() {
-		if err := os.WriteFile(filepath.Join(currentRepo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(callerRepo, "README.md"), []byte("modified\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
 		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
@@ -350,6 +350,26 @@ func TestValidateLocalBranchReadyForRemoteReviewIgnoresCallerCWDOutsideSourceRoo
 		}
 		if !strings.Contains(err.Error(), "local tracked changes are present") {
 			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestInferRepoAndBranchHonorsCallerCWDFromNonRepoDirectory(t *testing.T) {
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	callerRepoAbs := canonicalPath(t, callerRepo)
+	td := t.TempDir()
+	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
+
+	withWorkingDir(t, td, func() {
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		if resolvedRepo != callerRepoAbs {
+			t.Fatalf("expected inferred repo %s, got %s", callerRepoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/caller" {
+			t.Fatalf("expected inferred branch feature/caller, got %s", resolvedBranch)
 		}
 	})
 }

@@ -668,13 +668,26 @@ When wrappers launch deepreview from the source checkout (for example via `cd ..
 Context:
 Shell wrappers that changed directory into the deepreview repo caused omitted `<repo>` inference to silently target `olliecrow/deepreview`, producing cross-repo lock collisions and runs against the wrong repository.
 Rationale:
-Inference must track operator intent, not launcher implementation details. Supporting explicit caller context (`DEEPREVIEW_CALLER_CWD`) and guarded `OLDPWD` fallback preserves default ergonomics while preventing wrong-repo runs in common wrapper setups.
+Inference must track operator intent, not launcher implementation details. Treating `DEEPREVIEW_CALLER_CWD` as an unconditional explicit override preserves wrapper intent even when the wrapper launches from another repo or a non-repo directory, while keeping `OLDPWD` guarded to deepreview-source-root launches prevents accidental fallback in unrelated shells.
 Trade-offs:
 Adds inference precedence logic and one wrapper-specific fallback path.
 Enforcement:
-`inferRepoAndBranch` now resolves implicit repo context using `DEEPREVIEW_CALLER_CWD` first, then `OLDPWD` only when current repo matches deepreview source root; targeted tests assert wrapper fallback, env override precedence, and non-source-root stability.
+`inferRepoAndBranch`, local readiness validation, and commit-identity resolution now check `DEEPREVIEW_CALLER_CWD` first, then `OLDPWD` only when current repo matches deepreview source root; targeted tests assert wrapper fallback, explicit override precedence, and non-source-root/non-repo behavior.
 References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/cli.go`, `README.md`
+
+Decision:
+Represent repo source type explicitly and canonicalize filesystem-local clone sources during identity resolution.
+Context:
+Using synthetic owner `local` to represent filesystem remotes collided with valid GitHub namespaces such as `local/repo`, broke `--mode pr` eligibility checks, and made relative local origins depend on the caller's working directory.
+Rationale:
+An explicit source-type field keeps GitHub-vs-filesystem behavior honest across PR gating, display slugs, managed repo paths, and lock paths. Canonicalizing relative filesystem remotes once at identity resolution ensures clone/fetch and doctor checks use the same stable source path.
+Trade-offs:
+Filesystem-local repos now use a deterministic internal namespace derived from the canonical clone source instead of the older synthetic `local/*` convention.
+Enforcement:
+`RepoIdentity` carries an explicit source type, `SupportsPRDelivery` keys off that source type, local-path identity resolution canonicalizes filesystem remotes before GitHub slug parsing, and regression tests cover relative local remotes plus GitHub `local/repo` inputs.
+References:
+`internal/deepreview/types.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
 
 Decision:
 In PR mode, pre-delivery privacy handling uses a bounded remediation loop (maximum 3 attempts) and proceeds with PR delivery after bounded attempts.

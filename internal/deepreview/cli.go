@@ -277,8 +277,9 @@ Optional flags:
     Root for managed repos + run artifacts.
 
   DEEPREVIEW_CALLER_CWD       (optional)
-    Explicit caller working directory for repo/branch inference when wrappers launch deepreview
-    from another directory.
+    Explicit caller working directory override for repo/branch inference.
+    This override is honored even when wrappers launch deepreview from another repo
+    or a non-repo directory.
 
   DEEPREVIEW_GIT_BIN          (default: git)
   DEEPREVIEW_CODEX_BIN        (default: codex)

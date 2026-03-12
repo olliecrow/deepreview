@@ -45,10 +45,10 @@ func samePath(a, b string) bool {
 }
 
 func resolveImplicitRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
+	if state := resolveCallerCWDRepoState(gitBin, cwdState); state != nil {
+		return state
+	}
 	if callerContextFallbackAllowed(cwdState) {
-		if state := resolveCallerCWDRepoState(gitBin, cwdState); state != nil {
-			return state
-		}
 		if state := resolveOldPWDRepoState(gitBin, cwdState); state != nil {
 			return state
 		}

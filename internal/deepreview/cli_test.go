@@ -318,9 +318,9 @@ func TestPrintDryRunPlanUsesRepoBranchLockLanguage(t *testing.T) {
 			Concurrency:  2,
 			MaxRounds:    3,
 		},
-		repoIdentity:    RepoIdentity{Owner: "example", Name: "repo"},
+		repoIdentity:    RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
 		workspaceRoot:   "/tmp/workspace",
-		managedRepoPath: "/tmp/workspace/repos/example/repo/branches/feature-test-1234567890abcdef",
+		managedRepoPath: "/tmp/workspace/repos/github/example/repo/branches/feature-test-1234567890abcdef",
 		promptsRoot:     filepath.Join(repoRoot(t), "prompts"),
 	}
 
@@ -330,7 +330,7 @@ func TestPrintDryRunPlanUsesRepoBranchLockLanguage(t *testing.T) {
 	if !strings.Contains(text, "acquire per-repo+branch run lock") {
 		t.Fatalf("expected dry-run plan to mention repo+branch lock, got:\n%s", text)
 	}
-	if !strings.Contains(text, "managed repo path: /tmp/workspace/repos/example/repo/branches/") {
+	if !strings.Contains(text, "managed repo path: /tmp/workspace/repos/github/example/repo/branches/") {
 		t.Fatalf("expected dry-run plan to show branch-scoped managed repo path, got:\n%s", text)
 	}
 	if !strings.Contains(text, "sync branch-scoped managed repository copy") {

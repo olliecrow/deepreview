@@ -372,7 +372,7 @@ func TestResolveCommitIdentityUsesMatchedLocalRepoConfigForRepoLocator(t *testin
 	}
 }
 
-func TestResolveCommitIdentityIgnoresCallerCWDOutsideSourceRootForRepoLocator(t *testing.T) {
+func TestResolveCommitIdentityHonorsCallerCWDOutsideSourceRootForRepoLocator(t *testing.T) {
 	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "empty.gitconfig"))
@@ -388,11 +388,11 @@ func TestResolveCommitIdentityIgnoresCallerCWDOutsideSourceRootForRepoLocator(t 
 		if err != nil {
 			t.Fatalf("ResolveCommitIdentity failed: %v", err)
 		}
-		if identity.Name != "Current User" {
-			t.Fatalf("expected current repo user name, got %q", identity.Name)
+		if identity.Name != "Caller User" {
+			t.Fatalf("expected caller repo user name, got %q", identity.Name)
 		}
-		if identity.Email != "current-user@example.com" {
-			t.Fatalf("expected current repo user email, got %q", identity.Email)
+		if identity.Email != "caller-user@example.com" {
+			t.Fatalf("expected caller repo user email, got %q", identity.Email)
 		}
 	})
 }
