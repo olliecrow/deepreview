@@ -755,15 +755,15 @@ References:
 `prompts/execute/01-consolidate-plan.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
-Round artifacts should live directly under the run directory, and round completion should be recorded by one authoritative `round.json` per successful round.
+Codex prompt workers should stage review and execute artifacts inside their worktree sandbox, while deepreview persists canonical copies under the run directory and records round completion with one authoritative `round.json` per successful round.
 Context:
-The old artifact flow mixed worktree-local writes, promotion/copy steps, and inferred round completion from multiple files. That created fragile cleanup and accounting behavior.
+The old artifact flow mixed worktree-local writes, promotion/copy steps, and inferred round completion from multiple files. Simplifying to direct run-directory writes improved accounting, but it conflicted with the existing Codex write sandbox: real workers can only write inside their current worktree, as already demonstrated by the privacy-remediation flow.
 Rationale:
-Keeping runtime artifacts in the run directory makes the worktree contain only deliverable repo changes, while a single orchestrator-written `round.json` makes completion accounting explicit and reliable.
+Sandbox-safe worker writes are required for correctness. Keeping canonical artifacts in the run directory still gives one stable place for summaries, diagnostics, and completion reporting, while a single orchestrator-written `round.json` keeps round accounting explicit and reliable.
 Trade-offs:
-Prompt templates and watchdog monitoring must point at run-directory artifact paths, and the run directory now holds more operational state.
+Some copy/promotion logic remains for prompt-written artifacts, and docs/tests must distinguish between transient staged files in worktrees and canonical persisted artifacts in the run directory.
 Enforcement:
-Execute prompts write triage/plan/verification/status/summary artifacts directly under `~/deepreview/runs/<run-id>/round-<round>/`; after successful execute-stage validation and any required local commit, the orchestrator writes `round.json`. Completion reporting reads those authoritative round records instead of inferring completion from summary/status file presence.
+Independent-review workers write review reports under worktree-local `.deepreview/`; execute prompts write triage/plan/verification/status/summary artifacts under worktree-local `.deepreview/artifacts/`; the orchestrator copies canonical artifacts into `~/deepreview/runs/<run-id>/round-<round>/` before consuming them; after successful execute-stage validation and any required local commit, the orchestrator writes `round.json`. Integration coverage requires fake-codex prompt output paths to stay within the worker cwd.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
 
