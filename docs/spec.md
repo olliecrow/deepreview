@@ -25,7 +25,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization after refreshing the tracked upstream ref.
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
-- deepreview resolves the Codex prompt launcher by name instead of by hardcoded local repo path: prefer `multicodex` on `PATH`, then fall back to `codex` unless `DEEPREVIEW_REQUIRE_MULTICODEX` is set.
+- deepreview resolves the Codex prompt launcher by name instead of by hardcoded local repo path: use `multicodex` whenever it is available on `PATH`; otherwise fall back to `codex` unless `DEEPREVIEW_REQUIRE_MULTICODEX` is set.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, then lock/worktree cleanup runs before process exit.
 - round loop runs up to `--max-rounds` (default `5`) total execute rounds and may stop early.
@@ -45,9 +45,9 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute stage validates `round-triage.md` and fails the round if any `accept` item is missing severity/confidence tags or does not satisfy `severity in {critical, high}` and `confidence=high`.
 - execute prompt-2 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
 - execute prompt-3 (cleanup/summary/commit) must include docs/notes/decision upkeep, write complete round artifacts, and ensure changed work is committed locally.
-- Codex prompt workers must write prompt outputs inside their current worktree sandbox; deepreview then persists canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) under `~/deepreview/runs/<run-id>/round-<round>/`.
+- Codex prompt workers must write prompt outputs inside their current worktree; deepreview then persists canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) under `~/deepreview/runs/<run-id>/round-<round>/`.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` and `.tmp/deepreview/` remain reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
-- all Codex prompt executions must receive writable worktree-local temp/cache defaults for tool execution, including Go cache/temp envs (`TMPDIR`, `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`), rooted under the worker's `.deepreview/runtime/` directory so verification commands do not fall back to host-local caches outside the sandbox.
+- all Codex prompt executions use the operator's normal local Codex configuration and inherited local environment by default; deepreview does not force a separate model, reasoning profile, temp/cache override layer, or other execution wrapper beyond the resolved launcher itself.
 - round progression is determined by validated execute-stage round status plus repository change detection.
 - if an execute round ends with status `continue`, deepreview must run another review round regardless of repository changes.
 - if an execute round ends with the first consecutive status `stop`, deepreview must run one additional confirmation round regardless of repository changes.
@@ -71,8 +71,8 @@ This document defines the canonical runtime and product contract for `deepreview
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
 - managed repo checkout paths are branch-scoped under the workspace so fresh-clone setup for one source branch cannot race another source branch of the same repo.
 - Codex auth should rely on local Codex CLI session/subscription, not repository-stored API keys.
-- `DEEPREVIEW_REQUIRE_MULTICODEX=1` requires `multicodex exec` to be available on `PATH`; when unset, deepreview may fall back to `codex exec`.
-- all Codex prompt executions (new and resumed threads, including post-delivery prompts) must use `--model gpt-5.4` and `model_reasoning_effort="high"`.
+- `DEEPREVIEW_REQUIRE_MULTICODEX=1` requires `multicodex exec` to be available on `PATH`; when unset, deepreview falls back to `codex exec` only if `multicodex` is unavailable.
+- all Codex prompt executions (new and resumed threads, including post-delivery prompts) must use the operator's normal local Codex configuration unless an explicit deepreview override is added in code for a documented reason.
 
 ## Runtime contract
 - command entrypoint: `deepreview`
@@ -85,7 +85,8 @@ This document defines the canonical runtime and product contract for `deepreview
 - optional inference override:
   - `DEEPREVIEW_CALLER_CWD` can be set by launch wrappers to preserve caller repo inference when the wrapper changes directories before invoking deepreview.
 - optional launcher requirement:
-  - `DEEPREVIEW_REQUIRE_MULTICODEX=1` disables fallback to `codex exec` and fails preflight/doctor if `multicodex exec` is unavailable.
+- `DEEPREVIEW_REQUIRE_MULTICODEX=1` disables fallback to `codex exec` and fails preflight/doctor if `multicodex exec` is unavailable.
+- `DEEPREVIEW_CODEX_BIN` overrides only the codex fallback path used when `multicodex` is unavailable.
 - core options:
   - `--concurrency <n>` default `4`
   - `--max-rounds <n>` default `5`

@@ -27,6 +27,7 @@ Process:
 - fix obviously wrong generated or temporary artifacts
 - make small final cleanup edits needed for a clean PR
 - correct commit messages/history when privacy/security or obvious delivery hygiene requires it
+ - remove obvious bloat or unnecessary complexity when the cleanup is high-confidence and low-risk
 3. Do not make speculative refactors or broaden scope.
 4. If no changes are needed, leave the branch unchanged.
 5. Prefer leaving the worktree clean. If you intentionally leave simple uncommitted edits, deepreview may auto-commit them after this stage.
