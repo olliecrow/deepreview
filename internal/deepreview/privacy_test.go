@@ -210,6 +210,38 @@ func TestSecretHygieneScanRejectsSecretPatternInModifiedBinaryFile(t *testing.T)
 	}
 }
 
+func TestSecretHygieneScanIgnoresPreexistingSecretPatternInModifiedBinaryFile(t *testing.T) {
+	o, repoPath, _ := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "feature/test")
+	binaryPath := filepath.Join(repoPath, "secret.bin")
+	if err := os.WriteFile(binaryPath, []byte("prefix\x00SECRETTOKEN123\x00suffix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "seed binary secret fixture")
+	sourceSHA := runGitTest(t, repoParent, "-C", repoPath, "rev-parse", "HEAD")
+	runGitTest(t, repoParent, "-C", repoPath, "update-ref", "refs/remotes/origin/feature/test", sourceSHA)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	previousSecretPatterns := secretRiskyPatterns
+	secretRiskyPatterns = []*regexp.Regexp{regexp.MustCompile(`SECRETTOKEN123`)}
+	defer func() {
+		secretRiskyPatterns = previousSecretPatterns
+	}()
+
+	if err := os.WriteFile(binaryPath, []byte("prefix\x00SECRETTOKEN123\x00suffix\x00harmless"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "append harmless bytes")
+
+	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
+		t.Fatalf("expected preexisting binary secret outside changed bytes to be ignored, got: %v", err)
+	}
+}
+
 func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
 	repoParent := filepath.Dir(repoPath)

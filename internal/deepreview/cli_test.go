@@ -12,6 +12,54 @@ import (
 	"time"
 )
 
+func captureCommandOutput(t *testing.T, fn func() int) (int, string, string) {
+	t.Helper()
+
+	stdoutReader, stdoutWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stdout pipe create failed: %v", err)
+	}
+	stderrReader, stderrWriter, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("stderr pipe create failed: %v", err)
+	}
+
+	originalStdout := os.Stdout
+	originalStderr := os.Stderr
+	os.Stdout = stdoutWriter
+	os.Stderr = stderrWriter
+
+	code := fn()
+
+	_ = stdoutWriter.Close()
+	_ = stderrWriter.Close()
+	os.Stdout = originalStdout
+	os.Stderr = originalStderr
+
+	stdoutBytes, stdoutErr := io.ReadAll(stdoutReader)
+	_ = stdoutReader.Close()
+	if stdoutErr != nil {
+		t.Fatalf("stdout read failed: %v", stdoutErr)
+	}
+	stderrBytes, stderrErr := io.ReadAll(stderrReader)
+	_ = stderrReader.Close()
+	if stderrErr != nil {
+		t.Fatalf("stderr read failed: %v", stderrErr)
+	}
+
+	return code, string(stdoutBytes), string(stderrBytes)
+}
+
+func writeFakeTool(t *testing.T, dir, name string) string {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	script := "#!/bin/sh\nexit 0\n"
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake tool %s: %v", name, err)
+	}
+	return path
+}
+
 func TestParseReviewArgsYoloAliasOverridesMode(t *testing.T) {
 	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature/test", "--mode", "pr", "--yolo"}, time.Unix(1700000000, 0))
 	if err != nil {
@@ -385,6 +433,81 @@ func TestParseReviewArgsInfersRepoAndBranchFromCurrentRepo(t *testing.T) {
 		}
 		if parsed.Config.SourceBranch != "feature/test" {
 			t.Fatalf("expected inferred source branch feature/test, got %s", parsed.Config.SourceBranch)
+		}
+	})
+}
+
+func TestRunDryRunCommandBypassesReviewReadinessValidation(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("ahead\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitCommand(t, repo, "add", "README.md")
+		runGitCommand(t, repo, "commit", "-m", "ahead")
+
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDryRunCommand([]string{})
+		})
+		if code != 0 {
+			t.Fatalf("expected dry-run to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "deepreview dry-run") {
+			t.Fatalf("expected dry-run output, got:\n%s", stdout)
+		}
+	})
+}
+
+func TestRunReviewCommandKeepsReadinessValidation(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("ahead\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitCommand(t, repo, "add", "README.md")
+		runGitCommand(t, repo, "commit", "-m", "ahead")
+
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runReviewCommand([]string{"--no-tui"})
+		})
+		if code != 1 {
+			t.Fatalf("expected review to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "not synchronized") {
+			t.Fatalf("expected readiness failure in stderr, got:\n%s", stderr)
+		}
+	})
+}
+
+func TestRunDoctorCommandBypassesReviewReadinessValidation(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+	toolDir := t.TempDir()
+	t.Setenv("DEEPREVIEW_CODEX_BIN", writeFakeTool(t, toolDir, "codex"))
+	t.Setenv("DEEPREVIEW_GH_BIN", writeFakeTool(t, toolDir, "gh"))
+
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("ahead\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitCommand(t, repo, "add", "README.md")
+		runGitCommand(t, repo, "commit", "-m", "ahead")
+
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDoctorCommand([]string{})
+		})
+		if code != 0 {
+			t.Fatalf("expected doctor to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "deepreview doctor") {
+			t.Fatalf("expected doctor output, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "doctor result: PASS") {
+			t.Fatalf("expected doctor pass output, got:\n%s", stdout)
 		}
 	})
 }

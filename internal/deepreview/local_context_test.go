@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func setSourceRootDetectorForTest(t *testing.T, detector func() (string, bool)) {
@@ -65,7 +66,11 @@ func TestInferRepoAndBranchRejectsTrackedUncommittedChanges(t *testing.T) {
 		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := inferRepoAndBranch("git", "", "")
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch should still resolve repo+branch, got: %v", err)
+		}
+		err = validateLocalBranchReadyForRemoteReview("git", resolvedRepo, resolvedBranch)
 		if err == nil {
 			t.Fatalf("expected tracked-change error")
 		}
@@ -83,7 +88,11 @@ func TestInferRepoAndBranchRejectsAheadOfRemote(t *testing.T) {
 		}
 		runGitCommand(t, repo, "add", "README.md")
 		runGitCommand(t, repo, "commit", "-m", "ahead")
-		_, _, err := inferRepoAndBranch("git", "", "")
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch should still resolve repo+branch, got: %v", err)
+		}
+		err = validateLocalBranchReadyForRemoteReview("git", resolvedRepo, resolvedBranch)
 		if err == nil {
 			t.Fatalf("expected ahead-of-remote error")
 		}
@@ -119,7 +128,11 @@ func TestInferRepoAndBranchRejectsWhenRemoteAdvancedWithoutLocalFetch(t *testing
 	}
 
 	withWorkingDir(t, repo, func() {
-		_, _, err := inferRepoAndBranch("git", "", "")
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch should still resolve repo+branch, got: %v", err)
+		}
+		err = validateLocalBranchReadyForRemoteReview("git", resolvedRepo, resolvedBranch)
 		if err == nil {
 			t.Fatalf("expected stale local tracking ref to be detected without refreshing local refs")
 		}
@@ -151,7 +164,11 @@ func TestInferRepoAndBranchExplicitSourceBranchRejectsTrackedUncommittedChanges(
 		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
 			t.Fatal(err)
 		}
-		_, _, err := inferRepoAndBranch("git", "", "feature/test")
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "feature/test")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch should still resolve explicit repo+branch, got: %v", err)
+		}
+		err = validateLocalBranchReadyForRemoteReview("git", resolvedRepo, resolvedBranch)
 		if err == nil {
 			t.Fatalf("expected tracked-change error for explicit source branch")
 		}
@@ -169,7 +186,11 @@ func TestInferRepoAndBranchExplicitSourceBranchRejectsAheadOfRemote(t *testing.T
 		}
 		runGitCommand(t, repo, "add", "README.md")
 		runGitCommand(t, repo, "commit", "-m", "ahead")
-		_, _, err := inferRepoAndBranch("git", "", "feature/test")
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "feature/test")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch should still resolve explicit repo+branch, got: %v", err)
+		}
+		err = validateLocalBranchReadyForRemoteReview("git", resolvedRepo, resolvedBranch)
 		if err == nil {
 			t.Fatalf("expected ahead-of-remote error for explicit source branch")
 		}
@@ -195,6 +216,9 @@ func TestInferRepoAndBranchExplicitDifferentBranchSkipsCurrentBranchReadinessChe
 		}
 		if resolvedBranch != "feature/other" {
 			t.Fatalf("expected explicit branch feature/other, got %s", resolvedBranch)
+		}
+		if err := validateLocalBranchReadyForRemoteReview("git", resolvedRepo, resolvedBranch); err != nil {
+			t.Fatalf("expected explicit non-current branch to bypass readiness validation, got: %v", err)
 		}
 	})
 }
@@ -290,4 +314,27 @@ func TestInferRepoAndBranchPrefersCallerCWDEnv(t *testing.T) {
 			t.Fatalf("expected inferred branch feature/caller, got %s", resolvedBranch)
 		}
 	})
+}
+
+func TestRemoteRefSHATimesOut(t *testing.T) {
+	td := t.TempDir()
+	gitPath := filepath.Join(td, "slow-git.sh")
+	script := "#!/bin/sh\nsleep 1\n"
+	if err := os.WriteFile(gitPath, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	previousTimeout := branchReadinessRemoteTimeout
+	branchReadinessRemoteTimeout = 50 * time.Millisecond
+	t.Cleanup(func() {
+		branchReadinessRemoteTimeout = previousTimeout
+	})
+
+	_, err := remoteRefSHA(gitPath, td, "origin/main")
+	if err == nil {
+		t.Fatalf("expected timeout error")
+	}
+	if !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("expected timeout in error, got: %v", err)
+	}
 }
