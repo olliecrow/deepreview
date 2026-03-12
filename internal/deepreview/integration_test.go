@@ -1388,10 +1388,15 @@ func TestEndToEndPRModeReservesDeepreviewTmpArtifactsInsideRepoOwnedTmp(t *testi
 	runCmd(t, td, nil, "git", "clone", remote, seed)
 	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
 	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
 	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed main")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
 	if err := os.MkdirAll(filepath.Join(seed, ".tmp"), 0o755); err != nil {
 		t.Fatal(err)
 	}
