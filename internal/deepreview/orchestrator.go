@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -82,10 +83,6 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	if config.ReviewActivityPoll <= 0 && config.ReviewActivityPollS > 0 {
 		config.ReviewActivityPoll = time.Duration(config.ReviewActivityPollS) * time.Second
 	}
-	// Enforce globally pinned Codex settings regardless of caller-supplied config.
-	config.CodexModel = forcedCodexModel
-	config.CodexReasoning = forcedCodexReasoningEffort
-
 	return &Orchestrator{
 		config:          config,
 		toolRoot:        toolRoot,
@@ -95,10 +92,8 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 		repoIdentity:    repoIdentity,
 		managedRepoPath: managedRepoPath,
 		codexRunner: CodexRunner{
-			CodexBin:   config.CodexBin,
-			CodexModel: config.CodexModel,
-			Reasoning:  config.CodexReasoning,
-			Timeout:    config.CodexTimeout,
+			CodexBin: config.CodexBin,
+			Timeout:  config.CodexTimeout,
 		},
 		reporter: reporter,
 	}, nil
@@ -174,10 +169,21 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 				return RepoIdentity{}, NewDeepReviewError("local repo input must have remote.origin.url configured: %s", repoPath)
 			}
 			owner, name, ok := parseOwnerRepo(remote)
-			if !ok {
-				return RepoIdentity{}, NewDeepReviewError("local repo input must have a supported GitHub origin remote: %s", repoPath)
+			if ok {
+				return RepoIdentity{Owner: owner, Name: name, CloneSource: remote}, nil
 			}
-			return RepoIdentity{Owner: owner, Name: name, CloneSource: remote}, nil
+			if localCloneSource, ok := localCloneSource(remote); ok {
+				localName := SanitizeSegment(filepath.Base(repoPath))
+				if strings.TrimSpace(localName) == "" || localName == "." || localName == "value" {
+					localName = FilesystemSafeKey(localCloneSource)
+				}
+				return RepoIdentity{
+					Owner:       "local",
+					Name:        localName,
+					CloneSource: remote,
+				}, nil
+			}
+			return RepoIdentity{}, NewDeepReviewError("local repo input must have a supported GitHub or local filesystem origin remote: %s", repoPath)
 		}
 	}
 
@@ -190,6 +196,30 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 	}
 
 	return RepoIdentity{}, NewDeepReviewError("unable to resolve repo locator: %s", repo)
+}
+
+func localCloneSource(remote string) (string, bool) {
+	trimmed := strings.TrimSpace(remote)
+	if trimmed == "" {
+		return "", false
+	}
+	if strings.HasPrefix(trimmed, "file://") {
+		parsed, err := url.Parse(trimmed)
+		if err != nil || parsed.Scheme != "file" || strings.TrimSpace(parsed.Path) == "" {
+			return "", false
+		}
+		return parsed.Path, true
+	}
+	if filepath.IsAbs(trimmed) {
+		return trimmed, true
+	}
+	if strings.HasPrefix(trimmed, "."+string(os.PathSeparator)) || trimmed == "." || strings.HasPrefix(trimmed, "..") {
+		return trimmed, true
+	}
+	if _, err := os.Stat(trimmed); err == nil {
+		return trimmed, true
+	}
+	return "", false
 }
 
 var ownerRepoSlugRe = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)
@@ -700,11 +730,15 @@ func isPIDAlive(pid int) bool {
 }
 
 func which(command string) (bool, error) {
-	completed, err := RunCommand([]string{"/usr/bin/env", "sh", "-lc", "command -v " + command}, "", "", false, 0)
-	if err != nil {
-		return false, err
+	_, err := exec.LookPath(command)
+	if err == nil {
+		return true, nil
 	}
-	return completed.ReturnCode == 0 && strings.TrimSpace(completed.Stdout) != "", nil
+	var execErr *exec.Error
+	if errors.As(err, &execErr) {
+		return false, nil
+	}
+	return false, err
 }
 
 func (o *Orchestrator) candidateBranchName(sourceBranch, runID string) string {
@@ -2052,8 +2086,8 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 	}
 
 	statusArtifactPath := filepath.Join(attemptDir, "privacy-status.json")
-	// Codex can only write inside its worktree sandbox, so persist the worker-written
-	// status there first and copy it back into the run artifact directory after execution.
+	// Keep worker-written status inside the remediation worktree first, then copy it
+	// back into the run artifact directory after execution.
 	statusWorktreeRelPath := filepath.ToSlash(filepath.Join(".tmp", "deepreview", "privacy-fix", fmt.Sprintf("attempt-%02d", attempt), "privacy-status.json"))
 	statusWorktreePath := filepath.Join(worktreePath, filepath.FromSlash(statusWorktreeRelPath))
 	worktreeRelPath, relErr := filepath.Rel(o.runRoot, worktreePath)
@@ -3644,8 +3678,6 @@ func (o *Orchestrator) writeRunConfig() error {
 		"run_id":                o.config.RunID,
 		"git_bin":               sanitizePublicText(o.config.GitBin),
 		"codex_bin":             sanitizePublicText(o.config.CodexBin),
-		"codex_model":           o.config.CodexModel,
-		"codex_reasoning":       o.config.CodexReasoning,
 		"gh_bin":                sanitizePublicText(o.config.GhBin),
 		"codex_timeout_seconds": o.config.CodexTimeoutSeconds,
 	}

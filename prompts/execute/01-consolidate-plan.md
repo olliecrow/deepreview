@@ -33,7 +33,8 @@ Process:
 8. After triage, convert only accepted items into a concrete end-to-end execution plan.
 9. The plan must include implementation, verification, cleanup/docs work, and stop conditions.
 10. Prefer solutions that simplify the codebase when that directly helps resolve accepted items.
-11. If no items are accepted, produce a no-op plan and say so explicitly.
+11. Treat high-confidence removals, deletions, and scope reductions as first-class fix options when they solve accepted items cleanly.
+12. If no items are accepted, produce a no-op plan and say so explicitly.
 
 Rules:
 - Do not modify code in this prompt.

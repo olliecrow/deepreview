@@ -60,6 +60,32 @@ func TestResolveRepoIdentityLocalPathUsesOriginRemoteAsCloneSource(t *testing.T)
 	}
 }
 
+func TestResolveRepoIdentityLocalPathAcceptsFilesystemOriginRemote(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", repo)
+	runGitTest(t, td, "-C", repo, "remote", "add", "origin", remote)
+
+	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, repo)
+	if err != nil {
+		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	}
+	if identity.CloneSource != remote {
+		t.Fatalf("expected clone source to stay local origin path, got: %s", identity.CloneSource)
+	}
+	if identity.Owner != "local" {
+		t.Fatalf("expected local owner for filesystem origin, got: %s", identity.Owner)
+	}
+	if identity.Name != "repo" {
+		t.Fatalf("expected local repo name derived from repo path, got: %s", identity.Name)
+	}
+}
+
 func TestResolveRepoIdentityLocalPathRejectsNonGitHubOriginRemote(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
@@ -73,7 +99,7 @@ func TestResolveRepoIdentityLocalPathRejectsNonGitHubOriginRemote(t *testing.T) 
 	if err == nil {
 		t.Fatalf("expected non-GitHub origin remote to be rejected")
 	}
-	if !strings.Contains(err.Error(), "GitHub origin remote") {
+	if !strings.Contains(err.Error(), "GitHub or local filesystem origin remote") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
