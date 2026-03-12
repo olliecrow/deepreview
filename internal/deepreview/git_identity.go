@@ -7,8 +7,10 @@ import (
 )
 
 func ResolveCommitIdentity(gitBin, repo string) (CommitIdentity, error) {
-	if isLocalGitRepo(repo) {
-		identity, found, err := gitConfigIdentityGet(gitBin, repo, nil)
+	if repoPath, err := resolveCommitIdentityRepoPath(gitBin, repo); err != nil {
+		return CommitIdentity{}, err
+	} else if repoPath != "" {
+		identity, found, err := gitConfigIdentityGet(gitBin, repoPath, nil)
 		if err != nil {
 			return CommitIdentity{}, err
 		}
@@ -28,6 +30,22 @@ func ResolveCommitIdentity(gitBin, repo string) (CommitIdentity, error) {
 	return CommitIdentity{}, NewDeepReviewError(
 		"git commit identity is not configured; set user.name and user.email in the source repo or in your global git config before running deepreview",
 	)
+}
+
+func resolveCommitIdentityRepoPath(gitBin, repo string) (string, error) {
+	if isLocalGitRepo(repo) {
+		return repo, nil
+	}
+
+	cwdState, err := detectGitHubRepoState(gitBin, ".")
+	if err != nil {
+		return "", err
+	}
+	cwdState = resolveImplicitRepoState(gitBin, cwdState)
+	if cwdState != nil && repoLocatorMatchesState(repo, cwdState) {
+		return cwdState.Path, nil
+	}
+	return "", nil
 }
 
 func ConfigureManagedGitIdentity(repoPath, gitBin string, identity CommitIdentity) error {

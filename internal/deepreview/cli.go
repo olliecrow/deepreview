@@ -964,7 +964,7 @@ func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, conf
 	}
 	delivery := orchestrator.LastDelivery()
 	switch {
-	case delivery == nil:
+	case delivery == nil || delivery.Skipped:
 		_, _ = fmt.Fprintln(out, "run exited before delivery; no push or PR was created.")
 	default:
 		_, _ = fmt.Fprintln(out, "run failed after delivery artifacts were created.")
@@ -1030,6 +1030,13 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 		}
 	}
 	if delivery == nil {
+		printArtifactPaths()
+		return
+	}
+
+	if delivery.Skipped {
+		_, _ = fmt.Fprintf(os.Stdout, "delivery skipped: %s\n", delivery.SkipReason)
+		_, _ = fmt.Fprintf(os.Stdout, "no push or PR was created because no deliverable repository changes were found.\n")
 		printArtifactPaths()
 		return
 	}
