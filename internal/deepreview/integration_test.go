@@ -171,16 +171,25 @@ func buildFakeBinaries(t *testing.T, root string) (string, string) {
 	fakeGH := filepath.Join(tmpDir, "fake-gh")
 	runCmd(t, root, nil, "go", "build", "-o", fakeCodex, "./cmd/fake-codex")
 	runCmd(t, root, nil, "go", "build", "-o", fakeGH, "./cmd/fake-gh")
+	if err := os.Symlink(fakeCodex, filepath.Join(tmpDir, "multicodex")); err != nil {
+		t.Fatalf("symlink fake multicodex: %v", err)
+	}
 	return fakeCodex, fakeGH
 }
 
 func baseEnv(root, workspace, codexBin, ghBin string) []string {
 	env := append([]string{}, os.Environ()...)
+	pathPrefix := filepath.Dir(codexBin)
+	currentPath := os.Getenv("PATH")
+	if currentPath != "" {
+		pathPrefix += string(os.PathListSeparator) + currentPath
+	}
 	env = append(env,
 		"DEEPREVIEW_WORKSPACE_ROOT="+workspace,
 		"DEEPREVIEW_CODEX_BIN="+codexBin,
 		"DEEPREVIEW_GH_BIN="+ghBin,
 		"DEEPREVIEW_PROMPTS_ROOT="+filepath.Join(root, "prompts"),
+		"PATH="+pathPrefix,
 		"GIT_AUTHOR_NAME=DeepReview Bot",
 		"GIT_AUTHOR_EMAIL=deepreview@example.com",
 		"GIT_COMMITTER_NAME=DeepReview Bot",
@@ -1177,7 +1186,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
+func TestEndToEndPRModeUsesNormalInheritedCodexEnvironment(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1218,7 +1227,6 @@ func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
-		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD=1",
 		"FAKE_CODEX_REQUIRE_PROMPT_OUTPUTS_WITHIN_CWD=1",
 		"FAKE_CODEX_RUN_GO_TEST_WITH_INHERITED_ENV=1",
 	)

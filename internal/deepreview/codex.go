@@ -3,11 +3,9 @@ package deepreview
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -16,10 +14,8 @@ import (
 const envRequireMulticodex = "DEEPREVIEW_REQUIRE_MULTICODEX"
 
 type CodexRunner struct {
-	CodexBin   string
-	CodexModel string
-	Reasoning  string
-	Timeout    time.Duration
+	CodexBin string
+	Timeout  time.Duration
 }
 
 type codexLauncher struct {
@@ -47,37 +43,24 @@ func (c *CodexRunner) buildCommand(threadID *string) []string {
 }
 
 func (c *CodexRunner) buildCommandWithLauncher(launcher codexLauncher, threadID *string) []string {
-	// Hard-pin model and reasoning for every Codex invocation.
-	reasoningConfig := fmt.Sprintf("model_reasoning_effort=%q", forcedCodexReasoningEffort)
 	command := launcher.withArgs("exec")
 	if threadID != nil && *threadID != "" {
 		command = append(command, "resume", *threadID)
 	}
 	command = append(command,
-		"--model", forcedCodexModel,
-		"-c", reasoningConfig,
 		// deepreview may run codex from non-repo run directories during delivery.
 		"--skip-git-repo-check",
-		"--full-auto", "--json", "-",
+		"--json", "-",
 	)
 	return command
 }
 
-func (c *CodexRunner) shouldPreferMulticodex() bool {
-	if requireMulticodex() {
-		return true
-	}
-	return strings.TrimSpace(c.CodexBin) == "" || strings.TrimSpace(c.CodexBin) == "codex"
-}
-
 func (c *CodexRunner) resolveLauncher() (codexLauncher, error) {
-	if c.shouldPreferMulticodex() {
-		if multicodexPath, err := exec.LookPath("multicodex"); err == nil {
-			return codexLauncher{Command: multicodexPath, Display: "multicodex"}, nil
-		}
-		if requireMulticodex() {
-			return codexLauncher{}, NewDeepReviewError("%s is set but multicodex is not available on PATH", envRequireMulticodex)
-		}
+	if multicodexPath, err := exec.LookPath("multicodex"); err == nil {
+		return codexLauncher{Command: multicodexPath, Display: "multicodex"}, nil
+	}
+	if requireMulticodex() {
+		return codexLauncher{}, NewDeepReviewError("%s is set but multicodex is not available on PATH", envRequireMulticodex)
 	}
 
 	codexBin := strings.TrimSpace(c.CodexBin)
@@ -100,63 +83,6 @@ func requireMulticodex() bool {
 	}
 }
 
-func (c *CodexRunner) buildEnvironment(cwd string) ([]string, error) {
-	sandboxRoot, err := filepath.Abs(filepath.Join(cwd, ".deepreview", "runtime"))
-	if err != nil {
-		return nil, err
-	}
-	goCache := filepath.Join(sandboxRoot, "go-build-cache")
-	goModCache := filepath.Join(sandboxRoot, "go-mod-cache")
-	goTmpDir := filepath.Join(sandboxRoot, "go-tmp")
-	tmpDir := filepath.Join(sandboxRoot, "tmp")
-	for _, dir := range []string{sandboxRoot, goCache, goModCache, goTmpDir, tmpDir} {
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return nil, err
-		}
-	}
-
-	return mergeCommandEnv(os.Environ(), map[string]string{
-		"GOCACHE":    goCache,
-		"GOMODCACHE": goModCache,
-		"GOTMPDIR":   goTmpDir,
-		"TMPDIR":     tmpDir,
-		"TMP":        tmpDir,
-		"TEMP":       tmpDir,
-	}), nil
-}
-
-func mergeCommandEnv(base []string, overrides map[string]string) []string {
-	env := make(map[string]string, len(base)+len(overrides))
-	order := make([]string, 0, len(base)+len(overrides))
-	for _, entry := range base {
-		key, value, ok := strings.Cut(entry, "=")
-		if !ok {
-			continue
-		}
-		if _, seen := env[key]; !seen {
-			order = append(order, key)
-		}
-		env[key] = value
-	}
-	overrideKeys := make([]string, 0, len(overrides))
-	for key := range overrides {
-		overrideKeys = append(overrideKeys, key)
-		if _, seen := env[key]; !seen {
-			order = append(order, key)
-		}
-	}
-	sort.Strings(overrideKeys)
-	for _, key := range overrideKeys {
-		env[key] = overrides[key]
-	}
-
-	merged := make([]string, 0, len(order))
-	for _, key := range order {
-		merged = append(merged, key+"="+env[key])
-	}
-	return merged
-}
-
 func (c *CodexRunner) RunPrompt(cwd, prompt string, threadID *string, logPrefixPath string) (CodexRunResult, error) {
 	return c.RunPromptWithHooks(cwd, prompt, threadID, logPrefixPath, nil)
 }
@@ -174,10 +100,6 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 		return CodexRunResult{}, err
 	}
 	command := c.buildCommandWithLauncher(launcher, threadID)
-	commandEnv, err := c.buildEnvironment(cwd)
-	if err != nil {
-		return CodexRunResult{}, err
-	}
 
 	stdoutPath := logPrefixPath + ".stdout.jsonl"
 	stderrPath := logPrefixPath + ".stderr.log"
@@ -227,7 +149,7 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 			}
 		},
 	}
-	completed, err := RunCommandContextWithEnvAndCallbacks(parentCtx, command, cwd, commandEnv, prompt, true, c.Timeout, streamCallbacks)
+	completed, err := RunCommandContextWithEnvAndCallbacks(parentCtx, command, cwd, os.Environ(), prompt, true, c.Timeout, streamCallbacks)
 	if err != nil {
 		return CodexRunResult{}, err
 	}
