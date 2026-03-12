@@ -1,8 +1,6 @@
 package deepreview
 
 import (
-	"os"
-	"path/filepath"
 	"strings"
 )
 
@@ -33,7 +31,7 @@ func ResolveCommitIdentity(gitBin, repo string) (CommitIdentity, error) {
 }
 
 func resolveCommitIdentityRepoPath(gitBin, repo string) (string, error) {
-	if isLocalGitRepo(repo) {
+	if isLocalGitRepo(gitBin, repo) {
 		return repo, nil
 	}
 
@@ -111,10 +109,10 @@ func gitConfigGetWithArgs(gitBin string, extraArgs []string, repoPath, key strin
 	return strings.TrimSpace(completed.Stdout), nil
 }
 
-func isLocalGitRepo(path string) bool {
+func isLocalGitRepo(gitBin, path string) bool {
 	if !isLocalDirectory(path) {
 		return false
 	}
-	_, err := os.Stat(filepath.Join(path, ".git"))
-	return err == nil
+	completed, err := RunCommand([]string{gitBin, "-C", path, "rev-parse", "--git-dir"}, "", "", false, 0)
+	return err == nil && completed.ReturnCode == 0 && strings.TrimSpace(completed.Stdout) != ""
 }

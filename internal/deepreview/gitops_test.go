@@ -226,6 +226,38 @@ func TestResolveCommitIdentityUsesRepoConfigForLocalRepo(t *testing.T) {
 	}
 }
 
+func TestResolveCommitIdentityUsesRepoConfigForLocalWorktreePath(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	worktree := filepath.Join(td, "worktrees", "feature")
+	globalConfig := filepath.Join(td, "global.gitconfig")
+
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	runGitCommand(t, td, "config", "--global", "user.name", "Global User")
+	runGitCommand(t, td, "config", "--global", "user.email", "global-user@example.com")
+
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "repo-user@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Repo User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+	runGitCommand(t, td, "-C", repo, "worktree", "add", "-b", "feature/test", worktree)
+
+	identity, err := ResolveCommitIdentity("git", worktree)
+	if err != nil {
+		t.Fatalf("ResolveCommitIdentity failed for worktree path: %v", err)
+	}
+	if identity.Name != "Repo User" {
+		t.Fatalf("expected repo worktree user name, got %q", identity.Name)
+	}
+	if identity.Email != "repo-user@example.com" {
+		t.Fatalf("expected repo worktree user email, got %q", identity.Email)
+	}
+}
+
 func TestResolveCommitIdentityUsesGlobalConfigWhenRepoConfigMissing(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
