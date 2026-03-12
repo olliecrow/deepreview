@@ -1862,7 +1862,8 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 			return nil, err
 		}
 		changedFiles = updatedFiles
-		if commitScanErr == nil && fileScanErr == nil {
+		worktreeErr := o.ensurePrivacyWorktreeClean(privacyWorktreePath)
+		if worktreeErr == nil && commitScanErr == nil && fileScanErr == nil {
 			o.reporter.StageProgress(
 				"delivery",
 				fmt.Sprintf("privacy fix gate passed on attempt %d/%d", attempt, prPrivacyMaxAttempts),
@@ -1877,7 +1878,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 				"privacy fix gate attempt %d/%d detected issues: %s",
 				attempt,
 				prPrivacyMaxAttempts,
-				summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, nil),
+				summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, worktreeErr),
 			),
 			nil,
 		)
@@ -1934,7 +1935,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 			}
 		}
 
-		worktreeErr := o.ensurePrivacyWorktreeClean(privacyWorktreePath)
+		worktreeErr = o.ensurePrivacyWorktreeClean(privacyWorktreePath)
 		if worktreeErr != nil {
 			o.reporter.StageProgress(
 				"delivery",
@@ -2342,7 +2343,12 @@ func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error
 			continue
 		}
 		status, err := ChangedFileStatusBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
-		if err != nil || status != "A" {
+		if err != nil || status == "D" {
+			continue
+		}
+		// Binary diffs do not expose textual added lines, so scan the candidate-side bytes directly.
+		isBinaryDiff, err := DiffIsBinaryBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		if err != nil || !isBinaryDiff {
 			continue
 		}
 		content, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(rel)))

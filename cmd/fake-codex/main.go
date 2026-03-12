@@ -204,6 +204,10 @@ func handlePrompt(prompt string) (string, error) {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE")) != "" {
 				changeContent = "key " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n"
 			}
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_BINARY_SECRET_PATTERN_CHANGE")) != "" {
+				changePath = filepath.Join(".", "secret.bin")
+				changeContent = "prefix\x00SECRETTOKEN123\x00suffix"
+			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
 				changePath = filepath.Join(".", "docs", "generated.md")
 				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
@@ -279,6 +283,11 @@ func handlePrompt(prompt string) (string, error) {
 		statusPath := regexGet("Output status path: `([^`]+)`", prompt)
 		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_WRITE_UNCOMMITTED_FILE")) != "" {
 			if err := writeText(filepath.Join(".", "privacy-fix-dirty.txt"), "dirty remediation\n"); err != nil {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_SANITIZE_BINARY_UNCOMMITTED")) != "" {
+			if err := writeText(filepath.Join(".", "secret.bin"), "prefix\x00clean\x00suffix"); err != nil {
 				return "", err
 			}
 		}
