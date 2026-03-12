@@ -126,9 +126,6 @@ func findPromptsRoot() (string, string, error) {
 	}
 
 	candidates := []string{}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, "prompts"))
-	}
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		candidates = append(candidates,
@@ -1749,7 +1746,7 @@ func triageSectionAt(markdown string, offset int) (string, string) {
 
 func isInternalArtifactPath(path string) bool {
 	normalized := filepath.ToSlash(strings.TrimSpace(path))
-	return strings.HasPrefix(normalized, ".deepreview/")
+	return strings.HasPrefix(normalized, ".deepreview/") || strings.HasPrefix(normalized, ".tmp/deepreview/")
 }
 
 func managedOperationalArtifactRoot(path string) (string, bool) {
@@ -1822,6 +1819,27 @@ func (o *Orchestrator) validateDeliveryFiles(candidateBranch string) ([]string, 
 	return files, nil
 }
 
+func (o *Orchestrator) evaluatePRPrivacyState(privacyWorktreePath, candidateBranch string) ([]string, error, error, error) {
+	updatedFiles, err := o.validateDeliveryFiles(candidateBranch)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	commitScanErr := o.deliveryCommitMessageScan(candidateBranch)
+	fileScanErr := o.secretHygieneScan(privacyWorktreePath, candidateBranch)
+	return updatedFiles, commitScanErr, fileScanErr, nil
+}
+
+func (o *Orchestrator) ensurePrivacyWorktreeClean(privacyWorktreePath string) error {
+	dirty, err := HasUncommittedChanges(privacyWorktreePath, o.config.GitBin)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return NewDeepReviewError("privacy remediation attempt left uncommitted worktree changes; commit remediation edits before reporting completion")
+	}
+	return nil
+}
+
 func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles []string) ([]string, error) {
 	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 	if err != nil {
@@ -1839,9 +1857,13 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 	}
 
 	for attempt := 1; attempt <= prPrivacyMaxAttempts; attempt++ {
-		commitScanErr := o.deliveryCommitMessageScan(candidateBranch)
-		fileScanErr := o.secretHygieneScan(privacyWorktreePath, candidateBranch)
-		if commitScanErr == nil && fileScanErr == nil {
+		updatedFiles, commitScanErr, fileScanErr, err := o.evaluatePRPrivacyState(privacyWorktreePath, candidateBranch)
+		if err != nil {
+			return nil, err
+		}
+		changedFiles = updatedFiles
+		worktreeErr := o.ensurePrivacyWorktreeClean(privacyWorktreePath)
+		if worktreeErr == nil && commitScanErr == nil && fileScanErr == nil {
 			o.reporter.StageProgress(
 				"delivery",
 				fmt.Sprintf("privacy fix gate passed on attempt %d/%d", attempt, prPrivacyMaxAttempts),
@@ -1856,7 +1878,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 				"privacy fix gate attempt %d/%d detected issues: %s",
 				attempt,
 				prPrivacyMaxAttempts,
-				summarizePrivacyScanIssues(commitScanErr, fileScanErr),
+				summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, worktreeErr),
 			),
 			nil,
 		)
@@ -1913,14 +1935,46 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 			}
 		}
 
-		updatedFiles, err := o.validateDeliveryFiles(candidateBranch)
+		worktreeErr = o.ensurePrivacyWorktreeClean(privacyWorktreePath)
+		if worktreeErr != nil {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf(
+					"privacy remediation attempt %d/%d left uncommitted worktree changes; continuing bounded remediation loop: %s",
+					attempt,
+					prPrivacyMaxAttempts,
+					progressMessage(worktreeErr),
+				),
+				nil,
+			)
+		}
+
+		updatedFiles, commitScanErr, fileScanErr, err = o.evaluatePRPrivacyState(privacyWorktreePath, candidateBranch)
 		if err != nil {
 			return nil, err
 		}
 		changedFiles = updatedFiles
 
-		if codexRequestedStop {
+		if worktreeErr == nil && commitScanErr == nil && fileScanErr == nil {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf("privacy fix gate passed after remediation on attempt %d/%d", attempt, prPrivacyMaxAttempts),
+				nil,
+			)
 			return changedFiles, nil
+		}
+
+		if codexRequestedStop && (worktreeErr != nil || commitScanErr != nil || fileScanErr != nil) {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf(
+					"privacy remediation attempt %d/%d requested stop but unresolved issues remain; continuing bounded remediation loop: %s",
+					attempt,
+					prPrivacyMaxAttempts,
+					sanitizePublicText(summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, worktreeErr)),
+				),
+				nil,
+			)
 		}
 	}
 
@@ -1939,6 +1993,23 @@ func summarizePrivacyScanIssues(commitScanErr, fileScanErr error) string {
 	}
 	if fileScanErr != nil {
 		issues = append(issues, "changed-file scan: "+progressMessage(fileScanErr))
+	}
+	if len(issues) == 0 {
+		return "none"
+	}
+	return strings.Join(issues, " | ")
+}
+
+func summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, worktreeErr error) string {
+	issues := make([]string, 0, 3)
+	if commitScanErr != nil {
+		issues = append(issues, "commit-message scan: "+progressMessage(commitScanErr))
+	}
+	if fileScanErr != nil {
+		issues = append(issues, "changed-file scan: "+progressMessage(fileScanErr))
+	}
+	if worktreeErr != nil {
+		issues = append(issues, "worktree state: "+progressMessage(worktreeErr))
 	}
 	if len(issues) == 0 {
 		return "none"
@@ -2254,40 +2325,137 @@ func readRoundStatusFromBytes(b []byte) (RoundStatus, error) {
 }
 
 func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error {
-	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch)
+	baseRef := "origin/" + o.config.SourceBranch
+	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch)
 	if err != nil {
 		return err
 	}
 
 	for _, rel := range changedFiles {
-		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch, rel)
+		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
 		if err != nil {
 			continue
 		}
-		if len(addedLines) == 0 {
+		if len(addedLines) > 0 {
+			if err := privacyScanText(strings.Join(addedLines, "\n"), rel); err != nil {
+				return err
+			}
 			continue
 		}
-		text := strings.Join(addedLines, "\n")
-		if containsDisallowedEmail(text) {
-			return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
+		status, err := ChangedFileStatusBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		if err != nil || status == "D" {
+			continue
 		}
-		for _, pattern := range secretRiskyPatterns {
-			if pattern.MatchString(text) {
-				return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
+		// Binary diffs do not expose textual added lines, so scan the candidate-side bytes directly.
+		isBinaryDiff, err := DiffIsBinaryBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		if err != nil || !isBinaryDiff {
+			continue
+		}
+		headContent, err := FileContentAtRef(o.managedRepoPath, o.config.GitBin, candidateBranch, rel)
+		if err != nil {
+			continue
+		}
+		if len(headContent) == 0 {
+			continue
+		}
+		var baseContent []byte
+		if status == "M" {
+			baseContent, err = FileContentAtRef(o.managedRepoPath, o.config.GitBin, baseRef, rel)
+			if err != nil {
+				continue
 			}
 		}
-		for _, pattern := range personalRiskyPatterns {
-			if pattern.MatchString(text) {
-				return NewDeepReviewError("privacy scan failed: personal-info-like pattern matched in %s", rel)
-			}
-		}
-		for _, pattern := range privatePathPatterns {
-			if pattern.MatchString(text) {
-				return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
-			}
+		if err := privacyScanModifiedBinaryText(string(baseContent), string(headContent), rel); err != nil {
+			return err
 		}
 	}
 	return nil
+}
+
+func privacyScanText(text, rel string) error {
+	if containsDisallowedEmail(text) {
+		return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
+	}
+	for _, pattern := range secretRiskyPatterns {
+		if pattern.MatchString(text) {
+			return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
+		}
+	}
+	for _, pattern := range personalRiskyPatterns {
+		if pattern.MatchString(text) {
+			return NewDeepReviewError("privacy scan failed: personal-info-like pattern matched in %s", rel)
+		}
+	}
+	for _, pattern := range privatePathPatterns {
+		if pattern.MatchString(text) {
+			return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
+		}
+	}
+	return nil
+}
+
+func privacyScanModifiedBinaryText(baseText, headText, rel string) error {
+	if hasNewDisallowedEmail(baseText, headText) {
+		return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
+	}
+	if hasNewRegexMatch(baseText, headText, secretRiskyPatterns) {
+		return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
+	}
+	if hasNewRegexMatch(baseText, headText, personalRiskyPatterns) {
+		return NewDeepReviewError("privacy scan failed: personal-info-like pattern matched in %s", rel)
+	}
+	if hasNewRegexMatch(baseText, headText, privatePathPatterns) {
+		return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
+	}
+	return nil
+}
+
+func hasNewDisallowedEmail(baseText, headText string) bool {
+	return hasNewExactMatch(disallowedEmailMatches(baseText), disallowedEmailMatches(headText))
+}
+
+func disallowedEmailMatches(text string) []string {
+	allMatches := emailPattern.FindAllString(text, -1)
+	matches := make([]string, 0, len(allMatches))
+	for _, match := range allMatches {
+		if isAllowedPlaceholderEmail(match) {
+			continue
+		}
+		matches = append(matches, match)
+	}
+	return matches
+}
+
+func hasNewRegexMatch(baseText, headText string, patterns []*regexp.Regexp) bool {
+	return hasNewExactMatch(regexMatchKeys(baseText, patterns), regexMatchKeys(headText, patterns))
+}
+
+func regexMatchKeys(text string, patterns []*regexp.Regexp) []string {
+	var matches []string
+	for idx, pattern := range patterns {
+		for _, match := range pattern.FindAllString(text, -1) {
+			matches = append(matches, fmt.Sprintf("%d:%s", idx, match))
+		}
+	}
+	return matches
+}
+
+func hasNewExactMatch(baseMatches, headMatches []string) bool {
+	if len(headMatches) == 0 {
+		return false
+	}
+	counts := make(map[string]int, len(baseMatches))
+	for _, match := range baseMatches {
+		counts[match]++
+	}
+	for _, match := range headMatches {
+		if counts[match] > 0 {
+			counts[match]--
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 const localPathScanFailurePrefix = "privacy scan failed: local path pattern matched in "

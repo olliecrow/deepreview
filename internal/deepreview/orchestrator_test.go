@@ -100,6 +100,62 @@ func TestPromptWatchdogPolicyRejectsNegativeValues(t *testing.T) {
 	}
 }
 
+func TestFindPromptsRootIgnoresCallerWorkingDirectoryPrompts(t *testing.T) {
+	td := t.TempDir()
+	callerPrompts := filepath.Join(td, "prompts")
+	if err := os.MkdirAll(callerPrompts, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	withWorkingDir(t, td, func() {
+		t.Setenv("DEEPREVIEW_PROMPTS_ROOT", "")
+		promptsRoot, _, err := findPromptsRoot()
+		if err != nil {
+			t.Fatalf("findPromptsRoot failed: %v", err)
+		}
+		if canonicalPath(t, promptsRoot) == canonicalPath(t, callerPrompts) {
+			t.Fatalf("expected caller working directory prompts to be ignored, got %s", promptsRoot)
+		}
+		want := canonicalPath(t, filepath.Join(repoRoot(t), "prompts"))
+		if canonicalPath(t, promptsRoot) != want {
+			t.Fatalf("expected prompts root %s, got %s", want, promptsRoot)
+		}
+	})
+}
+
+func TestFindPromptsRootHonorsOverride(t *testing.T) {
+	td := t.TempDir()
+	override := filepath.Join(td, "override-prompts")
+	if err := os.MkdirAll(override, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", override)
+
+	promptsRoot, toolRoot, err := findPromptsRoot()
+	if err != nil {
+		t.Fatalf("findPromptsRoot failed: %v", err)
+	}
+	if canonicalPath(t, promptsRoot) != canonicalPath(t, override) {
+		t.Fatalf("expected prompts root %s, got %s", override, promptsRoot)
+	}
+	if canonicalPath(t, toolRoot) != canonicalPath(t, filepath.Dir(override)) {
+		t.Fatalf("expected tool root %s, got %s", filepath.Dir(override), toolRoot)
+	}
+}
+
+func TestFindPromptsRootRejectsMissingOverride(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing-prompts")
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", missing)
+
+	_, _, err := findPromptsRoot()
+	if err == nil {
+		t.Fatalf("expected missing override to fail")
+	}
+	if !strings.Contains(err.Error(), "prompts root not found") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildReviewPromptScopeUsesCurrentStateAuditForDefaultBranchRuns(t *testing.T) {
 	scope := buildReviewPromptScope("main", "main")
 	if scope.ModeLabel != "current-state repository audit" {
