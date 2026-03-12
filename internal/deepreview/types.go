@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -42,6 +43,10 @@ type RepoIdentity struct {
 
 func (r RepoIdentity) Slug() string {
 	return r.Owner + "/" + r.Name
+}
+
+func (r RepoIdentity) SupportsPRDelivery() bool {
+	return strings.TrimSpace(r.Owner) != "" && strings.TrimSpace(r.Name) != "" && r.Owner != "local"
 }
 
 type RoundStatus struct {
