@@ -615,7 +615,7 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeFailsWhenPRURLMissing(t *testing.T) {
+func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -625,6 +625,7 @@ func TestEndToEndPRModeFailsWhenPRURLMissing(t *testing.T) {
 	seed := filepath.Join(td, "seed")
 	userClone := filepath.Join(td, "user")
 	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
 
 	runCmd(t, td, nil, "git", "init", "--bare", remote)
 	runCmd(t, td, nil, "git", "clone", remote, seed)
@@ -650,8 +651,11 @@ func TestEndToEndPRModeFailsWhenPRURLMissing(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env, "FAKE_GH_PR_CREATE_SILENT=1")
-	output := runCmdExpectFailure(t, root, env,
+	env = append(env,
+		"FAKE_GH_PR_CREATE_SILENT=1",
+		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+	)
+	output := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -661,14 +665,36 @@ func TestEndToEndPRModeFailsWhenPRURLMissing(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "gh pr create did not return a pull request URL") {
-		t.Fatalf("expected missing-pr-url failure output, got: %s", output)
+	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected incomplete draft PR recovery output, got: %s", output)
 	}
-	if !strings.Contains(output, "run failed after delivery artifacts were created.") {
-		t.Fatalf("expected failure summary after delivery artifacts were created, got: %s", output)
+	if !strings.Contains(output, "delivery status: incomplete (gh pr create did not return a pull request URL)") {
+		t.Fatalf("expected incomplete delivery reason in output, got: %s", output)
 	}
 	if !strings.Contains(output, "delivery commits: https://github.com/local/user/commits/deepreview/feature/test/") {
 		t.Fatalf("expected delivery commits summary output, got: %s", output)
+	}
+	argsBytes, err := os.ReadFile(ghArgsPath)
+	if err != nil {
+		t.Fatalf("missing gh args capture: %v", err)
+	}
+	if !strings.Contains(string(argsBytes), "--draft") {
+		t.Fatalf("expected recovery pr create call to use --draft, got:\n%s", string(argsBytes))
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runsGlob[0], "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing final-summary.md: %v", err)
+	}
+	if !strings.Contains(string(finalSummaryBytes), "- delivery: `incomplete-draft`") {
+		t.Fatalf("expected incomplete draft marker in final summary, got:\n%s", string(finalSummaryBytes))
 	}
 }
 

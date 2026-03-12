@@ -31,8 +31,16 @@ type Orchestrator struct {
 	reporter        ProgressReporter
 	pushCount       int
 	lastDelivery    *DeliveryResult
+	prDelivery      prDeliveryState
 	runLockPath     string
 	commitIdentity  CommitIdentity
+}
+
+type prDeliveryState struct {
+	branch  string
+	refspec string
+	pushed  bool
+	prURL   string
 }
 
 const stageHeartbeatInterval = 15 * time.Second
@@ -471,11 +479,7 @@ func (o *Orchestrator) Run() (retErr error) {
 }
 
 func (o *Orchestrator) preflight() error {
-	requiredBins := []string{o.config.GitBin, o.config.CodexBin}
-	if o.config.Mode == ModePR {
-		requiredBins = append(requiredBins, o.config.GhBin)
-	}
-	for _, tool := range requiredBins {
+	for _, tool := range requiredHostTools(o.config) {
 		ok, err := which(tool)
 		if err != nil {
 			return err
@@ -516,6 +520,14 @@ func (o *Orchestrator) preflight() error {
 		}
 	}
 	return nil
+}
+
+func requiredHostTools(cfg ReviewConfig) []string {
+	required := []string{cfg.GitBin}
+	if cfg.Mode == ModePR {
+		required = append(required, cfg.GhBin)
+	}
+	return required
 }
 
 type runLockRecord struct {
@@ -2660,13 +2672,13 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 }
 
 func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summaries, changedFiles []string, opts prDeliveryOptions) (DeliveryResult, error) {
-	deliveryBranch := "deepreview/" + SanitizeSegment(o.config.SourceBranch) + "/" + SanitizeSegment(o.config.RunID)
-	refspec := candidateBranch + ":" + deliveryBranch
-	o.reporter.StageProgress("delivery", "pushing delivery branch and creating pull request", nil)
-	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, refspec); err != nil {
+	deliveryBranch, refspec, reusedPush, err := o.ensurePRDeliveryBranchPushed(candidateBranch)
+	if err != nil {
 		return DeliveryResult{}, err
 	}
-	o.pushCount++
+	if reusedPush {
+		o.reporter.StageProgress("delivery", "creating pull request from existing delivery branch", nil)
+	}
 	partialDelivery := DeliveryResult{
 		Mode:             ModePR,
 		PushedRefspec:    refspec,
@@ -2736,6 +2748,7 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 	if prURL == "" {
 		return DeliveryResult{}, NewDeepReviewError("gh pr create did not return a pull request URL")
 	}
+	o.prDelivery.prURL = prURL
 	if !opts.skipEnhancement {
 		o.reporter.StageProgress("delivery", "running post-pr codex summary and updating pr title/body", nil)
 		if err := o.enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, prTitleBasePath, prTitlePath, prBodyBasePath, prBodyPath, summaries, changedFiles); err != nil {
@@ -2753,6 +2766,27 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 	}
 	o.lastDelivery = &delivery
 	return delivery, nil
+}
+
+func (o *Orchestrator) deliveryBranchName() string {
+	return "deepreview/" + SanitizeSegment(o.config.SourceBranch) + "/" + SanitizeSegment(o.config.RunID)
+}
+
+func (o *Orchestrator) ensurePRDeliveryBranchPushed(candidateBranch string) (string, string, bool, error) {
+	if o.prDelivery.pushed {
+		return o.prDelivery.branch, o.prDelivery.refspec, true, nil
+	}
+	deliveryBranch := o.deliveryBranchName()
+	refspec := candidateBranch + ":" + deliveryBranch
+	o.reporter.StageProgress("delivery", "pushing delivery branch and creating pull request", nil)
+	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, refspec); err != nil {
+		return "", "", false, err
+	}
+	o.pushCount++
+	o.prDelivery.branch = deliveryBranch
+	o.prDelivery.refspec = refspec
+	o.prDelivery.pushed = true
+	return deliveryBranch, refspec, false, nil
 }
 
 func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, baseTitlePath, finalTitlePath, baseBodyPath, finalBodyPath string, summaries, changedFiles []string) error {
@@ -2907,7 +2941,7 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 }
 
 func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranch string, summaries []string, cause error) (bool, error) {
-	if o.config.Mode != ModePR || strings.TrimSpace(candidateBranch) == "" || o.pushCount != 0 {
+	if o.config.Mode != ModePR || strings.TrimSpace(candidateBranch) == "" || strings.TrimSpace(o.prDelivery.prURL) != "" {
 		return false, nil
 	}
 	if len(summaries) == 0 {
@@ -2924,23 +2958,29 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 		return false, err
 	}
-	changedFiles, err = o.runPRPreparation(candidateBranch, changedFiles)
-	if err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-		return false, err
-	}
 	if len(changedFiles) == 0 {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
 		return false, nil
 	}
-	changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
-	if err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-		return false, err
-	}
-	if len(changedFiles) == 0 {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: privacy remediation removed all deliverable changes")
-		return false, nil
+	if !o.prDelivery.pushed {
+		changedFiles, err = o.runPRPreparation(candidateBranch, changedFiles)
+		if err != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
+		if len(changedFiles) == 0 {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
+			return false, nil
+		}
+		changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
+		if err != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
+		if len(changedFiles) == 0 {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: privacy remediation removed all deliverable changes")
+			return false, nil
+		}
 	}
 
 	reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(cause.Error(), "\n", " ")), 500)

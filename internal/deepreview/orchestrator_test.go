@@ -459,6 +459,38 @@ func TestNewOrchestratorIsolatesManagedRepoPathPerSourceBranch(t *testing.T) {
 	}
 }
 
+func TestPreflightUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	workspace := t.TempDir()
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	writeExecutable(t, filepath.Join(toolDir, "multicodex"), "#!/bin/sh\nexit 0\n")
+	ghPath := writeFakeTool(t, toolDir, "gh")
+	t.Setenv("PATH", toolDir)
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", filepath.Join(repoRoot(t), "prompts"))
+	t.Setenv("SHELL", "")
+
+	o, err := NewOrchestrator(ReviewConfig{
+		Repo:          repo,
+		SourceBranch:  "feature/test",
+		WorkspaceRoot: workspace,
+		RunID:         "run-1",
+		GitBin:        gitPath,
+		CodexBin:      "codex",
+		GhBin:         ghPath,
+		Mode:          ModePR,
+	}, &NullProgressReporter{})
+	if err != nil {
+		t.Fatalf("NewOrchestrator failed: %v", err)
+	}
+	if err := o.preflight(); err != nil {
+		t.Fatalf("expected preflight to succeed with multicodex-only PATH, got: %v", err)
+	}
+}
+
 func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {
 	td := t.TempDir()
 	roundDir := filepath.Join(td, "round-01")
