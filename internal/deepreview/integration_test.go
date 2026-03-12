@@ -983,7 +983,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeSetsSandboxSafeGoEnvForCodexRuns(t *testing.T) {
+func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1016,6 +1016,7 @@ func TestEndToEndPRModeSetsSandboxSafeGoEnvForCodexRuns(t *testing.T) {
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_OUTSIDE_CWD=1",
+		"FAKE_CODEX_REQUIRE_PROMPT_OUTPUTS_WITHIN_CWD=1",
 	)
 	output := runCmdExpectFailure(t, root, env,
 		bin,

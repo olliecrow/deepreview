@@ -19,7 +19,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 2. It launches several independent review workers in parallel.
 3. Each independent review worker must complete and write its review markdown report; deepreview monitors all Codex workers for activity and restarts stalled workers with bounded retries to avoid pipeline stalls.
 4. The execute stage runs three prompts in one Codex thread: consolidate and plan, execute and verify, cleanup/summary/commit.
-5. Round artifacts, logs, temp directories, and caches are written under the run directory in `~/deepreview/runs/<run-id>/`, not into the repo worktree.
+5. Canonical round artifacts, logs, temp directories, and caches are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside its isolated worktree sandbox first, and deepreview copies the canonical artifacts back into the run directory.
 6. If execute changed code, deepreview runs another review round.
 7. If the last allowed execute round changed code, deepreview automatically adds one final audit round with the same review bar and no repository edits.
 8. If execute made no code changes, deepreview stops the loop.
@@ -42,7 +42,8 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 ## Safety and isolation
 
 - Review and execute work happen under `~/deepreview`, not in your local checkout.
-- Run-scoped logs, artifacts, temp directories, and caches live under `~/deepreview/runs/<run-id>/`.
+- Run-scoped logs, canonical artifacts, temp directories, and caches live under `~/deepreview/runs/<run-id>/`.
+- Codex workers stage prompt-written artifacts under reserved worktree-local `.deepreview/` paths, which deepreview excludes from delivery and copies back into the run directory for canonical storage.
 - Managed repository state is isolated per repo and source branch, so different branches of the same repo can run concurrently without sharing a checkout.
 - deepreview blocks concurrent runs only when both the repo and source branch match.
 - Default mode works on a delivery branch and opens a pull request.
