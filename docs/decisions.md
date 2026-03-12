@@ -220,6 +220,19 @@ References:
 `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
+Track PR delivery branch push state separately from PR creation success so incomplete-draft recovery can reuse an already-pushed branch.
+Context:
+In `pr` mode, a run can successfully push the delivery branch and then fail before `gh pr create` returns a PR URL. Treating "push happened" as equivalent to "delivery completed" blocks the documented incomplete-draft recovery path and can leave a remote branch with no PR.
+Rationale:
+Separating `branch pushed`, `refspec`, and `prURL established` preserves the one-push invariant while allowing recovery to create a draft PR from the existing delivery branch after post-push failures.
+Trade-offs:
+Adds a small amount of explicit delivery state to the orchestrator instead of relying on a coarse push counter alone.
+Enforcement:
+`deliverPR` reuses an existing pushed delivery branch, incomplete-draft recovery is gated on missing PR URL rather than push count, and integration coverage expects a draft recovery PR when `gh pr create` initially returns no URL after push.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`
+
+Decision:
 Inject compact review summaries into execute prompt 1 and provide on-disk review file paths for deeper inspection.
 Context:
 Execute prompt 1 needs reviewer signal quickly, but fully inlining every review body increases prompt size and latency.
