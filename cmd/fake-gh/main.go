@@ -13,6 +13,7 @@ func main() {
 	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "create" {
 		hasTitle := false
+		isDraft := false
 		for i := 0; i < len(args); i++ {
 			if args[i] == "--body-file" {
 				if i+1 >= len(args) {
@@ -28,11 +29,14 @@ func main() {
 				}
 				hasTitle = true
 			}
+			if args[i] == "--draft" {
+				isDraft = true
+			}
 		}
 		if !hasTitle {
 			os.Exit(4)
 		}
-		if os.Getenv("FAKE_GH_PR_CREATE_SILENT") != "" {
+		if os.Getenv("FAKE_GH_PR_CREATE_SILENT") != "" && !isDraft {
 			return
 		}
 		if custom := os.Getenv("FAKE_GH_PR_CREATE_STDOUT"); custom != "" {

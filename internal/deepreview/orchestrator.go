@@ -31,8 +31,16 @@ type Orchestrator struct {
 	reporter        ProgressReporter
 	pushCount       int
 	lastDelivery    *DeliveryResult
+	prDelivery      prDeliveryState
 	runLockPath     string
 	commitIdentity  CommitIdentity
+}
+
+type prDeliveryState struct {
+	branch  string
+	refspec string
+	pushed  bool
+	prURL   string
 }
 
 const stageHeartbeatInterval = 15 * time.Second
@@ -157,25 +165,25 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 	repoPath := filepath.Clean(repo)
 	if st, err := os.Stat(repoPath); err == nil && st.IsDir() {
 		if gitSt, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil && gitSt != nil {
-			owner := "local"
-			name := SanitizeSegment(filepath.Base(repoPath))
 			remote, err := tryReadRemoteURL(config.GitBin, repoPath)
 			if err != nil {
 				return RepoIdentity{}, err
 			}
-			if strings.TrimSpace(remote) == "" {
+			remote = strings.TrimSpace(remote)
+			if remote == "" {
 				return RepoIdentity{}, NewDeepReviewError("local repo input must have remote.origin.url configured: %s", repoPath)
 			}
-			if o, n, ok := parseOwnerRepo(remote); ok {
-				owner, name = o, n
+			owner, name, ok := parseOwnerRepo(remote)
+			if !ok {
+				return RepoIdentity{}, NewDeepReviewError("local repo input must have a supported GitHub origin remote: %s", repoPath)
 			}
 			return RepoIdentity{Owner: owner, Name: name, CloneSource: remote}, nil
 		}
 	}
 
 	if owner, name, ok := parseOwnerRepo(repo); ok {
-		source := repo
-		if !(strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "git@")) {
+		source := strings.TrimSpace(repo)
+		if isOwnerRepoSlug(source) {
 			source = fmt.Sprintf("https://github.com/%s/%s.git", owner, name)
 		}
 		return RepoIdentity{Owner: owner, Name: name, CloneSource: source}, nil
@@ -184,7 +192,9 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 	return RepoIdentity{}, NewDeepReviewError("unable to resolve repo locator: %s", repo)
 }
 
-var ownerRepoRemoteRe = regexp.MustCompile(`github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$`)
+var ownerRepoSlugRe = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)
+var ownerRepoSegmentRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var githubSCPLikeRemoteRe = regexp.MustCompile(`^git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$`)
 var secretRiskyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	regexp.MustCompile(`ghp_[A-Za-z0-9]{36,}`),
@@ -218,14 +228,59 @@ const (
 )
 
 func parseOwnerRepo(text string) (string, string, bool) {
-	if m := ownerRepoRemoteRe.FindStringSubmatch(text); m != nil {
+	trimmed := strings.TrimSpace(text)
+	if m := githubSCPLikeRemoteRe.FindStringSubmatch(trimmed); m != nil {
 		return SanitizeSegment(m[1]), SanitizeSegment(m[2]), true
 	}
-	if strings.Count(text, "/") == 1 && !strings.HasPrefix(text, "/") && !strings.Contains(text, "://") && !strings.HasPrefix(text, "git@") {
-		parts := strings.SplitN(text, "/", 2)
-		return SanitizeSegment(parts[0]), SanitizeSegment(parts[1]), true
+	if owner, name, ok := parseGitHubOwnerRepoURL(trimmed); ok {
+		return owner, name, true
+	}
+	if m := ownerRepoSlugRe.FindStringSubmatch(trimmed); m != nil {
+		return SanitizeSegment(m[1]), SanitizeSegment(m[2]), true
 	}
 	return "", "", false
+}
+
+func parseGitHubOwnerRepoURL(text string) (string, string, bool) {
+	if !strings.Contains(text, "://") {
+		return "", "", false
+	}
+	parsed, err := url.Parse(text)
+	if err != nil {
+		return "", "", false
+	}
+	if parsed.Hostname() != "github.com" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", "", false
+	}
+	return parseGitHubOwnerRepoPath(parsed.Path)
+}
+
+func parseGitHubOwnerRepoPath(path string) (string, string, bool) {
+	trimmed := strings.Trim(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		return "", "", false
+	}
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	owner := parts[0]
+	name := strings.TrimSuffix(parts[1], ".git")
+	if owner == "" || name == "" {
+		return "", "", false
+	}
+	if !ownerRepoSegmentValid(owner) || !ownerRepoSegmentValid(name) {
+		return "", "", false
+	}
+	return SanitizeSegment(owner), SanitizeSegment(name), true
+}
+
+func ownerRepoSegmentValid(text string) bool {
+	return ownerRepoSegmentRe.MatchString(text)
+}
+
+func isOwnerRepoSlug(text string) bool {
+	return ownerRepoSlugRe.MatchString(strings.TrimSpace(text))
 }
 
 func tryReadRemoteURL(gitBin, repoPath string) (string, error) {
@@ -471,11 +526,7 @@ func (o *Orchestrator) Run() (retErr error) {
 }
 
 func (o *Orchestrator) preflight() error {
-	requiredBins := []string{o.config.GitBin, o.config.CodexBin}
-	if o.config.Mode == ModePR {
-		requiredBins = append(requiredBins, o.config.GhBin)
-	}
-	for _, tool := range requiredBins {
+	for _, tool := range requiredHostTools(o.config) {
 		ok, err := which(tool)
 		if err != nil {
 			return err
@@ -516,6 +567,14 @@ func (o *Orchestrator) preflight() error {
 		}
 	}
 	return nil
+}
+
+func requiredHostTools(cfg ReviewConfig) []string {
+	required := []string{cfg.GitBin}
+	if cfg.Mode == ModePR {
+		required = append(required, cfg.GhBin)
+	}
+	return required
 }
 
 type runLockRecord struct {
@@ -2660,13 +2719,13 @@ func (o *Orchestrator) deliver(defaultBranch, candidateBranch string, summaries 
 }
 
 func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summaries, changedFiles []string, opts prDeliveryOptions) (DeliveryResult, error) {
-	deliveryBranch := "deepreview/" + SanitizeSegment(o.config.SourceBranch) + "/" + SanitizeSegment(o.config.RunID)
-	refspec := candidateBranch + ":" + deliveryBranch
-	o.reporter.StageProgress("delivery", "pushing delivery branch and creating pull request", nil)
-	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, refspec); err != nil {
+	deliveryBranch, refspec, reusedPush, err := o.ensurePRDeliveryBranchPushed(candidateBranch)
+	if err != nil {
 		return DeliveryResult{}, err
 	}
-	o.pushCount++
+	if reusedPush {
+		o.reporter.StageProgress("delivery", "creating pull request from existing delivery branch", nil)
+	}
 	partialDelivery := DeliveryResult{
 		Mode:             ModePR,
 		PushedRefspec:    refspec,
@@ -2736,6 +2795,7 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 	if prURL == "" {
 		return DeliveryResult{}, NewDeepReviewError("gh pr create did not return a pull request URL")
 	}
+	o.prDelivery.prURL = prURL
 	if !opts.skipEnhancement {
 		o.reporter.StageProgress("delivery", "running post-pr codex summary and updating pr title/body", nil)
 		if err := o.enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, prTitleBasePath, prTitlePath, prBodyBasePath, prBodyPath, summaries, changedFiles); err != nil {
@@ -2753,6 +2813,27 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 	}
 	o.lastDelivery = &delivery
 	return delivery, nil
+}
+
+func (o *Orchestrator) deliveryBranchName() string {
+	return "deepreview/" + SanitizeSegment(o.config.SourceBranch) + "/" + SanitizeSegment(o.config.RunID)
+}
+
+func (o *Orchestrator) ensurePRDeliveryBranchPushed(candidateBranch string) (string, string, bool, error) {
+	if o.prDelivery.pushed {
+		return o.prDelivery.branch, o.prDelivery.refspec, true, nil
+	}
+	deliveryBranch := o.deliveryBranchName()
+	refspec := candidateBranch + ":" + deliveryBranch
+	o.reporter.StageProgress("delivery", "pushing delivery branch and creating pull request", nil)
+	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, refspec); err != nil {
+		return "", "", false, err
+	}
+	o.pushCount++
+	o.prDelivery.branch = deliveryBranch
+	o.prDelivery.refspec = refspec
+	o.prDelivery.pushed = true
+	return deliveryBranch, refspec, false, nil
 }
 
 func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, baseTitlePath, finalTitlePath, baseBodyPath, finalBodyPath string, summaries, changedFiles []string) error {
@@ -2907,7 +2988,7 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 }
 
 func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranch string, summaries []string, cause error) (bool, error) {
-	if o.config.Mode != ModePR || strings.TrimSpace(candidateBranch) == "" || o.pushCount != 0 {
+	if o.config.Mode != ModePR || strings.TrimSpace(candidateBranch) == "" || strings.TrimSpace(o.prDelivery.prURL) != "" {
 		return false, nil
 	}
 	if len(summaries) == 0 {
@@ -2924,23 +3005,29 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 		return false, err
 	}
-	changedFiles, err = o.runPRPreparation(candidateBranch, changedFiles)
-	if err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-		return false, err
-	}
 	if len(changedFiles) == 0 {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
 		return false, nil
 	}
-	changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
-	if err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-		return false, err
-	}
-	if len(changedFiles) == 0 {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: privacy remediation removed all deliverable changes")
-		return false, nil
+	if !o.prDelivery.pushed {
+		changedFiles, err = o.runPRPreparation(candidateBranch, changedFiles)
+		if err != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
+		if len(changedFiles) == 0 {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
+			return false, nil
+		}
+		changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
+		if err != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
+		if len(changedFiles) == 0 {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: privacy remediation removed all deliverable changes")
+			return false, nil
+		}
 	}
 
 	reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(cause.Error(), "\n", " ")), 500)
