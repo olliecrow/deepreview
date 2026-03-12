@@ -217,7 +217,7 @@ The injected summaries are lossy compared with raw review text, so the prompt mu
 Enforcement:
 The orchestrator builds structured review summaries for prompt injection, and prompt 1 tells Codex to use those summaries for orientation and read the on-disk reports directly when useful.
 References:
-`internal/deepreview/orchestrator.go`, `prompts/execute/01-consolidate-reviews.md`, `docs/spec.md`
+`internal/deepreview/orchestrator.go`, `prompts/execute/01-consolidate-plan.md`, `docs/spec.md`
 
 Decision:
 Push exactly once at final delivery, regardless of mode; never push intermediate-round commits, and only deliver after round execution and delivery gates pass.
@@ -231,6 +231,32 @@ Enforcement:
 Spec/architecture require one final push point, forbid intermediate pushes, and gate final delivery on completed round execution plus delivery quality/privacy checks.
 References:
 `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Deepreview-managed commits use the operator's local Git identity and explicitly disable signing in managed clones/worktrees.
+Context:
+Deepreview creates internal automation commits in managed repositories and worktrees. Depending on host-level GPG signing config can make otherwise-valid runs fail for operator-environment reasons.
+Rationale:
+Resolving identity from the source repository first, then falling back to global Git config, keeps authorship aligned with the operator's normal Git setup without introducing deepreview-specific identity layers. Disabling signing for deepreview-owned commits removes an unnecessary dependency on external signer setup.
+Trade-offs:
+Automation commits created by deepreview are intentionally unsigned even when the operator normally signs interactive commits.
+Enforcement:
+Managed-clone setup writes the resolved Git identity plus `commit.gpgsign=false`, and commit helpers pass the resolved identity with no-sign flags on each deepreview-owned commit. Resolution uses source-repo `user.name` / `user.email` first, then global Git `user.name` / `user.email`.
+References:
+`internal/deepreview/git_identity.go`, `internal/deepreview/gitops.go`, `internal/deepreview/gitops_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Only successful rounds with authoritative `round.json` records count as completed rounds in final reporting.
+Context:
+Execute prompts can produce round artifacts before orchestrator post-processing finishes. If a later execute-stage validation or commit step fails, those artifacts can misrepresent an uncommitted round as completed.
+Rationale:
+Completion summaries and delivery surfaces must reflect durable round state rather than transient execute output.
+Trade-offs:
+Failed execute attempts may require reading diagnostic sub-artifacts instead of the top-level round summary paths.
+Enforcement:
+Execute-stage artifacts are validated first; after execute-stage success and any required local commit, the orchestrator writes `round.json`, and completion reporting keys off that authoritative record rather than raw summary/status-file presence.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Aggressively clean stale worktrees and transient round artifacts as soon as they are no longer needed.
@@ -321,7 +347,7 @@ Adds upfront consolidation effort per round and may defer some plausible-but-unc
 Enforcement:
 Prompt templates require per-item accept/reject/defer with evidence, commonality tracking across reviewers, and explicit deferral of low-confidence items.
 References:
-`prompts/execute/01-consolidate-reviews.md`, `prompts/execute/02-plan.md`, `docs/spec.md`, `docs/architecture.md`
+`prompts/execute/01-consolidate-plan.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Independent review and execute consolidation are strict: only high-confidence `critical|high` merge-relevant issues are in scope; low/medium severity or optional improvements are out of scope for this workflow.
@@ -334,7 +360,7 @@ Some useful but non-critical cleanups/perf improvements are deferred to separate
 Enforcement:
 Independent-review template excludes optional/non-blocking sections; execute triage accepts only `critical|high` items with high confidence and rejects/defers low/medium severity work.
 References:
-`prompts/review/independent-review.md`, `prompts/execute/01-consolidate-reviews.md`, `docs/spec.md`, `prompts/README.md`
+`prompts/review/independent-review.md`, `prompts/execute/01-consolidate-plan.md`, `docs/spec.md`, `prompts/README.md`
 
 Decision:
 Validate execute triage artifacts in orchestrator: any `accept` disposition must carry severity `critical|high` and confidence `high`, or the round fails before commit/delivery.
@@ -347,7 +373,7 @@ If triage output is malformed or omits tags, runs fail fast and require prompt/o
 Enforcement:
 Execute stage validates canonical `round-triage.md` before round commit/status handling and fails with explicit diagnostics on violations.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `prompts/execute/01-consolidate-reviews.md`
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `prompts/execute/01-consolidate-plan.md`
 
 Decision:
 Prompt templates for machine-validated artifacts should include explicit output schemas and concrete examples.
@@ -360,7 +386,7 @@ Slightly longer prompt templates and tighter formatting expectations.
 Enforcement:
 Execute and review prompts include explicit markdown/json shape examples for triage, verification, and summary artifacts.
 References:
-`prompts/execute/01-consolidate-reviews.md`, `prompts/execute/03-execute-verify.md`, `prompts/execute/04-cleanup-summary-commit.md`, `prompts/review/independent-review.md`, `prompts/README.md`
+`prompts/execute/01-consolidate-plan.md`, `prompts/execute/02-execute-verify.md`, `prompts/execute/03-cleanup-summary-commit.md`, `prompts/review/independent-review.md`, `prompts/README.md`
 
 Decision:
 Encourage local commits throughout execution; require changed work to be committed locally before round completion, with no empty commits.
@@ -518,7 +544,7 @@ Longer single-session context may become large on very big changesets.
 Enforcement:
 Spec/architecture define same-context ordered execute queue; queue and stage templates are committed in `prompts/execute/`.
 References:
-`docs/spec.md`, `docs/architecture.md`, `prompts/execute/queue.txt`, `prompts/execute/01-consolidate-reviews.md`, `prompts/execute/02-plan.md`, `prompts/execute/03-execute-verify.md`, `prompts/execute/04-cleanup-summary-commit.md`
+`docs/spec.md`, `docs/architecture.md`, `prompts/execute/queue.txt`, `prompts/execute/01-consolidate-plan.md`, `prompts/execute/02-execute-verify.md`, `prompts/execute/03-cleanup-summary-commit.md`
 
 Decision:
 Use Go as the primary implementation language for the deepreview runtime and TUI.
@@ -726,20 +752,20 @@ Temporary duplication of variable keys until legacy templates are fully retired.
 Enforcement:
 Execute prompt templates use `REVIEW_REPORT_*` placeholders and orchestrator injects both new and legacy keys.
 References:
-`prompts/execute/01-consolidate-reviews.md`, `internal/deepreview/orchestrator.go`
+`prompts/execute/01-consolidate-plan.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
-All Codex prompt-generated artifacts must be written inside the active worktree first, then copied to canonical run artifact paths.
+Codex prompt workers should stage review and execute artifacts inside their worktree sandbox, while deepreview persists canonical copies under the run directory and records round completion with one authoritative `round.json` per successful round.
 Context:
-Codex runs with filesystem sandboxing that may block writes outside its working tree. Prompt templates previously pointed outputs (review reports, round triage/plan/verification/status/summary) directly to `~/deepreview/runs/...`, which can fail even when Codex completed useful work.
+The old artifact flow mixed worktree-local writes, promotion/copy steps, and inferred round completion from multiple files. Simplifying to direct run-directory writes improved accounting, but it conflicted with the existing Codex write sandbox: real workers can only write inside their current worktree, as already demonstrated by the privacy-remediation flow.
 Rationale:
-Writing in-worktree is sandbox-compatible and deterministic. Copying to canonical run paths preserves the external artifact contract used by orchestrator logic and user-facing run directories.
+Sandbox-safe worker writes are required for correctness. Keeping canonical artifacts in the run directory still gives one stable place for summaries, diagnostics, and completion reporting, while a single orchestrator-written `round.json` keeps round accounting explicit and reliable.
 Trade-offs:
-Slightly more orchestration logic for artifact materialization and fallback probing.
+Some copy/promotion logic remains for prompt-written artifacts, and docs/tests must distinguish between transient staged files in worktrees and canonical persisted artifacts in the run directory.
 Enforcement:
-Independent review stage writes to per-worker worktree paths and materializes canonical `round-XX/review-YY.md`; execute stage writes triage/plan/verification/status/summary under execute worktree `.deepreview/artifacts/` and then materializes canonical round artifacts.
+Independent-review workers write review reports under worktree-local `.deepreview/`; execute prompts write triage/plan/verification/status/summary artifacts under worktree-local `.deepreview/artifacts/`; the orchestrator copies canonical artifacts into `~/deepreview/runs/<run-id>/round-<round>/` before consuming them; after successful execute-stage validation and any required local commit, the orchestrator writes `round.json`. Integration coverage requires fake-codex prompt output paths to stay within the worker cwd.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`
+`internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Internal deepreview operational artifacts must never be delivered to source repositories, and untracked runtime directories created during execute rounds must not affect round change detection or auto-commit decisions.
@@ -752,7 +778,7 @@ Adds worktree-local git exclude management plus execute-stage cleanup logic to s
 Enforcement:
 Execute stage installs deepreview-managed untracked excludes for operational directories that are untracked in the candidate repository, removes round-local operational directories before final commit checks when the repository does not already own those paths, auto-commits remaining repository changes when needed, validates no internal `.deepreview/` artifact paths exist in candidate commit range, and blocks delivery only for newly introduced operational-artifact paths that were absent from the source branch.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/gitops.go`, `prompts/execute/04-cleanup-summary-commit.md`, `internal/deepreview/integration_test.go`
+`internal/deepreview/orchestrator.go`, `internal/deepreview/gitops.go`, `prompts/execute/03-cleanup-summary-commit.md`, `internal/deepreview/integration_test.go`
 
 Decision:
 After run completion, CLI must print an explicit terminal summary with delivery outcome and clickable URL where applicable.
@@ -938,13 +964,13 @@ Run all Codex prompts with worktree-local temp/cache defaults, including Go cach
 Context:
 Recent real deepreview artifacts showed Codex workers running `go test` against host-local cache paths like `$HOME/Library/Caches/go-build`, which failed under the sandbox until the model rediscovered ad hoc `GOCACHE` overrides mid-run.
 Rationale:
-Providing writable worktree-local temp/cache envs up front makes verification commands deterministic, avoids false-negative sandbox failures, and keeps runtime artifacts inside deepreview-managed paths.
+Providing writable worktree-local temp/cache envs up front makes verification commands deterministic, avoids false-negative sandbox failures, and keeps runtime artifacts inside deepreview-managed paths without relying on writable paths outside the worker sandbox.
 Trade-offs:
-Every Codex run now creates worktree-local runtime cache directories under `.deepreview/runtime/`, which adds transient local filesystem noise but keeps it isolated and excluded from delivery.
+Every Codex run now creates runtime cache directories under the worker worktree, so deepreview relies on operational excludes and cleanup to keep those paths out of change detection and delivery.
 Enforcement:
-Codex runner creates `.deepreview/runtime/` under the current working directory and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Tests assert env propagation and end-to-end fake-codex validation requires those paths to stay within the worktree.
+Codex runner creates `.deepreview/runtime/` under the worker cwd and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Review and execute prompts instruct Codex to use those inherited paths exactly as provided and to abandon Go verification paths that would require networked module downloads rather than overriding caches ad hoc. Tests assert env propagation, require prompt outputs to stay inside the worker cwd, and require sandbox-safe Go env paths to stay within that same cwd while a worker-side Go command runs successfully under the inherited env.
 References:
-`internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `docs/spec.md`
+`internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `prompts/review/independent-review.md`, `prompts/execute/02-execute-verify.md`, `docs/spec.md`
 
 Decision:
 Treat `source branch == default branch` runs as current-state repository audits rather than zero-diff branch reviews.

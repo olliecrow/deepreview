@@ -27,6 +27,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - replace stale managed checkout for the source branch with a fresh clone
 - fetch latest remote refs
 - resolve source-branch head SHA
+- resolve the operator's Git identity from the source repository Git config first, then global Git config, and apply it to the managed clone with local signing disabled for deepreview-owned commits
 - initialize candidate head to latest remote source branch
 - initialize or reuse local candidate branch `deepreview/candidate/<source-branch>/<run-id>`
 - in `yolo` mode when source branch is default branch, run push dry-run preflight before rounds
@@ -37,29 +38,29 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - when source branch equals default branch, treat branch diff as orientation only and run independent review as a current-state repository audit
 - require all review workers to complete successfully and emit one markdown review artifact each
 - monitor worker activity (stdout/stderr + filesystem/git-change evidence); cancel and restart inactive workers with bounded retries
-- collect report artifacts needed for execute prompts
+- collect report artifacts needed for execute prompts by copying worker-written review files from sandbox-safe worktree paths into the canonical run directory
 - inject compact review summaries into execute prompt 1 and also provide on-disk review paths so Codex can inspect full reports directly when needed
 - aggressively remove independent-review worktrees
 - create fresh execute worktree from current candidate head
 - run ordered execute prompt queue in one Codex chat context:
-  - prompt 1: consolidate reviews (reviews are inputs, not gospel; decisioning only, no code edits)
-  - prompt 2: plan (high-conviction, end-to-end implementation and verification plan; no code edits)
-  - prompt 3: execute/verify (apply approved changes and run codex-led verification with evidence output)
-  - prompt 4: cleanup/summary/commit (docs/decision upkeep, round status flag write, and complete round artifacts)
-- after prompt queue completion, orchestrator performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist)
+  - prompt 1: consolidate and plan (reviews are inputs, not gospel; accept only high-conviction items and produce the round plan)
+  - prompt 2: execute/verify (apply approved changes and run codex-led verification with evidence output)
+  - prompt 3: cleanup/summary/commit (docs/decision upkeep, round status flag write, and complete round artifacts)
+- execute prompts stage their output files inside reserved worktree-local `.deepreview/artifacts/` paths; after prompt queue completion, the orchestrator validates those staged files, persists canonical copies into the run directory, performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist), and then writes the authoritative `round.json` completion record for that round
 - apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
-- all Codex workers inherit worktree-local temp/cache defaults so verification tools do not write to host-global caches outside the worktree sandbox
+- all Codex workers inherit worktree-local temp/cache defaults under `.deepreview/runtime/` so verification tools do not write to host-global caches or escape the worker sandbox
 - allow local checkpoint commits throughout execution; never push during rounds
-- Codex writes round status file at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
+- Codex writes the round status file inside the execute worktree sandbox, and the orchestrator persists the canonical copy at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
+- the orchestrator writes `~/deepreview/runs/<run-id>/round-<round>/round.json` after successful execute-stage completion; final completion reporting counts only rounds with that authoritative record
 - aggressively remove execute worktree and transient per-round artifacts
 - if execute produced changes, update candidate head to latest local committed state and continue
-- if the last allowed execute round produced changes, deepreview automatically schedules one final audit round using the same four execute prompts in audit-only mode; that round may not edit the repository and must end in a terminal `stop` decision for delivery to proceed
+- if the last allowed execute round produced changes, deepreview automatically schedules one final audit round using the same three execute prompts in audit-only mode; that round may not edit the repository and must end in a terminal `stop` decision for delivery to proceed
 - if execute produced no changes, stop the round loop early
 
 4. Final delivery (single push point):
 - require completed round execution and no blocking verification failures
 - run delivery quality gates (`pre-commit --all-files`, optional `./setup_env.sh`) in a detached worktree at candidate HEAD so gating matches deliverable branch content
-- `pr` mode (default): run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree, then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; if the run made deliverable repository changes but stops short of normal completion, publish a draft `[INCOMPLETE]` PR instead of dropping the candidate branch on the floor
+- `pr` mode (default): run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree, then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; terminal outcomes are complete PR, incomplete draft PR, or failure
 - `yolo` mode: push committed candidate state directly to source branch
 
 5. Finalization:

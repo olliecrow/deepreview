@@ -211,7 +211,7 @@ Run a deep, multi-stage review pipeline against a source branch in an isolated w
 What this command does:
   1) Clones/fetches a branch-scoped managed copy of the repository under ~/deepreview (or override env).
   2) Runs independent review workers in isolated worktrees.
-  3) Runs execute-stage prompts to consolidate, plan, execute, and verify changes.
+  3) Runs three execute-stage prompts in one Codex thread: consolidate+plan, execute+verify, cleanup+summary+commit.
   4) Repeats rounds up to max rounds while execute rounds produce repository changes.
      Stops early when an execute round produces no repository changes.
   5) Delivers once at the end:
@@ -869,10 +869,9 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 			fmt.Fprintf(out, "     %d. %s\n", idx+1, executePromptLabel(templateName))
 		}
 	} else {
-		fmt.Fprintln(out, "     1. consolidate reviews")
-		fmt.Fprintln(out, "     2. plan changes")
-		fmt.Fprintln(out, "     3. execute and verify")
-		fmt.Fprintln(out, "     4. cleanup, summary, commit")
+		fmt.Fprintln(out, "     1. consolidate and plan")
+		fmt.Fprintln(out, "     2. execute and verify")
+		fmt.Fprintln(out, "     3. cleanup, summary, commit")
 	}
 
 	fmt.Fprintln(out, "   - if execute changed repository files, run another review round")
@@ -981,6 +980,7 @@ func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, conf
 	_, _ = fmt.Fprintf(out, "logs: %s\n", logsPath)
 	_, _ = fmt.Fprintf(out, "reviews: %s\n", filepath.Join(runRoot, "round-*", "review-*.md"))
 	_, _ = fmt.Fprintf(out, "round artifacts: %s\n", filepath.Join(runRoot, "round-*", "round-*.md"))
+	_, _ = fmt.Fprintf(out, "round records: %s\n", filepath.Join(runRoot, "round-*", "round.json"))
 	_, _ = fmt.Fprintf(out, "round status files: %s\n", filepath.Join(runRoot, "round-*", "round-status.json"))
 }
 
@@ -1040,11 +1040,10 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 		printArtifactPaths()
 		return
 	}
+
 	if delivery.Incomplete {
 		if strings.TrimSpace(delivery.PRURL) != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "Draft PR created: %s\n", delivery.PRURL)
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "incomplete draft PR delivery completed, but no PR URL was returned.\n")
 		}
 		if strings.TrimSpace(delivery.IncompleteReason) != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery status: incomplete (%s)\n", delivery.IncompleteReason)
@@ -1062,9 +1061,6 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 	case ModePR:
 		if strings.TrimSpace(delivery.PRURL) != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "PR created: %s\n", delivery.PRURL)
-		} else {
-			_, _ = fmt.Fprintf(os.Stdout, "delivery completed in PR mode, but no PR URL was returned.\n")
-			_, _ = fmt.Fprintf(os.Stdout, "inspect delivery commits and recover the PR manually if needed.\n")
 		}
 		if strings.TrimSpace(delivery.CommitsURL) != "" {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery commits: %s\n", delivery.CommitsURL)
@@ -1090,18 +1086,18 @@ func readCompletionReviewSnapshot(runRoot string) completionReviewSnapshot {
 	if strings.TrimSpace(runRoot) == "" {
 		return snapshot
 	}
-	statusPaths, err := filepath.Glob(filepath.Join(runRoot, "round-*", "round-status.json"))
+	recordPaths, err := filepath.Glob(filepath.Join(runRoot, "round-*", "round.json"))
 	if err != nil {
 		return snapshot
 	}
-	sort.Strings(statusPaths)
-	snapshot.CompletedRounds = len(statusPaths)
-	for _, statusPath := range statusPaths {
-		status, err := readRoundStatus(statusPath)
+	sort.Strings(recordPaths)
+	for _, recordPath := range recordPaths {
+		record, err := readRoundRecord(recordPath)
 		if err != nil {
 			continue
 		}
-		snapshot.FinalStatus = status
+		snapshot.CompletedRounds++
+		snapshot.FinalStatus = record.Status
 		snapshot.HasFinalStatus = true
 	}
 	return snapshot

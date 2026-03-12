@@ -164,6 +164,62 @@ func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 	}
 }
 
+func TestSecretHygieneScanIgnoresPreexistingSensitiveFixtureOutsideAddedLines(t *testing.T) {
+	o, repoPath, _ := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "feature/test")
+	fixturePath := filepath.Join(repoPath, "fixtures.txt")
+	if err := os.WriteFile(fixturePath, []byte("contact alice@corp.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "fixtures.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "seed privacy fixture")
+	sourceSHA := runGitTest(t, repoParent, "-C", repoPath, "rev-parse", "HEAD")
+	runGitTest(t, repoParent, "-C", repoPath, "update-ref", "refs/remotes/origin/feature/test", sourceSHA)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(fixturePath, []byte("contact alice@corp.com\nharmless update\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "fixtures.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "edit fixture file")
+
+	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
+		t.Fatalf("expected preexisting sensitive fixture outside added lines to be ignored, got: %v", err)
+	}
+}
+
+func TestSecretHygieneScanRejectsSensitiveLineAddedToExistingFile(t *testing.T) {
+	o, repoPath, _ := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "feature/test")
+	filePath := filepath.Join(repoPath, "notes.txt")
+	if err := os.WriteFile(filePath, []byte("safe baseline\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "notes.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "seed notes")
+	sourceSHA := runGitTest(t, repoParent, "-C", repoPath, "rev-parse", "HEAD")
+	runGitTest(t, repoParent, "-C", repoPath, "update-ref", "refs/remotes/origin/feature/test", sourceSHA)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(filePath, []byte("safe baseline\ncontact alice@corp.com\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "notes.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add sensitive line")
+
+	err := o.secretHygieneScan(repoPath, "candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail for added sensitive line in existing file")
+	}
+	if !strings.Contains(err.Error(), "privacy scan failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSummarizePrivacyScanIssues(t *testing.T) {
 	commitErr := NewDeepReviewError("privacy scan failed: disallowed sensitive content detected in delivery commit message")
 	fileErr := NewDeepReviewError("privacy scan failed: local path pattern matched in docs/example.md")

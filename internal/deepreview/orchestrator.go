@@ -32,6 +32,7 @@ type Orchestrator struct {
 	pushCount       int
 	lastDelivery    *DeliveryResult
 	runLockPath     string
+	commitIdentity  CommitIdentity
 }
 
 const stageHeartbeatInterval = 15 * time.Second
@@ -292,6 +293,20 @@ func (o *Orchestrator) Run() (retErr error) {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
 	}
+	identity := o.config.CommitIdentity
+	if strings.TrimSpace(identity.Name) == "" || strings.TrimSpace(identity.Email) == "" {
+		resolvedIdentity, resolveErr := ResolveCommitIdentity(o.config.GitBin, o.config.Repo)
+		if resolveErr != nil {
+			o.reporter.StageFinished(prepareStage, nil, false, progressMessage(resolveErr))
+			return resolveErr
+		}
+		identity = resolvedIdentity
+	}
+	if err := ConfigureManagedGitIdentity(o.managedRepoPath, o.config.GitBin, identity); err != nil {
+		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
+		return err
+	}
+	o.commitIdentity = identity
 	if err := EnsureWorktreeOperationalExcludes(o.managedRepoPath, o.config.GitBin); err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
@@ -1069,8 +1084,6 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		go func(i int) {
 			workerID := i + 1
 			worktreePath := worktrees[i]
-			workerReviewRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID)))
-			workerNotesRelPath := filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.notes.md", workerID)))
 			scope := buildReviewPromptScope(o.config.SourceBranch, defaultBranch)
 			variables := map[string]string{
 				"REPO_SLUG":          o.repoIdentity.Slug(),
@@ -1079,8 +1092,8 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 				"WORKER_ID":          fmt.Sprintf("%d", workerID),
 				"CONCURRENCY":        fmt.Sprintf("%d", o.config.Concurrency),
 				"WORKTREE_PATH":      ".",
-				"OUTPUT_REVIEW_PATH": workerReviewRelPath,
-				"WORKER_NOTES_PATH":  workerNotesRelPath,
+				"OUTPUT_REVIEW_PATH": filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID))),
+				"WORKER_NOTES_PATH":  filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.notes.md", workerID))),
 				"REVIEW_MODE_LABEL":  scope.ModeLabel,
 				"REVIEW_MODE_NOTE":   scope.ModeNote,
 				"REVIEW_PROCESS_1":   scope.ProcessStep1,
@@ -1173,34 +1186,15 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	for workerID := 1; workerID <= o.config.Concurrency; workerID++ {
 		idx := workerID - 1
 		reviewPath := reviewPaths[idx]
-		candidates := []string{
+		if err := ensureCanonicalArtifact(reviewPath, []string{
 			workerReviewPaths[idx],
 			filepath.Join(worktrees[idx], fmt.Sprintf("review-%02d.md", idx+1)),
 			filepath.Join(worktrees[idx], "review.md"),
 			reviewPath,
-		}
-		foundPath := ""
-		for _, candidate := range candidates {
-			if _, err := os.Stat(candidate); err == nil {
-				foundPath = candidate
-				break
-			}
-		}
-		if foundPath == "" {
+		}); err != nil {
 			err := NewDeepReviewError("independent review output missing: %s", reviewPath)
 			o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 			return nil, err
-		}
-		if foundPath != reviewPath {
-			content, err := os.ReadFile(foundPath)
-			if err != nil {
-				o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
-				return nil, err
-			}
-			if err := os.WriteFile(reviewPath, content, 0o644); err != nil {
-				o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
-				return nil, err
-			}
 		}
 		if _, err := os.Stat(reviewPath); err != nil {
 			err := NewDeepReviewError("independent review output missing: %s", reviewPath)
@@ -1231,7 +1225,7 @@ func (o *Orchestrator) runExecuteStage(
 	maxRounds int,
 	auditOnly bool,
 ) (RoundStatus, string, error) {
-	o.reporter.StageStarted("execute stage", roundPtr(round), "running execute workflow (triage, plan, execute+verify, cleanup)")
+	o.reporter.StageStarted("execute stage", roundPtr(round), "running execute workflow (consolidate+plan, execute+verify, cleanup)")
 	executeDir := filepath.Join(roundDir, "execute")
 	executeWorktree := filepath.Join(executeDir, "worktree")
 	if err := os.MkdirAll(executeDir, 0o755); err != nil {
@@ -1255,18 +1249,13 @@ func (o *Orchestrator) runExecuteStage(
 	roundTriagePath := filepath.Join(roundDir, "round-triage.md")
 	roundPlanPath := filepath.Join(roundDir, "round-plan.md")
 	roundVerificationPath := filepath.Join(roundDir, "round-verification.md")
+	roundRecordPath := filepath.Join(roundDir, "round.json")
 	executeArtifactsDir := filepath.Join(executeWorktree, ".deepreview", "artifacts")
-	roundStatusRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-status.json"))
-	roundSummaryRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-summary.md"))
-	roundTriageRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-triage.md"))
-	roundPlanRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-plan.md"))
-	roundVerificationRelPath := filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-verification.md"))
 	roundStatusWorktreePath := filepath.Join(executeArtifactsDir, "round-status.json")
 	roundSummaryWorktreePath := filepath.Join(executeArtifactsDir, "round-summary.md")
 	roundTriageWorktreePath := filepath.Join(executeArtifactsDir, "round-triage.md")
 	roundPlanWorktreePath := filepath.Join(executeArtifactsDir, "round-plan.md")
 	roundVerificationWorktreePath := filepath.Join(executeArtifactsDir, "round-verification.md")
-
 	if err := os.MkdirAll(executeArtifactsDir, 0o755); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
@@ -1306,7 +1295,6 @@ func (o *Orchestrator) runExecuteStage(
 		}
 		localReviewReports = append(localReviewReports, filepath.ToSlash(rel))
 	}
-
 	reviewReportPathsBullet := ""
 	for _, p := range localReviewReports {
 		reviewReportPathsBullet += "- " + p + "\n"
@@ -1322,13 +1310,13 @@ Mode note:
 - Keep the same review bar as every other round.
 - Do not modify code, docs, configuration, or git state in this round.
 - Use the injected review summaries plus the on-disk review files to audit the candidate state and decide whether delivery is still appropriate.
-- If you find remaining critical/high issues that should block delivery, record them and set round status to continue in prompt 4.
+- If you find remaining critical/high issues that should block delivery, record them and set round status to continue in prompt 3.
 `)
 		roundExecuteModeOverride = strings.TrimSpace(`
 Audit-round override:
 - This prompt is audit-only. Do not edit files, do not create commits, and do not change git state.
 - Perform final verification and investigation only.
-- If you discover material remaining issues, record them in the verification artifact and leave prompt 4 to set round status to continue.
+- If you discover material remaining issues, record them in the verification artifact and leave prompt 3 to set round status to continue.
 `)
 	}
 
@@ -1347,11 +1335,11 @@ Audit-round override:
 		"FANOUT_REVIEW_PATHS":     reviewReportPathsBullet,
 		"FANOUT_REVIEWS_MARKDOWN": reviewSummaryInjection,
 		"REVIEW_REPORTS_MARKDOWN": reviewSummaryInjection,
-		"ROUND_TRIAGE_PATH":       roundTriageRelPath,
-		"ROUND_PLAN_PATH":         roundPlanRelPath,
-		"ROUND_VERIFICATION_PATH": roundVerificationRelPath,
-		"ROUND_STATUS_PATH":       roundStatusRelPath,
-		"ROUND_SUMMARY_PATH":      roundSummaryRelPath,
+		"ROUND_TRIAGE_PATH":       filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-triage.md")),
+		"ROUND_PLAN_PATH":         filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-plan.md")),
+		"ROUND_VERIFICATION_PATH": filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-verification.md")),
+		"ROUND_STATUS_PATH":       filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-status.json")),
+		"ROUND_SUMMARY_PATH":      filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-summary.md")),
 	}
 
 	var threadID *string
@@ -1379,6 +1367,13 @@ Audit-round override:
 			prompt,
 			threadID,
 			logPrefix,
+			[]string{
+				roundTriageWorktreePath,
+				roundPlanWorktreePath,
+				roundVerificationWorktreePath,
+				roundStatusWorktreePath,
+				roundSummaryWorktreePath,
+			},
 			round,
 			stageName,
 			fmt.Sprintf("running execute step %d of %d", idx+1, len(queue)),
@@ -1399,7 +1394,6 @@ Audit-round override:
 		filepath.Join(executeWorktree, "round-status.json"),
 		roundStatusPath,
 	}); err != nil {
-		err := NewDeepReviewError("round status file missing: %s", roundStatusPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1408,7 +1402,6 @@ Audit-round override:
 		filepath.Join(executeWorktree, "round-summary.md"),
 		roundSummaryPath,
 	}); err != nil {
-		err := NewDeepReviewError("round summary file missing: %s", roundSummaryPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1417,7 +1410,6 @@ Audit-round override:
 		filepath.Join(executeWorktree, "round-triage.md"),
 		roundTriagePath,
 	}); err != nil {
-		err := NewDeepReviewError("round triage file missing: %s", roundTriagePath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1430,7 +1422,6 @@ Audit-round override:
 		filepath.Join(executeWorktree, "round-plan.md"),
 		roundPlanPath,
 	}); err != nil {
-		err := NewDeepReviewError("round plan file missing: %s", roundPlanPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1439,7 +1430,6 @@ Audit-round override:
 		filepath.Join(executeWorktree, "round-verification.md"),
 		roundVerificationPath,
 	}); err != nil {
-		err := NewDeepReviewError("round verification file missing: %s", roundVerificationPath)
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1490,7 +1480,7 @@ Audit-round override:
 			return RoundStatus{}, "", err
 		}
 		if changed {
-			if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round)); err != nil {
+			if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round), o.commitIdentity); err != nil {
 				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 				return RoundStatus{}, "", err
 			}
@@ -1523,6 +1513,14 @@ Audit-round override:
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
+	if err := writeRoundRecord(roundRecordPath, RoundRecord{
+		Round:   round,
+		Status:  status,
+		Summary: filepath.Base(roundSummaryPath),
+	}); err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
 	o.reporter.StageFinished("execute stage", roundPtr(round), true, fmt.Sprintf("round status recorded (decision=%s)", status.Decision))
 	return status, roundSummaryPath, nil
 }
@@ -1539,6 +1537,7 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 	cwd, prompt string,
 	threadID *string,
 	logPrefix string,
+	monitoredPaths []string,
 	round int,
 	stageName, stageBaseMessage string,
 	parentStageName, parentStageBaseMessage string,
@@ -1547,17 +1546,13 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 	result, _, err := o.runPromptWithWatchdog(
 		currentRunCommandContext(),
 		monitoredPromptRequest{
-			label:        stageName,
-			cwd:          cwd,
-			prompt:       prompt,
-			threadID:     threadID,
-			logPrefix:    logPrefix,
-			useGitStatus: true,
-			monitoredPaths: []string{
-				filepath.Join(cwd, ".deepreview"),
-				logPrefix + ".stdout.jsonl",
-				logPrefix + ".stderr.log",
-			},
+			label:          stageName,
+			cwd:            cwd,
+			prompt:         prompt,
+			threadID:       threadID,
+			logPrefix:      logPrefix,
+			useGitStatus:   true,
+			monitoredPaths: append(append([]string{}, monitoredPaths...), logPrefix+".stdout.jsonl", logPrefix+".stderr.log"),
 		},
 		monitoredPromptCallbacks{
 			onHeartbeat: func(elapsed, silence time.Duration) {
@@ -1620,6 +1615,44 @@ func ensureCanonicalArtifact(canonicalPath string, candidates []string) error {
 		}
 	}
 	return os.ErrNotExist
+}
+
+func writeRoundRecord(path string, record RoundRecord) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	payload, err := json.MarshalIndent(record, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(payload, '\n'), 0o644)
+}
+
+func readRoundRecord(path string) (RoundRecord, error) {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return RoundRecord{}, err
+	}
+	var record RoundRecord
+	if err := json.Unmarshal(body, &record); err != nil {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: %v", path, err)
+	}
+	if record.Round < 1 {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: missing positive round number", path)
+	}
+	if strings.TrimSpace(record.Summary) == "" {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: missing summary artifact path", path)
+	}
+	statusPayload, err := json.Marshal(record.Status)
+	if err != nil {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: %v", path, err)
+	}
+	status, err := readRoundStatusFromBytes(statusPayload)
+	if err != nil {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: %v", path, err)
+	}
+	record.Status = status
+	return record, nil
 }
 
 var (
@@ -2057,13 +2090,11 @@ func persistStatusArtifact(srcPath, dstPath string) error {
 
 func executePromptLabel(templateName string) string {
 	switch templateName {
-	case "01-consolidate-reviews.md", "01-review-triage.md":
-		return "consolidate reviews"
-	case "02-plan.md", "02-change-plan.md":
-		return "plan"
-	case "03-execute-verify.md":
+	case "01-consolidate-plan.md":
+		return "consolidate and plan"
+	case "02-execute-verify.md":
 		return "execute and verify"
-	case "04-cleanup-summary-commit.md":
+	case "03-cleanup-summary-commit.md":
 		return "cleanup, summary, commit"
 	default:
 		return templateName
@@ -2161,7 +2192,10 @@ func readRoundStatus(path string) (RoundStatus, error) {
 	if err != nil {
 		return RoundStatus{}, err
 	}
+	return readRoundStatusFromBytes(b)
+}
 
+func readRoundStatusFromBytes(b []byte) (RoundStatus, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil || raw == nil {
 		return RoundStatus{}, NewDeepReviewError("round status must be a JSON object")
@@ -2226,16 +2260,14 @@ func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error
 	}
 
 	for _, rel := range changedFiles {
-		path := filepath.Join(repoPath, rel)
-		st, err := os.Stat(path)
-		if err != nil || st.IsDir() {
-			continue
-		}
-		content, err := os.ReadFile(path)
+		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch, rel)
 		if err != nil {
 			continue
 		}
-		text := string(content)
+		if len(addedLines) == 0 {
+			continue
+		}
+		text := strings.Join(addedLines, "\n")
 		if containsDisallowedEmail(text) {
 			return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
 		}
@@ -2280,7 +2312,7 @@ func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(repoPath, candi
 	if err := os.WriteFile(targetPath, []byte(sanitized), 0o644); err != nil {
 		return false, err
 	}
-	if err := CommitAllChanges(repoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan"); err != nil {
+	if err := CommitAllChanges(repoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan", o.commitIdentity); err != nil {
 		return false, err
 	}
 	if err := CleanupUntrackedOperationalArtifacts(repoPath, o.config.GitBin); err != nil {
@@ -2484,6 +2516,14 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 		return DeliveryResult{}, err
 	}
 	o.pushCount++
+	partialDelivery := DeliveryResult{
+		Mode:             ModePR,
+		PushedRefspec:    refspec,
+		CommitsURL:       fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(deliveryBranch)),
+		Incomplete:       opts.incomplete,
+		IncompleteReason: strings.TrimSpace(opts.incompleteReason),
+	}
+	o.lastDelivery = &partialDelivery
 
 	prTitle := basePRTitleFromChanges(changedFiles)
 	if opts.incomplete {
@@ -2542,6 +2582,9 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 		lines := strings.Split(trimmed, "\n")
 		prURL = strings.TrimSpace(lines[len(lines)-1])
 	}
+	if prURL == "" {
+		return DeliveryResult{}, NewDeepReviewError("gh pr create did not return a pull request URL")
+	}
 	if !opts.skipEnhancement {
 		o.reporter.StageProgress("delivery", "running post-pr codex summary and updating pr title/body", nil)
 		if err := o.enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, prTitleBasePath, prTitlePath, prBodyBasePath, prBodyPath, summaries, changedFiles); err != nil {
@@ -2549,14 +2592,16 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 		}
 	}
 
-	return DeliveryResult{
+	delivery := DeliveryResult{
 		Mode:             ModePR,
 		PushedRefspec:    refspec,
 		PRURL:            prURL,
-		CommitsURL:       fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(deliveryBranch)),
+		CommitsURL:       partialDelivery.CommitsURL,
 		Incomplete:       opts.incomplete,
 		IncompleteReason: strings.TrimSpace(opts.incompleteReason),
-	}, nil
+	}
+	o.lastDelivery = &delivery
+	return delivery, nil
 }
 
 func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deliveryBranch, prTitle, prURL, baseTitlePath, finalTitlePath, baseBodyPath, finalBodyPath string, summaries, changedFiles []string) error {
@@ -2711,8 +2756,15 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 }
 
 func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranch string, summaries []string, cause error) (bool, error) {
-	if o.config.Mode != ModePR || strings.TrimSpace(candidateBranch) == "" || len(summaries) == 0 || o.pushCount != 0 {
+	if o.config.Mode != ModePR || strings.TrimSpace(candidateBranch) == "" || o.pushCount != 0 {
 		return false, nil
+	}
+	if len(summaries) == 0 {
+		discovered, err := o.discoverCompletedRoundSummaries()
+		if err != nil {
+			return false, err
+		}
+		summaries = discovered
 	}
 
 	o.reporter.StageStarted("delivery", nil, "publishing incomplete draft PR to preserve work")
@@ -3102,13 +3154,13 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 			"- delivery: `skipped`",
 			fmt.Sprintf("- reason: `%s`", delivery.SkipReason),
 		)
-	} else {
-		if delivery.Incomplete {
-			lines = append(lines,
-				"- delivery: `incomplete-draft`",
-				fmt.Sprintf("- reason: `%s`", sanitizePublicText(strings.TrimSpace(delivery.IncompleteReason))),
-			)
-		}
+	} else if delivery.Incomplete {
+		lines = append(lines,
+			"- delivery: `incomplete-draft`",
+			fmt.Sprintf("- reason: `%s`", sanitizePublicText(strings.TrimSpace(delivery.IncompleteReason))),
+		)
+	}
+	if !delivery.Skipped {
 		lines = append(lines, fmt.Sprintf("- push refspec: `%s`", delivery.PushedRefspec))
 	}
 	lines = append(lines, "", "## round artifacts")
@@ -3148,6 +3200,28 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 		return err
 	}
 	return os.WriteFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText), 0o644)
+}
+
+func (o *Orchestrator) discoverCompletedRoundSummaries() ([]string, error) {
+	recordPaths, err := filepath.Glob(filepath.Join(o.runRoot, "round-*", "round.json"))
+	if err != nil {
+		return nil, err
+	}
+	sort.Strings(recordPaths)
+
+	summaries := make([]string, 0, len(recordPaths))
+	for _, recordPath := range recordPaths {
+		record, err := readRoundRecord(recordPath)
+		if err != nil {
+			continue
+		}
+		summaryPath := filepath.Join(filepath.Dir(recordPath), record.Summary)
+		if _, err := os.Stat(summaryPath); err != nil {
+			continue
+		}
+		summaries = append(summaries, summaryPath)
+	}
+	return summaries, nil
 }
 
 func detailsBlock(title, language, content string) string {
