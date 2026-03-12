@@ -490,29 +490,15 @@ func TestReadCompletionReviewSnapshotUsesLatestValidRoundStatus(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(round1, "round-summary.md"),
-		[]byte("# round 01\n"),
+		filepath.Join(round1, "round.json"),
+		[]byte("{\"round\":1,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"continue\",\"reason\":\"keep going\",\"confidence\":0.45}}\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(round1, "round-status.json"),
-		[]byte("{\"decision\":\"continue\",\"reason\":\"keep going\",\"confidence\":0.45}\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(round2, "round-summary.md"),
-		[]byte("# round 02\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(round2, "round-status.json"),
-		[]byte("{\"decision\":\"stop\",\"reason\":\"all major issues addressed\",\"confidence\":0.93,\"next_focus\":\"monitor integration failure drift\"}\n"),
+		filepath.Join(round2, "round.json"),
+		[]byte("{\"round\":2,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"all major issues addressed\",\"confidence\":0.93,\"next_focus\":\"monitor integration failure drift\"}}\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -546,26 +532,12 @@ func TestReadCompletionReviewSnapshotSkipsInvalidRoundStatus(t *testing.T) {
 	if err := os.MkdirAll(round2, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(round1, "round-status.json"), []byte("{invalid json}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(round1, "round.json"), []byte("{invalid json}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(round1, "round-summary.md"),
-		[]byte("# round 01\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(round2, "round-summary.md"),
-		[]byte("# round 02\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(round2, "round-status.json"),
-		[]byte("{\"decision\":\"stop\",\"reason\":\"done\"}\n"),
+		filepath.Join(round2, "round.json"),
+		[]byte("{\"round\":2,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"done\"}}\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -586,7 +558,7 @@ func TestReadCompletionReviewSnapshotSkipsInvalidRoundStatus(t *testing.T) {
 	}
 }
 
-func TestReadCompletionReviewSnapshotIgnoresStatusWithoutCommittedSummary(t *testing.T) {
+func TestReadCompletionReviewSnapshotIgnoresMissingRoundRecord(t *testing.T) {
 	runRoot := t.TempDir()
 	round1 := filepath.Join(runRoot, "round-01")
 	round2 := filepath.Join(runRoot, "round-02")
@@ -600,15 +572,8 @@ func TestReadCompletionReviewSnapshotIgnoresStatusWithoutCommittedSummary(t *tes
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(
-		filepath.Join(round1, "round-status.json"),
-		[]byte("{\"decision\":\"stop\",\"reason\":\"round one committed\"}\n"),
-		0o644,
-	); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(
-		filepath.Join(round2, "round-status.json"),
-		[]byte("{\"decision\":\"stop\",\"reason\":\"uncommitted round should not count\"}\n"),
+		filepath.Join(round1, "round.json"),
+		[]byte("{\"round\":1,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"round one committed\"}}\n"),
 		0o644,
 	); err != nil {
 		t.Fatal(err)
@@ -616,7 +581,7 @@ func TestReadCompletionReviewSnapshotIgnoresStatusWithoutCommittedSummary(t *tes
 
 	snapshot := readCompletionReviewSnapshot(runRoot)
 	if snapshot.CompletedRounds != 1 {
-		t.Fatalf("expected only committed round summaries to count, got %d", snapshot.CompletedRounds)
+		t.Fatalf("expected only round records to count, got %d", snapshot.CompletedRounds)
 	}
 	if !snapshot.HasFinalStatus {
 		t.Fatalf("expected final status from committed round")

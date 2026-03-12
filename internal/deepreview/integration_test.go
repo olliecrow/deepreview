@@ -251,6 +251,9 @@ func TestEndToEndYoloWithFakeCodex(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round-summary.md")); err != nil {
 		t.Fatalf("round-summary.md missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round.json")); err != nil {
+		t.Fatalf("round.json missing: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round-triage.md")); err != nil {
 		t.Fatalf("round-triage.md missing: %v", err)
 	}
@@ -573,6 +576,9 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round-summary.md")); err != nil {
 		t.Fatalf("round-summary.md missing: %v", err)
 	}
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round.json")); err != nil {
+		t.Fatalf("round.json missing: %v", err)
+	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round-triage.md")); err != nil {
 		t.Fatalf("round-triage.md missing: %v", err)
 	}
@@ -587,7 +593,7 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeReportsRecoveryHintsWhenPRURLMissing(t *testing.T) {
+func TestEndToEndPRModeFailsWhenPRURLMissing(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -623,7 +629,7 @@ func TestEndToEndPRModeReportsRecoveryHintsWhenPRURLMissing(t *testing.T) {
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_GH_PR_CREATE_SILENT=1")
-	output := runCmd(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -633,11 +639,11 @@ func TestEndToEndPRModeReportsRecoveryHintsWhenPRURLMissing(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery completed in PR mode, but no PR URL was returned.") {
-		t.Fatalf("expected missing-pr-url summary output, got: %s", output)
+	if !strings.Contains(output, "gh pr create did not return a pull request URL") {
+		t.Fatalf("expected missing-pr-url failure output, got: %s", output)
 	}
-	if !strings.Contains(output, "inspect delivery commits and recover the PR manually if needed.") {
-		t.Fatalf("expected manual recovery guidance, got: %s", output)
+	if !strings.Contains(output, "run failed after delivery artifacts were created.") {
+		t.Fatalf("expected failure summary after delivery artifacts were created, got: %s", output)
 	}
 	if !strings.Contains(output, "delivery commits: https://github.com/local/user/commits/deepreview/feature/test/") {
 		t.Fatalf("expected delivery commits summary output, got: %s", output)
@@ -944,7 +950,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 		"FAKE_CODEX_STALL_ONCE_MS_WORKER_2=15000",
 	)
 
-	output, logs := runCmdCapture(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -954,11 +960,11 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
-		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
+	if !strings.Contains(output, "no deliverable repository changes were produced") {
+		t.Fatalf("expected no-deliverable failure output, got: %s", output)
 	}
-	if !strings.Contains(logs, "worker-02 inactive for") {
-		t.Fatalf("expected worker-02 inactivity restart evidence in logs, got:\n%s", logs)
+	if !strings.Contains(output, "worker-02 inactive for") {
+		t.Fatalf("expected worker-02 inactivity restart evidence in logs, got:\n%s", output)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -1011,7 +1017,7 @@ func TestEndToEndPRModeSetsSandboxSafeGoEnvForCodexRuns(t *testing.T) {
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD=1",
 	)
-	output, _ := runCmdCapture(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1021,8 +1027,8 @@ func TestEndToEndPRModeSetsSandboxSafeGoEnvForCodexRuns(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
-		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
+	if !strings.Contains(output, "no deliverable repository changes were produced") {
+		t.Fatalf("expected no-deliverable failure output, got: %s", output)
 	}
 }
 
@@ -1057,7 +1063,7 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
 	)
-	output, _ := runCmdCapture(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1067,8 +1073,8 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
-		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
+	if !strings.Contains(output, "no deliverable repository changes were produced") {
+		t.Fatalf("expected no-deliverable failure output, got: %s", output)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -1082,12 +1088,8 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
 		t.Fatalf("expected no second round when only operational artifacts were produced")
 	}
-	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
-	if err != nil {
-		t.Fatalf("missing final-summary.md: %v", err)
-	}
-	if !strings.Contains(string(finalSummaryBytes), "- delivery: `skipped`") {
-		t.Fatalf("expected skipped delivery in final summary")
+	if _, err := os.Stat(filepath.Join(runDir, "final-summary.md")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect final-summary.md after no-deliverable failure")
 	}
 }
 
@@ -1219,7 +1221,7 @@ func TestRunFailsWhenExecuteForceCommitsNewOperationalArtifacts(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) {
+func TestEndToEndPRModeFailsWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1253,10 +1255,10 @@ func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *tes
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
 		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
 		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
-		"FAKE_CODEX_STALL_ONCE_CONTAINS=prompt 2 of 4",
+		"FAKE_CODEX_STALL_ONCE_CONTAINS=prompt 2 of 3",
 		"FAKE_CODEX_STALL_ONCE_MS_MATCH=15000",
 	)
-	output, logs := runCmdCapture(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1266,22 +1268,22 @@ func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *tes
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
-		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
+	if !strings.Contains(output, "no deliverable repository changes were produced") {
+		t.Fatalf("expected no-deliverable failure output, got: %s", output)
 	}
-	if !strings.Contains(logs, "execute / plan inactive for") {
-		t.Fatalf("expected execute inactivity restart evidence in logs, got:\n%s", logs)
+	if !strings.Contains(output, "execute / execute and verify inactive for") {
+		t.Fatalf("expected execute inactivity restart evidence in logs, got:\n%s", output)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")
 	if before != after {
-		t.Fatalf("source branch should remain unchanged when delivery is skipped")
+		t.Fatalf("source branch should remain unchanged after no-deliverable failure")
 	}
 
 	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
 	if strings.TrimSpace(refsOut) != "" {
-		t.Fatalf("expected no delivery branch refs when delivery is skipped, got: %s", refsOut)
+		t.Fatalf("expected no delivery branch refs after no-deliverable failure, got: %s", refsOut)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -1295,16 +1297,11 @@ func TestEndToEndPRModeSkipsDeliveryWhenNoChangesEvenIfStatusSaysContinue(t *tes
 	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
 		t.Fatalf("expected no second round when execute produced no changes")
 	}
-	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
-	if err != nil {
-		t.Fatalf("missing final-summary.md: %v", err)
-	}
-	finalSummary := string(finalSummaryBytes)
-	if !strings.Contains(finalSummary, "- delivery: `skipped`") {
-		t.Fatalf("expected skipped delivery in final summary")
+	if _, err := os.Stat(filepath.Join(runDir, "final-summary.md")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect final-summary.md after no-deliverable failure")
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); !os.IsNotExist(err) {
-		t.Fatalf("pr-body.md should not be created on skipped delivery")
+		t.Fatalf("pr-body.md should not be created after no-deliverable failure")
 	}
 }
 

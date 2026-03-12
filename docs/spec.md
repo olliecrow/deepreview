@@ -20,7 +20,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview operates only in managed workspace paths under `~/deepreview`.
 - deepreview must not operate in the user's own active checkout.
 - deepreview must isolate managed repository clones and run locks by repo plus source branch, so different branches of the same repo can run concurrently while same-branch runs remain serialized.
-- deepreview-managed commits must use the operator's resolved Git identity, preferring explicit deepreview overrides outside the repo (`DEEPREVIEW_GIT_USER_NAME` / `DEEPREVIEW_GIT_USER_EMAIL`, then global `deepreview.userName` / `deepreview.userEmail`, then standard Git identity), and must not depend on host GPG signing configuration.
+- deepreview-managed commits must use the operator's resolved Git identity from the source repository Git config when present, otherwise the operator's global Git config, and must not depend on host GPG signing configuration.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization.
@@ -40,15 +40,13 @@ This document defines the canonical runtime and product contract for `deepreview
 - when the source branch equals the default branch, independent review treats branch diff as orientation only and continues as a current-state repository audit.
 - each execute pass runs an ordered multi-prompt queue in one Codex chat context.
 - execute prompt-1 receives compact injected review summaries plus on-disk review report paths so Codex can inspect full reports directly when needed.
-- execute prompt-1 (consolidate reviews) treats independent reviews as inputs, not gospel, and only accepts independently-validated, high-confidence `critical|high` items.
+- execute prompt-1 (consolidate and plan) treats independent reviews as inputs, not gospel, accepts only independently-validated, high-confidence `critical|high` items, and produces the execution plan for the round.
 - execute stage validates `round-triage.md` and fails the round if any `accept` item is missing severity/confidence tags or does not satisfy `severity in {critical, high}` and `confidence=high`.
-- execute prompt-2 (plan) must produce an end-to-end, execution-ready plan and defer low-confidence items.
-- execute prompt-3 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
-- execute prompt-4 (cleanup/summary/commit) must include docs/notes/decision upkeep and produce complete round artifacts for orchestrator post-processing.
-- execute-stage finalization (prompt-4 outputs plus orchestrator post-processing) must ensure changed work is committed locally.
-- provisional execute artifacts may be snapshotted during prompt execution, but canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) must be promoted only after execute-stage success and any required local commit completes.
+- execute prompt-2 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
+- execute prompt-3 (cleanup/summary/commit) must include docs/notes/decision upkeep, write complete round artifacts, and ensure changed work is committed locally.
+- canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) are written directly under `~/deepreview/runs/<run-id>/round-<round>/`.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` remains reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
-- all Codex prompt executions must receive writable worktree-local temp/cache defaults for tool execution, including Go cache/temp envs (`TMPDIR`, `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`), so verification commands do not fall back to host-local caches outside the sandbox.
+- all Codex prompt executions must receive writable run-scoped temp/cache defaults for tool execution, including Go cache/temp envs (`TMPDIR`, `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`), rooted under the run's log/runtime directory rather than the repo worktree, so verification commands do not fall back to host-local caches outside the sandbox.
 - round progression is determined by repository changes produced in execute stage.
 - if an execute round produces repository changes, deepreview must run at least one additional review round.
 - if the last allowed execute round produces repository changes, deepreview must schedule one automatic final audit round with the same review strictness and no repository edits.
@@ -58,6 +56,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
 - final delivery push is allowed only after round execution completes and no blocking verification failures are reported.
+- PR mode has exactly three terminal outcomes: success with complete PR, success with incomplete draft PR, or failure.
 - before delivery, deepreview must run repository quality gates and block delivery on failures:
   - run `pre-commit run --all-files` when `.pre-commit-config.yaml` exists
   - run `./setup_env.sh` when `setup_env.sh` exists
@@ -105,6 +104,15 @@ Helper command behavior:
 - `doctor` runs non-mutating preflight checks for local tools, auth state, prompt assets, and remote source-branch reachability.
 - `dry-run` prints resolved run context and stage order without running Codex or mutating git state.
 
+## Round artifact contract
+- Authoritative round record path: `~/deepreview/runs/<run-id>/round-<round>/round.json`
+- Required round-record schema:
+  - `round`: positive integer
+  - `summary`: non-empty string naming the round summary artifact
+  - `status`: valid round-status object
+- A round counts as completed for final reporting only when `round.json` exists and parses successfully.
+- Invalid or missing `round.json` means the round did not complete successfully for reporting purposes.
+
 ## Round status artifact contract
 - Status file path: `~/deepreview/runs/<run-id>/round-<round>/round-status.json`
 - Required schema:
@@ -114,7 +122,6 @@ Helper command behavior:
   - `confidence`: number in `[0.0, 1.0]`
   - `next_focus`: string
 - This file is an execute-stage artifact for traceability; round-loop control is change-driven, not decision-driven.
-- A round counts as completed for final reporting only when its canonical round artifacts have been promoted after execute-stage success; provisional artifacts from failed execute attempts must not affect completion summaries or final-round reporting.
 - Invalid or missing required fields fail the round.
 
 ## Delivery naming contract
@@ -128,7 +135,7 @@ Each run must produce:
 - run metadata and final summary
 - per-round review/execute logs while active
 - `review-<worker-id>.md` independent review outputs for each active round
-- per-round execute outputs (triage decisions, change plan, verification report, round summary, round status flag)
+- per-round execute outputs (triage decisions, change plan, verification report, round summary, round status flag, authoritative round record)
 - delivery outcome metadata
 - per-round local commits for changed work (one or more commits allowed; no empty commits)
 
@@ -148,7 +155,7 @@ Cleanup policy:
 - if any independent-review worker does not complete successfully after bounded inactivity restarts, fail the run.
 - deepreview does not continue with partial independent-review coverage; all configured workers must succeed.
 - if execute verification fails, fail the run and do not deliver.
-- if `pr` mode delivery fails after final round succeeds, emit remediation guidance and do not perform fallback pushes.
+- if `pr` mode delivery fails after final round succeeds, fail the run and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.
 - in PR mode, deepreview should run at most 3 bounded privacy remediation attempts before delivery; each attempt can apply built-in local-path doc sanitization and/or Codex-guided fixes, then re-scan.
 - in PR mode, after bounded privacy attempts complete, delivery proceeds by policy (privacy findings no longer hard-block delivery).
@@ -184,10 +191,9 @@ PR bodies should include these sections in the final Codex-generated output:
 - PR mode uses one post-delivery description-enhancement template: `prompts/delivery/pr-description-summary.md`.
 - Post-delivery PR enhancement prompt should provide path-level context and let Codex inspect run artifacts/logs/repo directly; avoid injecting pre-digested round/file summary blocks.
 - Default execute queue order:
-  - `01-consolidate-reviews.md`
-  - `02-plan.md`
-  - `03-execute-verify.md`
-  - `04-cleanup-summary-commit.md`
+  - `01-consolidate-plan.md`
+  - `02-execute-verify.md`
+  - `03-cleanup-summary-commit.md`
 - Execute queue prompts must run sequentially in one Codex chat context for the round.
 - Execute prompts must receive injected independent review content in prompt context (not only file paths).
 - Prompt rendering must support deterministic template variables (for example `{{ROUND_NUMBER}}`) for repo/branch metadata, worktree paths, round metadata, artifact paths, and commit message templates.
