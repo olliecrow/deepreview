@@ -134,7 +134,6 @@ func TestExecutePromptLabel(t *testing.T) {
 		{templateName: "01-consolidate-plan.md", want: "consolidate and plan"},
 		{templateName: "02-execute-verify.md", want: "execute and verify"},
 		{templateName: "03-cleanup-summary-commit.md", want: "cleanup, summary, commit"},
-		{templateName: "01-review-triage.md", want: "consolidate and plan"},
 		{templateName: "unknown.md", want: "unknown.md"},
 	}
 

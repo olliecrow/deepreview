@@ -96,7 +96,7 @@ func handlePrompt(prompt string) (string, error) {
 		return "review complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 1 of 4") || strings.Contains(prompt, "prompt 1 of 3") {
+	if strings.Contains(prompt, "prompt 1 of 3") {
 		triage := regexGet("Write triage decisions to `([^`]+)`", prompt)
 		if triage == "" {
 			triage = regexGet("Triage output path: `([^`]+)`", prompt)
@@ -118,7 +118,7 @@ func handlePrompt(prompt string) (string, error) {
 		return "triage and plan complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 2 of 3") || strings.Contains(prompt, "prompt 3 of 4") {
+	if strings.Contains(prompt, "prompt 2 of 3") {
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
 		if verification != "" {
 			if err := writeText(verification, "# Verification\n\n- fake checks passed\n"); err != nil {
@@ -187,7 +187,7 @@ func handlePrompt(prompt string) (string, error) {
 		return "execute complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 3 of 3") || strings.Contains(prompt, "prompt 4 of 4") {
+	if strings.Contains(prompt, "prompt 3 of 3") {
 		summary := regexGet("Write round summary to `([^`]+)`", prompt)
 		if summary != "" {
 			if err := writeText(summary, "# Round Summary\n\n- complete\n"); err != nil {
@@ -371,7 +371,7 @@ func hasArg(args []string, target string) bool {
 	return false
 }
 
-func requireSandboxGoEnvWithinCWD() error {
+func requireSandboxGoEnvOutsideCWD() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -426,8 +426,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "missing required --skip-git-repo-check")
 		os.Exit(1)
 	}
-	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD")) != "" {
-		if err := requireSandboxGoEnvWithinCWD(); err != nil {
+	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_OUTSIDE_CWD")) != "" {
+		if err := requireSandboxGoEnvOutsideCWD(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
