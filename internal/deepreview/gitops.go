@@ -16,6 +16,7 @@ var filesystemSafeKeyRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
 
 var worktreeOperationalExcludePatterns = []string{
 	".deepreview/",
+	".tmp/deepreview/",
 	".tmp/go-build-cache/",
 	".tmp/",
 	".codex/",
@@ -248,7 +249,7 @@ func managedOperationalExcludePatterns(repoPath, gitBin string) ([]string, error
 		if relPath == "" {
 			continue
 		}
-		if relPath == ".deepreview" {
+		if relPath == ".deepreview" || relPath == ".tmp/deepreview" {
 			patterns = append(patterns, pattern)
 			continue
 		}
@@ -403,6 +404,31 @@ func ListChangedFiles(repoPath, gitBin, baseRef, headRef string) ([]string, erro
 		}
 	}
 	return files, nil
+}
+
+func ChangedFileStatusBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (string, error) {
+	out, err := Git(
+		repoPath,
+		gitBin,
+		true,
+		"diff",
+		"--name-status",
+		"--find-renames=0",
+		baseRef+".."+headRef,
+		"--",
+		relPath,
+	)
+	if err != nil {
+		return "", err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) == 0 {
+			continue
+		}
+		return fields[0], nil
+	}
+	return "", nil
 }
 
 func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) ([]string, error) {

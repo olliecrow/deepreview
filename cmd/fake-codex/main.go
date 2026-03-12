@@ -306,6 +306,11 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_STAGE_ALL")) != "" {
+			if err := gitCommitIfPossible("deepreview: privacy remediation attempt"); err != nil {
+				return "", err
+			}
+		}
 		return "privacy remediation complete", nil
 	}
 

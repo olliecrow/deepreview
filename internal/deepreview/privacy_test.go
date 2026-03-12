@@ -148,6 +148,32 @@ func TestSecretHygieneScanRejectsSecretPatternInChangedFiles(t *testing.T) {
 	}
 }
 
+func TestSecretHygieneScanRejectsSecretPatternInAddedBinaryFile(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	previousSecretPatterns := secretRiskyPatterns
+	secretRiskyPatterns = []*regexp.Regexp{regexp.MustCompile(`SECRETTOKEN123`)}
+	defer func() {
+		secretRiskyPatterns = previousSecretPatterns
+	}()
+
+	if err := os.WriteFile(filepath.Join(repoPath, "secret.bin"), []byte("prefix\x00SECRETTOKEN123\x00suffix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add binary secret pattern")
+
+	err := o.secretHygieneScan(repoPath, "candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail for secret pattern in added binary file")
+	}
+	if !strings.Contains(err.Error(), "secret-like pattern") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
 	repoParent := filepath.Dir(repoPath)

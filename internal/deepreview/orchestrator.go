@@ -1746,7 +1746,7 @@ func triageSectionAt(markdown string, offset int) (string, string) {
 
 func isInternalArtifactPath(path string) bool {
 	normalized := filepath.ToSlash(strings.TrimSpace(path))
-	return strings.HasPrefix(normalized, ".deepreview/")
+	return strings.HasPrefix(normalized, ".deepreview/") || strings.HasPrefix(normalized, ".tmp/deepreview/")
 }
 
 func managedOperationalArtifactRoot(path string) (string, bool) {
@@ -2324,37 +2324,55 @@ func readRoundStatusFromBytes(b []byte) (RoundStatus, error) {
 }
 
 func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error {
-	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch)
+	baseRef := "origin/" + o.config.SourceBranch
+	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch)
 	if err != nil {
 		return err
 	}
 
 	for _, rel := range changedFiles {
-		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch, rel)
+		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
 		if err != nil {
 			continue
 		}
-		if len(addedLines) == 0 {
+		if len(addedLines) > 0 {
+			if err := privacyScanText(strings.Join(addedLines, "\n"), rel); err != nil {
+				return err
+			}
 			continue
 		}
-		text := strings.Join(addedLines, "\n")
-		if containsDisallowedEmail(text) {
-			return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
+		status, err := ChangedFileStatusBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		if err != nil || status != "A" {
+			continue
 		}
-		for _, pattern := range secretRiskyPatterns {
-			if pattern.MatchString(text) {
-				return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
-			}
+		content, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(rel)))
+		if err != nil {
+			continue
 		}
-		for _, pattern := range personalRiskyPatterns {
-			if pattern.MatchString(text) {
-				return NewDeepReviewError("privacy scan failed: personal-info-like pattern matched in %s", rel)
-			}
+		if err := privacyScanText(string(content), rel); err != nil {
+			return err
 		}
-		for _, pattern := range privatePathPatterns {
-			if pattern.MatchString(text) {
-				return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
-			}
+	}
+	return nil
+}
+
+func privacyScanText(text, rel string) error {
+	if containsDisallowedEmail(text) {
+		return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
+	}
+	for _, pattern := range secretRiskyPatterns {
+		if pattern.MatchString(text) {
+			return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
+		}
+	}
+	for _, pattern := range personalRiskyPatterns {
+		if pattern.MatchString(text) {
+			return NewDeepReviewError("privacy scan failed: personal-info-like pattern matched in %s", rel)
+		}
+	}
+	for _, pattern := range privatePathPatterns {
+		if pattern.MatchString(text) {
+			return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
 		}
 	}
 	return nil

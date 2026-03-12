@@ -209,15 +209,12 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 	if err != nil {
 		return err
 	}
-	if err := refreshUpstreamRef(gitBin, state.Path, upstreamRef); err != nil {
-		return err
-	}
 
 	localSHA, err := Git(state.Path, gitBin, true, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return err
 	}
-	upstreamSHA, err := Git(state.Path, gitBin, true, "rev-parse", "--verify", upstreamRef)
+	upstreamSHA, err := remoteRefSHA(gitBin, state.Path, upstreamRef)
 	if err != nil {
 		return err
 	}
@@ -225,28 +222,45 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 		return nil
 	}
 
-	behind, ahead := branchDivergence(gitBin, state.Path, upstreamRef)
-	return NewDeepReviewError(
-		"local branch `%s` is not synchronized with `%s` (local=%s remote=%s ahead=%d behind=%d); commit/push/pull so remote matches local before review",
+	behind, ahead, countsKnown := branchDivergenceAgainstCommit(gitBin, state.Path, upstreamSHA)
+	message := "local branch `%s` is not synchronized with `%s` (local=%s remote=%s); commit/push/pull so remote matches local before review"
+	args := []any{
 		branch,
 		upstreamRef,
 		shortSHA(localSHA),
 		shortSHA(upstreamSHA),
-		ahead,
-		behind,
-	)
+	}
+	if countsKnown {
+		message = "local branch `%s` is not synchronized with `%s` (local=%s remote=%s ahead=%d behind=%d); commit/push/pull so remote matches local before review"
+		args = append(args, ahead, behind)
+	}
+	return NewDeepReviewError(message, args...)
 }
 
-func refreshUpstreamRef(gitBin, repoPath, upstreamRef string) error {
+func remoteRefSHA(gitBin, repoPath, upstreamRef string) (string, error) {
 	parts := strings.SplitN(strings.TrimSpace(upstreamRef), "/", 2)
 	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return NewDeepReviewError("unable to refresh upstream ref `%s`: unsupported upstream format", upstreamRef)
+		return "", NewDeepReviewError("unable to query upstream ref `%s`: unsupported upstream format", upstreamRef)
 	}
-	refspec := "refs/heads/" + parts[1] + ":refs/remotes/" + upstreamRef
-	if _, err := RunCommand([]string{gitBin, "-C", repoPath, "fetch", "--no-tags", "--prune", parts[0], refspec}, "", "", true, 0); err != nil {
-		return NewDeepReviewError("unable to refresh upstream ref `%s` before readiness check: %s", upstreamRef, progressMessage(err))
+
+	remoteResult, err := RunCommand(
+		[]string{gitBin, "-C", repoPath, "ls-remote", "--exit-code", "--heads", parts[0], "refs/heads/" + parts[1]},
+		"",
+		"",
+		false,
+		0,
+	)
+	if err != nil {
+		return "", err
 	}
-	return nil
+	if remoteResult.ReturnCode != 0 {
+		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check", upstreamRef)
+	}
+	fields := strings.Fields(strings.TrimSpace(remoteResult.Stdout))
+	if len(fields) == 0 || strings.TrimSpace(fields[0]) == "" {
+		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check", upstreamRef)
+	}
+	return strings.TrimSpace(fields[0]), nil
 }
 
 func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {
@@ -277,18 +291,25 @@ func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {
 	)
 }
 
-func branchDivergence(gitBin, repoPath, upstreamRef string) (behind int, ahead int) {
-	out, err := Git(repoPath, gitBin, false, "rev-list", "--left-right", "--count", upstreamRef+"...HEAD")
+func branchDivergenceAgainstCommit(gitBin, repoPath, commit string) (behind int, ahead int, ok bool) {
+	trimmed := strings.TrimSpace(commit)
+	if trimmed == "" {
+		return 0, 0, false
+	}
+	if _, err := Git(repoPath, gitBin, false, "cat-file", "-e", trimmed+"^{commit}"); err != nil {
+		return 0, 0, false
+	}
+	out, err := Git(repoPath, gitBin, false, "rev-list", "--left-right", "--count", trimmed+"...HEAD")
 	if err != nil {
-		return 0, 0
+		return 0, 0, false
 	}
 	fields := strings.Fields(strings.TrimSpace(out))
 	if len(fields) != 2 {
-		return 0, 0
+		return 0, 0, false
 	}
 	behind, _ = strconv.Atoi(fields[0])
 	ahead, _ = strconv.Atoi(fields[1])
-	return behind, ahead
+	return behind, ahead, true
 }
 
 func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string, resolvedBranch string, err error) {
