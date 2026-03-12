@@ -79,7 +79,7 @@ func TestResolveRepoIdentityLocalPathRejectsNonGitHubOriginRemote(t *testing.T) 
 }
 
 func TestResolveRepoIdentityPreservesExplicitSSHGitHubURL(t *testing.T) {
-	repo := "ssh://git@github.com/example-org/example-repo.git"
+	repo := githubSSHCloneURL("example-org", "example-repo")
 	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, repo)
 	if err != nil {
 		t.Fatalf("resolveRepoIdentity failed: %v", err)
@@ -97,8 +97,8 @@ func TestParseOwnerRepoAcceptsGitHubLocatorForms(t *testing.T) {
 	}{
 		{input: "example-org/example-repo", owner: "example-org", name: "example-repo"},
 		{input: "https://github.com/example-org/example-repo.git", owner: "example-org", name: "example-repo"},
-		{input: "ssh://git@github.com/example-org/example-repo.git", owner: "example-org", name: "example-repo"},
-		{input: "git@github.com:example-org/example-repo.git", owner: "example-org", name: "example-repo"},
+		{input: githubSSHCloneURL("example-org", "example-repo"), owner: "example-org", name: "example-repo"},
+		{input: githubSCPLikeCloneURL("example-org", "example-repo"), owner: "example-org", name: "example-repo"},
 	}
 
 	for _, tc := range cases {
@@ -713,7 +713,7 @@ func TestAutoCommitWorktreeChangesIfNeededCommitsDirtyWorktree(t *testing.T) {
 
 	runGitTest(t, td, "init", "-b", "main", repoPath)
 	runGitTest(t, td, "-C", repoPath, "config", "user.name", "deepreview-test")
-	runGitTest(t, td, "-C", repoPath, "config", "user.email", "deepreview-test@example.com")
+	runGitTest(t, td, "-C", repoPath, "config", "user.email", testPlaceholderEmail("deepreview-test"))
 	if err := os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -727,7 +727,7 @@ func TestAutoCommitWorktreeChangesIfNeededCommitsDirtyWorktree(t *testing.T) {
 		config: ReviewConfig{GitBin: "git"},
 		commitIdentity: CommitIdentity{
 			Name:  "deepreview-test",
-			Email: "deepreview-test@example.com",
+			Email: testPlaceholderEmail("deepreview-test"),
 		},
 	}
 	if err := o.autoCommitWorktreeChangesIfNeeded(repoPath, "deepreview: auto commit"); err != nil {
