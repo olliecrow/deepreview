@@ -968,9 +968,9 @@ Providing writable run-scoped temp/cache envs up front makes verification comman
 Trade-offs:
 Every Codex run now creates run-scoped runtime cache directories under the run log tree, which centralizes operational state outside repo worktrees but increases run-directory footprint.
 Enforcement:
-Codex runner creates a `runtime/` directory beside the prompt log prefix under the run directory and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Tests assert env propagation and end-to-end fake-codex validation requires those paths to stay outside the repo worktree.
+Codex runner creates a `runtime/` directory beside the prompt log prefix under the run directory and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Review and execute prompts instruct Codex to use those inherited paths exactly as provided and to abandon Go verification paths that would require networked module downloads rather than overriding caches ad hoc. Tests assert env propagation and end-to-end fake-codex validation requires those paths to stay outside the repo worktree.
 References:
-`internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `docs/spec.md`
+`internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `prompts/review/independent-review.md`, `prompts/execute/02-execute-verify.md`, `docs/spec.md`
 
 Decision:
 Treat `source branch == default branch` runs as current-state repository audits rather than zero-diff branch reviews.
