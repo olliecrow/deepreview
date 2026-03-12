@@ -2250,16 +2250,14 @@ func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error
 	}
 
 	for _, rel := range changedFiles {
-		path := filepath.Join(repoPath, rel)
-		st, err := os.Stat(path)
-		if err != nil || st.IsDir() {
-			continue
-		}
-		content, err := os.ReadFile(path)
+		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch, rel)
 		if err != nil {
 			continue
 		}
-		text := string(content)
+		if len(addedLines) == 0 {
+			continue
+		}
+		text := strings.Join(addedLines, "\n")
 		if containsDisallowedEmail(text) {
 			return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
 		}
