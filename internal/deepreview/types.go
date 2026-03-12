@@ -53,6 +53,12 @@ type RoundStatus struct {
 	NextFocus  *string  `json:"next_focus,omitempty"`
 }
 
+type RoundRecord struct {
+	Round   int         `json:"round"`
+	Status  RoundStatus `json:"status"`
+	Summary string      `json:"summary"`
+}
+
 type CodexRunResult struct {
 	ThreadID      string
 	AgentMessages []string
@@ -67,8 +73,6 @@ type DeliveryResult struct {
 	CommitsURL       string
 	Incomplete       bool
 	IncompleteReason string
-	Skipped          bool
-	SkipReason       string
 }
 
 type CommitIdentity struct {

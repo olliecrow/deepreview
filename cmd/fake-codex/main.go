@@ -96,27 +96,29 @@ func handlePrompt(prompt string) (string, error) {
 		return "review complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 1 of 4") {
+	if strings.Contains(prompt, "prompt 1 of 4") || strings.Contains(prompt, "prompt 1 of 3") {
 		triage := regexGet("Write triage decisions to `([^`]+)`", prompt)
+		if triage == "" {
+			triage = regexGet("Triage output path: `([^`]+)`", prompt)
+		}
 		if triage != "" {
 			if err := writeText(triage, "# Triage\n\n- accept: sample change\n"); err != nil {
 				return "", err
 			}
 		}
-		return "triage complete", nil
-	}
-
-	if strings.Contains(prompt, "prompt 2 of 4") {
 		plan := regexGet("Write the plan to `([^`]+)`", prompt)
+		if plan == "" {
+			plan = regexGet("Plan output path: `([^`]+)`", prompt)
+		}
 		if plan != "" {
 			if err := writeText(plan, "# Plan\n\n- apply sample change\n"); err != nil {
 				return "", err
 			}
 		}
-		return "plan complete", nil
+		return "triage and plan complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 3 of 4") {
+	if strings.Contains(prompt, "prompt 2 of 3") || strings.Contains(prompt, "prompt 3 of 4") {
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
 		if verification != "" {
 			if err := writeText(verification, "# Verification\n\n- fake checks passed\n"); err != nil {
@@ -185,7 +187,7 @@ func handlePrompt(prompt string) (string, error) {
 		return "execute complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 4 of 4") {
+	if strings.Contains(prompt, "prompt 3 of 3") || strings.Contains(prompt, "prompt 4 of 4") {
 		summary := regexGet("Write round summary to `([^`]+)`", prompt)
 		if summary != "" {
 			if err := writeText(summary, "# Round Summary\n\n- complete\n"); err != nil {
@@ -380,8 +382,8 @@ func requireSandboxGoEnvWithinCWD() error {
 		if value == "" {
 			return fmt.Errorf("missing required %s", key)
 		}
-		if !pathWithinBase(cwd, value) {
-			return fmt.Errorf("%s must stay within cwd: %s", key, value)
+		if pathWithinBase(cwd, value) {
+			return fmt.Errorf("%s must stay outside cwd: %s", key, value)
 		}
 		info, err := os.Stat(value)
 		if err != nil {

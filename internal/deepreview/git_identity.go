@@ -6,61 +6,28 @@ import (
 	"strings"
 )
 
-const (
-	deepreviewCommitNameEnv  = "DEEPREVIEW_GIT_USER_NAME"
-	deepreviewCommitEmailEnv = "DEEPREVIEW_GIT_USER_EMAIL"
-	deepreviewCommitNameKey  = "deepreview.userName"
-	deepreviewCommitEmailKey = "deepreview.userEmail"
-)
-
 func ResolveCommitIdentity(gitBin, repo string) (CommitIdentity, error) {
-	if identity, found, err := commitIdentityFromEnv(); err != nil {
-		return CommitIdentity{}, err
-	} else if found {
-		return identity, nil
-	}
-
-	if identity, found, err := gitConfigIdentityGet(gitBin, []string{"--global"}, deepreviewCommitNameKey, deepreviewCommitEmailKey); err != nil {
-		return CommitIdentity{}, err
-	} else if found {
-		return identity, nil
-	}
-
-	if identity, found, err := gitConfigIdentityGet(gitBin, []string{"--global"}, "user.name", "user.email"); err != nil {
-		return CommitIdentity{}, err
-	} else if found {
-		return identity, nil
-	}
-
-	var identity CommitIdentity
 	if isLocalGitRepo(repo) {
-		name, err := gitConfigGet(gitBin, repo, "user.name")
+		identity, found, err := gitConfigIdentityGet(gitBin, repo, nil)
 		if err != nil {
 			return CommitIdentity{}, err
 		}
-		email, err := gitConfigGet(gitBin, repo, "user.email")
-		if err != nil {
-			return CommitIdentity{}, err
+		if found {
+			return identity, nil
 		}
-		identity = CommitIdentity{Name: name, Email: email}
-	} else {
-		name, err := gitConfigGet(gitBin, "", "user.name")
-		if err != nil {
-			return CommitIdentity{}, err
-		}
-		email, err := gitConfigGet(gitBin, "", "user.email")
-		if err != nil {
-			return CommitIdentity{}, err
-		}
-		identity = CommitIdentity{Name: name, Email: email}
 	}
 
-	if strings.TrimSpace(identity.Name) == "" || strings.TrimSpace(identity.Email) == "" {
-		return CommitIdentity{}, NewDeepReviewError(
-			"git commit identity is not configured; set DEEPREVIEW_GIT_USER_NAME and DEEPREVIEW_GIT_USER_EMAIL, or configure deepreview.userName/deepreview.userEmail or user.name/user.email in your local git config before running deepreview",
-		)
+	identity, found, err := gitConfigIdentityGet(gitBin, "", []string{"--global"})
+	if err != nil {
+		return CommitIdentity{}, err
 	}
-	return identity, nil
+	if found {
+		return identity, nil
+	}
+
+	return CommitIdentity{}, NewDeepReviewError(
+		"git commit identity is not configured; set user.name and user.email in the source repo or in your global git config before running deepreview",
+	)
 }
 
 func ConfigureManagedGitIdentity(repoPath, gitBin string, identity CommitIdentity) error {
@@ -79,26 +46,12 @@ func ConfigureManagedGitIdentity(repoPath, gitBin string, identity CommitIdentit
 	return nil
 }
 
-func commitIdentityFromEnv() (CommitIdentity, bool, error) {
-	name := strings.TrimSpace(os.Getenv(deepreviewCommitNameEnv))
-	email := strings.TrimSpace(os.Getenv(deepreviewCommitEmailEnv))
-	if name == "" && email == "" {
-		return CommitIdentity{}, false, nil
-	}
-	if name == "" || email == "" {
-		return CommitIdentity{}, false, NewDeepReviewError(
-			"deepreview git identity env override is incomplete; set both DEEPREVIEW_GIT_USER_NAME and DEEPREVIEW_GIT_USER_EMAIL",
-		)
-	}
-	return CommitIdentity{Name: name, Email: email}, true, nil
-}
-
-func gitConfigIdentityGet(gitBin string, extraArgs []string, nameKey, emailKey string) (CommitIdentity, bool, error) {
-	name, err := gitConfigGetWithArgs(gitBin, extraArgs, "", nameKey)
+func gitConfigIdentityGet(gitBin, repoPath string, extraArgs []string) (CommitIdentity, bool, error) {
+	name, err := gitConfigGetWithArgs(gitBin, extraArgs, repoPath, "user.name")
 	if err != nil {
 		return CommitIdentity{}, false, err
 	}
-	email, err := gitConfigGetWithArgs(gitBin, extraArgs, "", emailKey)
+	email, err := gitConfigGetWithArgs(gitBin, extraArgs, repoPath, "user.email")
 	if err != nil {
 		return CommitIdentity{}, false, err
 	}
@@ -106,8 +59,13 @@ func gitConfigIdentityGet(gitBin string, extraArgs []string, nameKey, emailKey s
 		return CommitIdentity{}, false, nil
 	}
 	if strings.TrimSpace(name) == "" || strings.TrimSpace(email) == "" {
+		scope := "global git config"
+		if strings.TrimSpace(repoPath) != "" {
+			scope = "source repo git config"
+		}
 		return CommitIdentity{}, false, NewDeepReviewError(
-			"deepreview git identity config is incomplete; configure both name and email before running deepreview",
+			"%s is incomplete; configure both user.name and user.email before running deepreview",
+			scope,
 		)
 	}
 	return CommitIdentity{Name: name, Email: email}, true, nil

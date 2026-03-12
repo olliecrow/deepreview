@@ -226,42 +226,24 @@ func TestResolveCommitIdentityUsesRepoConfigForLocalRepo(t *testing.T) {
 	}
 }
 
-func TestResolveCommitIdentityUsesDeepreviewEnvOverride(t *testing.T) {
-	t.Setenv(deepreviewCommitNameEnv, "Env User")
-	t.Setenv(deepreviewCommitEmailEnv, "env-user@example.com")
-
-	identity, err := ResolveCommitIdentity("git", "")
-	if err != nil {
-		t.Fatalf("ResolveCommitIdentity failed: %v", err)
-	}
-	if identity.Name != "Env User" {
-		t.Fatalf("expected env override name, got %q", identity.Name)
-	}
-	if identity.Email != "env-user@example.com" {
-		t.Fatalf("expected env override email, got %q", identity.Email)
-	}
-}
-
-func TestResolveCommitIdentityUsesDeepreviewGlobalOverrideBeforeRepoConfig(t *testing.T) {
+func TestResolveCommitIdentityUsesGlobalConfigWhenRepoConfigMissing(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
 	globalConfig := filepath.Join(td, "global.gitconfig")
 	runGitCommand(t, td, "init", "-b", "main", repo)
-	runGitCommand(t, td, "-C", repo, "config", "user.email", "repo-user@example.com")
-	runGitCommand(t, td, "-C", repo, "config", "user.name", "Repo User")
 	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
-	runGitCommand(t, td, "config", "--global", deepreviewCommitNameKey, "Preferred User")
-	runGitCommand(t, td, "config", "--global", deepreviewCommitEmailKey, "preferred-user@example.com")
+	runGitCommand(t, td, "config", "--global", "user.name", "Global User")
+	runGitCommand(t, td, "config", "--global", "user.email", "global-user@example.com")
 
 	identity, err := ResolveCommitIdentity("git", repo)
 	if err != nil {
 		t.Fatalf("ResolveCommitIdentity failed: %v", err)
 	}
-	if identity.Name != "Preferred User" {
-		t.Fatalf("expected deepreview global override name, got %q", identity.Name)
+	if identity.Name != "Global User" {
+		t.Fatalf("expected global user name, got %q", identity.Name)
 	}
-	if identity.Email != "preferred-user@example.com" {
-		t.Fatalf("expected deepreview global override email, got %q", identity.Email)
+	if identity.Email != "global-user@example.com" {
+		t.Fatalf("expected global user email, got %q", identity.Email)
 	}
 }
 
