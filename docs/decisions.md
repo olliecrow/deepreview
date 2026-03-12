@@ -960,15 +960,15 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Run all Codex prompts with run-scoped temp/cache defaults, including Go cache/temp envs.
+Run all Codex prompts with worktree-local temp/cache defaults, including Go cache/temp envs.
 Context:
 Recent real deepreview artifacts showed Codex workers running `go test` against host-local cache paths like `$HOME/Library/Caches/go-build`, which failed under the sandbox until the model rediscovered ad hoc `GOCACHE` overrides mid-run.
 Rationale:
-Providing writable run-scoped temp/cache envs up front makes verification commands deterministic, avoids false-negative sandbox failures, and keeps runtime artifacts inside deepreview-managed paths without polluting repo worktrees.
+Providing writable worktree-local temp/cache envs up front makes verification commands deterministic, avoids false-negative sandbox failures, and keeps runtime artifacts inside deepreview-managed paths without relying on writable paths outside the worker sandbox.
 Trade-offs:
-Every Codex run now creates run-scoped runtime cache directories under the run log tree, which centralizes operational state outside repo worktrees but increases run-directory footprint.
+Every Codex run now creates runtime cache directories under the worker worktree, so deepreview relies on operational excludes and cleanup to keep those paths out of change detection and delivery.
 Enforcement:
-Codex runner creates a `runtime/` directory beside the prompt log prefix under the run directory and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Review and execute prompts instruct Codex to use those inherited paths exactly as provided and to abandon Go verification paths that would require networked module downloads rather than overriding caches ad hoc. Tests assert env propagation and end-to-end fake-codex validation requires those paths to stay outside the repo worktree.
+Codex runner creates `.deepreview/runtime/` under the worker cwd and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Review and execute prompts instruct Codex to use those inherited paths exactly as provided and to abandon Go verification paths that would require networked module downloads rather than overriding caches ad hoc. Tests assert env propagation, require prompt outputs to stay inside the worker cwd, and require sandbox-safe Go env paths to stay within that same cwd while a worker-side Go command runs successfully under the inherited env.
 References:
 `internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `prompts/review/independent-review.md`, `prompts/execute/02-execute-verify.md`, `docs/spec.md`
 
