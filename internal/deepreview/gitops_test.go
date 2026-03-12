@@ -247,6 +247,36 @@ func TestResolveCommitIdentityUsesGlobalConfigWhenRepoConfigMissing(t *testing.T
 	}
 }
 
+func TestResolveCommitIdentityUsesMatchedLocalRepoConfigForRepoLocator(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "empty.gitconfig"))
+
+	testCases := []struct {
+		name    string
+		locator string
+	}{
+		{name: "owner repo", locator: "example-org/example-repo"},
+		{name: "remote url", locator: "https://github.com/example-org/example-repo.git"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			withWorkingDir(t, repo, func() {
+				identity, err := ResolveCommitIdentity("git", tc.locator)
+				if err != nil {
+					t.Fatalf("ResolveCommitIdentity failed: %v", err)
+				}
+				if identity.Name != "Test User" {
+					t.Fatalf("expected repo-matched user name, got %q", identity.Name)
+				}
+				if identity.Email != "test@example.com" {
+					t.Fatalf("expected repo-matched user email, got %q", identity.Email)
+				}
+			})
+		})
+	}
+}
+
 func TestConfigureManagedGitIdentityEnablesPlainGitCommitWithoutSigner(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")

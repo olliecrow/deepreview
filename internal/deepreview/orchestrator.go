@@ -449,9 +449,19 @@ func (o *Orchestrator) Run() (retErr error) {
 		return err
 	}
 	if len(changedFiles) == 0 {
-		err := NewDeepReviewError("no deliverable repository changes were produced")
-		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		return err
+		delivery := DeliveryResult{
+			Mode:       o.config.Mode,
+			Skipped:    true,
+			SkipReason: "no deliverable repository changes were produced",
+		}
+		o.lastDelivery = &delivery
+		if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+			return err
+		}
+		o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
+		successMessage = "run completed successfully (no deliverable repository changes)"
+		return nil
 	}
 	if o.config.Mode == ModePR {
 		changedFiles, err = o.runPRPrivacyFixGate(candidateBranch, changedFiles)
@@ -460,9 +470,19 @@ func (o *Orchestrator) Run() (retErr error) {
 			return err
 		}
 		if len(changedFiles) == 0 {
-			err := NewDeepReviewError("privacy remediation removed all deliverable repository changes")
-			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-			return err
+			delivery := DeliveryResult{
+				Mode:       o.config.Mode,
+				Skipped:    true,
+				SkipReason: "privacy remediation removed all deliverable repository changes",
+			}
+			o.lastDelivery = &delivery
+			if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
+				o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+				return err
+			}
+			o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
+			successMessage = "run completed successfully (no deliverable repository changes)"
+			return nil
 		}
 	}
 	if err := o.runDeliveryQualityChecks(candidateBranch); err != nil {
@@ -2750,14 +2770,11 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		return false, nil
 	}
 	if len(summaries) == 0 {
-		discovered, err := o.discoverRoundSummaries()
+		discovered, err := o.discoverCompletedRoundSummaries()
 		if err != nil {
 			return false, err
 		}
 		summaries = discovered
-	}
-	if len(summaries) == 0 {
-		return false, nil
 	}
 
 	o.reporter.StageStarted("delivery", nil, "publishing incomplete draft PR to preserve work")
@@ -3125,7 +3142,11 @@ func summarizeChangedFilePreview(changedFiles []string, limit int) (string, int)
 }
 
 func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryResult, summaries []string) error {
-	if o.pushCount != 1 {
+	if delivery.Skipped {
+		if o.pushCount != 0 {
+			return NewDeepReviewError("invalid delivery push count: expected 0 for skipped delivery, got %d", o.pushCount)
+		}
+	} else if o.pushCount != 1 {
 		return NewDeepReviewError("invalid delivery push count: expected 1, got %d", o.pushCount)
 	}
 
@@ -3138,13 +3159,20 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 		fmt.Sprintf("- rounds: `%d`", len(summaries)),
 		fmt.Sprintf("- run artifacts: `%s`", filepath.ToSlash(filepath.Join("runs", o.config.RunID))),
 	}
-	if delivery.Incomplete {
+	if delivery.Skipped {
+		lines = append(lines,
+			"- delivery: `skipped`",
+			fmt.Sprintf("- reason: `%s`", delivery.SkipReason),
+		)
+	} else if delivery.Incomplete {
 		lines = append(lines,
 			"- delivery: `incomplete-draft`",
 			fmt.Sprintf("- reason: `%s`", sanitizePublicText(strings.TrimSpace(delivery.IncompleteReason))),
 		)
 	}
-	lines = append(lines, fmt.Sprintf("- push refspec: `%s`", delivery.PushedRefspec))
+	if !delivery.Skipped {
+		lines = append(lines, fmt.Sprintf("- push refspec: `%s`", delivery.PushedRefspec))
+	}
 	lines = append(lines, "", "## round artifacts")
 	for _, path := range summaries {
 		rel := path
@@ -3184,13 +3212,26 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 	return os.WriteFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText), 0o644)
 }
 
-func (o *Orchestrator) discoverRoundSummaries() ([]string, error) {
-	paths, err := filepath.Glob(filepath.Join(o.runRoot, "round-*", "round-summary.md"))
+func (o *Orchestrator) discoverCompletedRoundSummaries() ([]string, error) {
+	recordPaths, err := filepath.Glob(filepath.Join(o.runRoot, "round-*", "round.json"))
 	if err != nil {
 		return nil, err
 	}
-	sort.Strings(paths)
-	return paths, nil
+	sort.Strings(recordPaths)
+
+	summaries := make([]string, 0, len(recordPaths))
+	for _, recordPath := range recordPaths {
+		record, err := readRoundRecord(recordPath)
+		if err != nil {
+			continue
+		}
+		summaryPath := filepath.Join(filepath.Dir(recordPath), record.Summary)
+		if _, err := os.Stat(summaryPath); err != nil {
+			continue
+		}
+		summaries = append(summaries, summaryPath)
+	}
+	return summaries, nil
 }
 
 func detailsBlock(title, language, content string) string {

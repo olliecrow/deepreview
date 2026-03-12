@@ -75,6 +75,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-62 | Concurrent runs are allowed for different source branches of the same repository, but the exact same repo+source-branch pair must remain serialized. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/integration_test.go` |
 | R-63 | Deepreview-managed commits must use the operator's resolved Git identity from source-repo Git config first, then global Git config, and must not fail because of host GPG signing configuration. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `internal/deepreview/git_identity.go`, `internal/deepreview/gitops.go`, `internal/deepreview/gitops_test.go` |
 | R-64 | Final completion reporting must count only successful rounds with authoritative `round.json` records; failed execute attempts must not be reported as completed or final rounds. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go` |
+| R-65 | Clean or privacy-remediated-to-zero review runs must complete successfully with final summary artifacts but without push or PR delivery. | `docs/spec.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go` |
 
 ## Alignment gate
 For each requirement touched by a change, evidence must be captured for:

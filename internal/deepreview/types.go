@@ -71,6 +71,8 @@ type DeliveryResult struct {
 	PushedRefspec    string
 	PRURL            string
 	CommitsURL       string
+	Skipped          bool
+	SkipReason       string
 	Incomplete       bool
 	IncompleteReason string
 }

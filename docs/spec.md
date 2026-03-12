@@ -56,7 +56,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
 - final delivery push is allowed only after round execution completes and no blocking verification failures are reported.
-- PR mode has exactly three terminal outcomes: success with complete PR, success with incomplete draft PR, or failure.
+- PR mode has exactly four terminal outcomes: success with complete PR, success with incomplete draft PR, success with no deliverable repository changes (no push/PR), or failure.
 - before delivery, deepreview must run repository quality gates and block delivery on failures:
   - run `pre-commit run --all-files` when `.pre-commit-config.yaml` exists
   - run `./setup_env.sh` when `setup_env.sh` exists
@@ -112,6 +112,7 @@ Helper command behavior:
   - `status`: valid round-status object
 - A round counts as completed for final reporting only when `round.json` exists and parses successfully.
 - Invalid or missing `round.json` means the round did not complete successfully for reporting purposes.
+- Incomplete-draft recovery and final reporting must derive completed-round counts and latest-decision claims only from valid `round.json` records; if no valid round records exist, report zero completed rounds and omit latest-decision claims.
 
 ## Round status artifact contract
 - Canonical status file path: `~/deepreview/runs/<run-id>/round-<round>/round-status.json`
