@@ -206,7 +206,7 @@ func handlePrompt(prompt string) (string, error) {
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_BINARY_SECRET_PATTERN_CHANGE")) != "" {
 				changePath = filepath.Join(".", "secret.bin")
-				changeContent = "prefix\x00SECRETTOKEN123\x00suffix"
+				changeContent = "prefix\x00" + "AKIA" + "ABCDEFGHIJKLMNOP" + "\x00suffix"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
 				changePath = filepath.Join(".", "docs", "generated.md")
