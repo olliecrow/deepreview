@@ -111,16 +111,38 @@ func TestInferRepoAndBranchRejectsWhenRemoteAdvancedWithoutLocalFetch(t *testing
 	runGitCommand(t, otherClone, "add", "README.md")
 	runGitCommand(t, otherClone, "commit", "-m", "remote advance")
 	runGitCommand(t, otherClone, "push", "origin", "feature/test")
+	staleRemoteSHA := strings.TrimSpace(runGitCommand(t, repo, "rev-parse", "refs/remotes/origin/feature/test"))
+	fetchHeadPath := filepath.Join(repo, ".git", "FETCH_HEAD")
+	beforeFetchHead, err := os.ReadFile(fetchHeadPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
 
 	withWorkingDir(t, repo, func() {
 		_, _, err := inferRepoAndBranch("git", "", "")
 		if err == nil {
-			t.Fatalf("expected stale local tracking ref to be detected after refresh")
+			t.Fatalf("expected stale local tracking ref to be detected without refreshing local refs")
 		}
 		if !strings.Contains(err.Error(), "not synchronized") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
+
+	afterRemoteSHA := strings.TrimSpace(runGitCommand(t, repo, "rev-parse", "refs/remotes/origin/feature/test"))
+	if afterRemoteSHA != staleRemoteSHA {
+		t.Fatalf("expected caller repo remote-tracking ref to remain unchanged, before=%s after=%s", staleRemoteSHA, afterRemoteSHA)
+	}
+	afterFetchHead, err := os.ReadFile(fetchHeadPath)
+	if os.IsNotExist(err) {
+		afterFetchHead = nil
+		err = nil
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(afterFetchHead) != string(beforeFetchHead) {
+		t.Fatalf("expected FETCH_HEAD to remain unchanged")
+	}
 }
 
 func TestInferRepoAndBranchExplicitSourceBranchRejectsTrackedUncommittedChanges(t *testing.T) {

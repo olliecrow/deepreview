@@ -681,11 +681,11 @@ Write privacy remediation status inside the remediation worktree, then persist i
 Context:
 Codex privacy-remediation workers execute under a write sandbox limited to the remediation worktree. Writing `privacy-status.json` directly into the run artifact directory can fail even when remediation itself succeeds.
 Rationale:
-Keeping the worker-written status file inside the worktree matches the worker sandbox while still preserving the status artifact under the run directory for diagnostics and tests.
+Keeping the worker-written status file inside the worktree matches the worker sandbox while still preserving the status artifact under the run directory for diagnostics and tests. The worktree path must also remain reserved deepreview space so repo-owned `.tmp/` content cannot accidentally deliver worker status files.
 Trade-offs:
-This adds one post-run copy step for the status artifact. If artifact persistence fails after a valid worker write, the attempt now fails explicitly instead of silently degrading diagnostics.
+This adds one post-run copy step for the status artifact and reserves `.tmp/deepreview/` from repository delivery even when a repo tracks `.tmp/`.
 Enforcement:
-Privacy remediation prompts receive a worktree-local `OUTPUT_STATUS_PATH`; orchestrator copies the resulting JSON into the attempt artifact directory before consuming it, and integration coverage requires the worker path to stay within the remediation worktree.
+Privacy remediation prompts receive a worktree-local `OUTPUT_STATUS_PATH`; orchestrator copies the resulting JSON into the attempt artifact directory before consuming it; `.tmp/deepreview/` is treated as internal deepreview artifact space for excludes and delivery validation; and integration coverage requires the worker path to stay within the remediation worktree without becoming deliverable.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`
 
@@ -707,11 +707,11 @@ When source branch is inferred, require local branch readiness: no tracked local
 Context:
 deepreview reviews remote branch state; inferred local context should match the remote state to avoid reviewing stale or partial work.
 Rationale:
-Failing fast on unsynced local context prevents accidental reviews of outdated remote state, but the comparison is only trustworthy after refreshing the tracked upstream ref.
+Failing fast on unsynced local context prevents accidental reviews of outdated remote state, but helper commands and local argument resolution must remain non-mutating in the caller repo. The readiness check therefore compares local HEAD against a read-only remote query instead of fetching into the operator checkout.
 Trade-offs:
-Adds strict pre-run checks that may require operator prep (`commit/push/pull`) before review can start.
+Adds strict pre-run checks that may require operator prep (`commit/push/pull`) before review can start, and may omit ahead/behind counts when the remote commit is not already present locally.
 Enforcement:
-Inference path validates tracked-working-tree cleanliness and local/upstream SHA equality after refreshing the tracked upstream ref before run start.
+Inference path validates tracked-working-tree cleanliness and local/remote SHA equality via a read-only remote query before run start, without updating caller-repo remote-tracking refs.
 References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `README.md`
 

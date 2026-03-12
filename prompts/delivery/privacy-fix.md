@@ -5,6 +5,7 @@ You are in the deepreview pre-delivery privacy remediation stage.
 - Work in a fresh Codex context for this attempt.
 - You may edit repository files and create local commits in the managed repo to remediate privacy issues.
 - Do not push, do not open/edit PRs, and do not modify `.deepreview` operational artifacts.
+- Do not stage or commit the required status output under `.tmp/deepreview/...`; it is an internal deepreview artifact, not a repository change.
 
 ## Inputs
 - Repository: `{{REPO_SLUG}}`
