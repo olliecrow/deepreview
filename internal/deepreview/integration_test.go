@@ -104,6 +104,28 @@ func waitForPath(t *testing.T, path string, timeout time.Duration) {
 	t.Fatalf("timed out waiting for path %s", path)
 }
 
+func waitForNoWorktreeDirs(t *testing.T, root string, timeout time.Duration) {
+	t.Helper()
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for time.Now().Before(deadline) {
+		lastErr = filepath.WalkDir(root, func(path string, d os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if d.IsDir() && filepath.Base(path) == "worktree" {
+				return NewDeepReviewError("unexpected leftover worktree: %s", path)
+			}
+			return nil
+		})
+		if lastErr == nil {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+	t.Fatalf("expected worktree cleanup after interrupt: %v", lastErr)
+}
+
 func runCmdWithInterrupt(t *testing.T, cwd string, env []string, interruptAfter time.Duration, cmd ...string) (stdout string, stderr string, exitCode int) {
 	t.Helper()
 	c := exec.Command(cmd[0], cmd[1:]...)
@@ -732,18 +754,7 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	if len(runsGlob) != 1 {
 		t.Fatalf("expected one run directory, got %d", len(runsGlob))
 	}
-	err = filepath.WalkDir(runsGlob[0], func(path string, d os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if d.IsDir() && filepath.Base(path) == "worktree" {
-			return NewDeepReviewError("unexpected leftover worktree: %s", path)
-		}
-		return nil
-	})
-	if err != nil {
-		t.Fatalf("expected worktree cleanup after interrupt: %v", err)
-	}
+	waitForNoWorktreeDirs(t, runsGlob[0], 5*time.Second)
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")

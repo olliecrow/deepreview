@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -12,11 +13,27 @@ import (
 	"time"
 )
 
+const envRequireMulticodex = "DEEPREVIEW_REQUIRE_MULTICODEX"
+
 type CodexRunner struct {
 	CodexBin   string
 	CodexModel string
 	Reasoning  string
 	Timeout    time.Duration
+}
+
+type codexLauncher struct {
+	Command string
+	Args    []string
+	Display string
+}
+
+func (l codexLauncher) withArgs(args ...string) []string {
+	command := make([]string, 0, 1+len(l.Args)+len(args))
+	command = append(command, l.Command)
+	command = append(command, l.Args...)
+	command = append(command, args...)
+	return command
 }
 
 type CodexRunHooks struct {
@@ -26,9 +43,13 @@ type CodexRunHooks struct {
 }
 
 func (c *CodexRunner) buildCommand(threadID *string) []string {
+	return c.buildCommandWithLauncher(codexLauncher{Command: c.CodexBin, Display: "codex"}, threadID)
+}
+
+func (c *CodexRunner) buildCommandWithLauncher(launcher codexLauncher, threadID *string) []string {
 	// Hard-pin model and reasoning for every Codex invocation.
 	reasoningConfig := fmt.Sprintf("model_reasoning_effort=%q", forcedCodexReasoningEffort)
-	command := []string{c.CodexBin, "exec"}
+	command := launcher.withArgs("exec")
 	if threadID != nil && *threadID != "" {
 		command = append(command, "resume", *threadID)
 	}
@@ -40,6 +61,74 @@ func (c *CodexRunner) buildCommand(threadID *string) []string {
 		"--full-auto", "--json", "-",
 	)
 	return command
+}
+
+func (c *CodexRunner) shouldPreferMulticodex() bool {
+	if requireMulticodex() {
+		return true
+	}
+	return strings.TrimSpace(c.CodexBin) == "" || strings.TrimSpace(c.CodexBin) == "codex"
+}
+
+func (c *CodexRunner) resolveLauncher(parentCtx context.Context) (codexLauncher, error) {
+	if c.shouldPreferMulticodex() {
+		if shellLauncher, ok := resolveShellMulticodex(parentCtx); ok {
+			return shellLauncher, nil
+		}
+		if multicodexPath, err := exec.LookPath("multicodex"); err == nil {
+			return codexLauncher{Command: multicodexPath, Display: "multicodex"}, nil
+		}
+		if requireMulticodex() {
+			return codexLauncher{}, NewDeepReviewError("%s is set but multicodex is not available from the current shell or PATH", envRequireMulticodex)
+		}
+	}
+
+	codexBin := strings.TrimSpace(c.CodexBin)
+	if codexBin == "" {
+		codexBin = "codex"
+	}
+	codexPath, err := exec.LookPath(codexBin)
+	if err != nil {
+		return codexLauncher{}, NewDeepReviewError("resolve codex executable: %v", err)
+	}
+	return codexLauncher{Command: codexPath, Display: "codex"}, nil
+}
+
+func resolveShellMulticodex(parentCtx context.Context) (codexLauncher, bool) {
+	shell := strings.TrimSpace(os.Getenv("SHELL"))
+	if shell == "" {
+		return codexLauncher{}, false
+	}
+	if !supportsShellWrappedMulticodex(shell) {
+		return codexLauncher{}, false
+	}
+	checkCmd := exec.CommandContext(parentCtx, shell, "-ic", "command -v multicodex >/dev/null 2>&1")
+	if err := checkCmd.Run(); err != nil {
+		return codexLauncher{}, false
+	}
+	return codexLauncher{
+		Command: shell,
+		Args:    []string{"-ic", `multicodex "$@"`, "multicodex"},
+		Display: "multicodex",
+	}, true
+}
+
+func supportsShellWrappedMulticodex(shell string) bool {
+	switch filepath.Base(strings.TrimSpace(shell)) {
+	case "sh", "bash", "zsh", "ksh", "dash":
+		return true
+	default:
+		return false
+	}
+}
+
+func requireMulticodex() bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(envRequireMulticodex))) {
+	case "1", "true", "yes", "on":
+		return true
+	default:
+		return false
+	}
 }
 
 func (c *CodexRunner) buildEnvironment(cwd string) ([]string, error) {
@@ -107,7 +196,15 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 	if strings.TrimSpace(c.CodexBin) == "" {
 		return CodexRunResult{}, NewDeepReviewError("codex binary must be configured")
 	}
-	command := c.buildCommand(threadID)
+	parentCtx := context.Background()
+	if hooks != nil && hooks.Context != nil {
+		parentCtx = hooks.Context
+	}
+	launcher, err := c.resolveLauncher(parentCtx)
+	if err != nil {
+		return CodexRunResult{}, err
+	}
+	command := c.buildCommandWithLauncher(launcher, threadID)
 	commandEnv, err := c.buildEnvironment(cwd)
 	if err != nil {
 		return CodexRunResult{}, err
@@ -160,10 +257,6 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 				hooks.OnStderrChunk(chunk)
 			}
 		},
-	}
-	parentCtx := context.Background()
-	if hooks != nil && hooks.Context != nil {
-		parentCtx = hooks.Context
 	}
 	completed, err := RunCommandContextWithEnvAndCallbacks(parentCtx, command, cwd, commandEnv, prompt, true, c.Timeout, streamCallbacks)
 	if err != nil {

@@ -484,6 +484,9 @@ func (o *Orchestrator) preflight() error {
 			return NewDeepReviewError("required tool not found in PATH: %s", tool)
 		}
 	}
+	if _, err := o.codexRunner.resolveLauncher(currentRunCommandContext()); err != nil {
+		return err
+	}
 	queuePath := filepath.Join(o.promptsRoot, "execute", "queue.txt")
 	queue, err := ReadQueue(queuePath)
 	if err != nil {
