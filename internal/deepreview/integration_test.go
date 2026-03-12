@@ -951,7 +951,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 		"FAKE_CODEX_STALL_ONCE_MS_WORKER_2=15000",
 	)
 
-	output := runCmd(t, root, env,
+	output, logs := runCmdCapture(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -964,8 +964,8 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
 		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
 	}
-	if !strings.Contains(output, "worker-02 inactive for") {
-		t.Fatalf("expected worker-02 inactivity restart evidence in logs, got:\n%s", output)
+	if !strings.Contains(logs, "worker-02 inactive for") {
+		t.Fatalf("expected worker-02 inactivity restart evidence in logs, got:\n%s", logs)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -1277,7 +1277,7 @@ func TestEndToEndPRModeCompletesWhenNoChangesEvenIfStatusSaysContinue(t *testing
 		"FAKE_CODEX_STALL_ONCE_CONTAINS=prompt 2 of 3",
 		"FAKE_CODEX_STALL_ONCE_MS_MATCH=15000",
 	)
-	output := runCmd(t, root, env,
+	output, logs := runCmdCapture(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1290,8 +1290,8 @@ func TestEndToEndPRModeCompletesWhenNoChangesEvenIfStatusSaysContinue(t *testing
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
 		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
 	}
-	if !strings.Contains(output, "execute / execute and verify inactive for") {
-		t.Fatalf("expected execute inactivity restart evidence in logs, got:\n%s", output)
+	if !strings.Contains(logs, "execute / execute and verify inactive for") {
+		t.Fatalf("expected execute inactivity restart evidence in logs, got:\n%s", logs)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
@@ -1622,8 +1622,8 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_ADD_REPO_TMP_FILE=1",
-		"FAKE_CODEX_FORCE_ADD_OPERATIONAL_TMP=1",
 		"FAKE_CODEX_DECISION=continue",
+		"FAKE_CODEX_WRITE_INVALID_ROUND_STATUS=1",
 	)
 	output := runCmd(t, root, env,
 		bin,
