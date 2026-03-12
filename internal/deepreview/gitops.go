@@ -456,6 +456,65 @@ func DiffIsBinaryBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string)
 	return false, nil
 }
 
+func FileContentAtRef(repoPath, gitBin, ref, relPath string) ([]byte, error) {
+	completed, err := RunCommand(
+		[]string{gitBin, "-C", repoPath, "show", ref + ":" + relPath},
+		"",
+		"",
+		false,
+		0,
+	)
+	if err != nil {
+		return nil, err
+	}
+	if completed.ReturnCode != 0 {
+		return nil, NewDeepReviewError("unable to read %s at %s", relPath, ref)
+	}
+	return []byte(completed.Stdout), nil
+}
+
+func AddedBinaryContentBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) ([]byte, error) {
+	status, err := ChangedFileStatusBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath)
+	if err != nil {
+		return nil, err
+	}
+	switch status {
+	case "A":
+		return FileContentAtRef(repoPath, gitBin, headRef, relPath)
+	case "M":
+		baseContent, err := FileContentAtRef(repoPath, gitBin, baseRef, relPath)
+		if err != nil {
+			return nil, err
+		}
+		headContent, err := FileContentAtRef(repoPath, gitBin, headRef, relPath)
+		if err != nil {
+			return nil, err
+		}
+		return changedHeadWindow(baseContent, headContent), nil
+	default:
+		return nil, nil
+	}
+}
+
+func changedHeadWindow(baseContent, headContent []byte) []byte {
+	prefix := 0
+	for prefix < len(baseContent) && prefix < len(headContent) && baseContent[prefix] == headContent[prefix] {
+		prefix++
+	}
+
+	baseEnd := len(baseContent)
+	headEnd := len(headContent)
+	for baseEnd > prefix && headEnd > prefix && baseContent[baseEnd-1] == headContent[headEnd-1] {
+		baseEnd--
+		headEnd--
+	}
+
+	// Binary diffs do not expose textual added lines; trimming shared prefix and
+	// suffix keeps modified-file scans focused on the newly edited head-side
+	// window instead of re-scanning untouched bytes from the whole file.
+	return headContent[prefix:headEnd]
+}
+
 func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) ([]string, error) {
 	out, err := Git(
 		repoPath,

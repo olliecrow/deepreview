@@ -2351,8 +2351,11 @@ func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error
 		if err != nil || !isBinaryDiff {
 			continue
 		}
-		content, err := os.ReadFile(filepath.Join(repoPath, filepath.FromSlash(rel)))
+		content, err := AddedBinaryContentBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
 		if err != nil {
+			continue
+		}
+		if len(content) == 0 {
 			continue
 		}
 		if err := privacyScanText(string(content), rel); err != nil {

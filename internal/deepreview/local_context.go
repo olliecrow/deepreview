@@ -6,6 +6,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type LocalGitHubRepoState struct {
@@ -19,6 +20,7 @@ type LocalGitHubRepoState struct {
 const deepreviewCallerCWDEnv = "DEEPREVIEW_CALLER_CWD"
 
 var detectDeepreviewSourceRoot = defaultDeepreviewSourceRoot
+var branchReadinessRemoteTimeout = 30 * time.Second
 
 func defaultDeepreviewSourceRoot() (string, bool) {
 	_, thisFile, _, ok := runtime.Caller(0)
@@ -192,6 +194,17 @@ func ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, explic
 	return ensureBranchReadyForRemoteReview(gitBin, stateForBranch, branch)
 }
 
+func validateLocalBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch string) error {
+	cwdState, err := detectGitHubRepoState(gitBin, ".")
+	if err != nil {
+		return err
+	}
+	cwdState = resolveImplicitRepoState(gitBin, cwdState)
+	// Keep repo/branch inference shared across commands, but only review runs
+	// should fail on local-current-branch readiness problems.
+	return ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch, cwdState)
+}
+
 func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState, branch string) error {
 	if state == nil {
 		return NewDeepReviewError("unable to validate local branch readiness: no local repository context")
@@ -248,10 +261,10 @@ func remoteRefSHA(gitBin, repoPath, upstreamRef string) (string, error) {
 		"",
 		"",
 		false,
-		0,
+		branchReadinessRemoteTimeout,
 	)
 	if err != nil {
-		return "", err
+		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check: %s", upstreamRef, err.Error())
 	}
 	if remoteResult.ReturnCode != 0 {
 		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check", upstreamRef)
@@ -329,9 +342,6 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 	}
 
 	if strings.TrimSpace(sourceBranch) != "" {
-		if err := ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch, cwdState); err != nil {
-			return "", "", err
-		}
 		return resolvedRepo, sourceBranch, nil
 	}
 
@@ -350,9 +360,6 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 
 	inferredBranch, err := inferSourceBranchFromState(stateForBranch)
 	if err != nil {
-		return "", "", err
-	}
-	if err := ensureBranchReadyForRemoteReview(gitBin, stateForBranch, inferredBranch); err != nil {
 		return "", "", err
 	}
 	return resolvedRepo, inferredBranch, nil
