@@ -124,7 +124,7 @@ func TestCodexRunnerResolveLauncherPrefersShellResolvedMulticodex(t *testing.T) 
 	if got.Command != filepath.Join(fakeBin, "zsh") {
 		t.Fatalf("expected fake shell launcher command, got %q", got.Command)
 	}
-	if !reflect.DeepEqual(got.Args, []string{"-ic", `multicodex "$@"`, "multicodex"}) {
+	if !reflect.DeepEqual(got.Args, []string{"-ic", `unsetopt monitor; multicodex "$@"`, "multicodex"}) {
 		t.Fatalf("unexpected shell launcher args: %#v", got.Args)
 	}
 }
@@ -250,6 +250,10 @@ if [ "$script" = "command -v multicodex >/dev/null 2>&1" ]; then
     exit 0
   fi
   exit 1
+fi
+if [ "$script" = "unsetopt monitor; multicodex \"$@\"" ]; then
+  shift 3
+  exec multicodex "$@"
 fi
 if [ "${FAKE_SHELL_HAS_MULTICODEX:-0}" != "1" ]; then
   exit 127
