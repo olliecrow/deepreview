@@ -1617,16 +1617,6 @@ func ensureCanonicalArtifact(canonicalPath string, candidates []string) error {
 	return os.ErrNotExist
 }
 
-func requireArtifact(path, description string) error {
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return NewDeepReviewError("%s missing: %s", description, path)
-		}
-		return err
-	}
-	return nil
-}
-
 func writeRoundRecord(path string, record RoundRecord) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
