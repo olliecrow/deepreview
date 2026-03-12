@@ -339,10 +339,9 @@ func (o *Orchestrator) Run() (retErr error) {
 	)
 
 	roundSummaries = make([]string, 0)
-	effectiveMaxRounds := o.config.MaxRounds
-	autoAuditRoundScheduled := false
+	consecutiveStopDecisions := 0
 
-	for round := 1; round <= effectiveMaxRounds; round++ {
+	for round := 1; round <= o.config.MaxRounds; round++ {
 		roundDir := filepath.Join(o.runRoot, fmt.Sprintf("round-%02d", round))
 		if err := os.MkdirAll(roundDir, 0o755); err != nil {
 			return err
@@ -358,7 +357,6 @@ func (o *Orchestrator) Run() (retErr error) {
 			return err
 		}
 
-		auditOnly := autoAuditRoundScheduled && round == effectiveMaxRounds
 		status, summaryPath, err := o.runExecuteStage(
 			round,
 			roundDir,
@@ -366,8 +364,7 @@ func (o *Orchestrator) Run() (retErr error) {
 			candidateHeadBefore,
 			defaultBranch,
 			reviewReports,
-			effectiveMaxRounds,
-			auditOnly,
+			o.config.MaxRounds,
 		)
 		if err != nil {
 			return err
@@ -379,59 +376,28 @@ func (o *Orchestrator) Run() (retErr error) {
 			return err
 		}
 
-		if auditOnly {
-			if candidateHeadAfter != candidateHeadBefore {
-				return NewDeepReviewError(
-					"automatic final audit round %d moved candidate branch HEAD; audit rounds must remain read-only",
-					round,
-				)
-			}
-			if status.Decision == "continue" {
-				return NewDeepReviewError(
-					"automatic final audit round %d identified additional work (`continue`); rerun deepreview with a higher --max-rounds to allow another execute round",
-					round,
-				)
-			}
-			o.reporter.StageProgress(
-				"execute stage",
-				"automatic final audit round completed without repository changes; proceeding to delivery",
-				roundPtr(round),
-			)
-			break
-		}
-
 		roundChangedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, candidateHeadBefore, candidateHeadAfter)
 		if err != nil {
 			return err
 		}
 		changed := len(roundChangedFiles) > 0
-
-		if changed {
-			o.reporter.StageProgress(
-				"execute stage",
-				fmt.Sprintf("round produced %d repository change(s); scheduling next review round", len(roundChangedFiles)),
-				roundPtr(round),
-			)
-			if round >= effectiveMaxRounds {
-				effectiveMaxRounds = round + 1
-				autoAuditRoundScheduled = true
-				if reporterWithMaxRounds, ok := o.reporter.(MaxRoundsAwareProgressReporter); ok {
-					reporterWithMaxRounds.SetMaxRounds(effectiveMaxRounds)
-				}
-				o.reporter.StageProgress(
-					"execute stage",
-					fmt.Sprintf(
-						"round reached configured max with repository changes; scheduling automatic final audit round %d/%d",
-						effectiveMaxRounds,
-						effectiveMaxRounds,
-					),
-					roundPtr(round),
-				)
-			}
-			continue
+		control := evaluateRoundLoopControl(consecutiveStopDecisions, status, changed, len(roundChangedFiles))
+		consecutiveStopDecisions = control.nextStopStreak
+		if !control.shouldContinue {
+			o.reporter.StageProgress("execute stage", control.message, roundPtr(round))
+			break
 		}
-		o.reporter.StageProgress("execute stage", "round produced no repository changes; stopping additional rounds", roundPtr(round))
-		break
+		if round >= o.config.MaxRounds {
+			return NewDeepReviewError(
+				"round %d/%d requires another review round (decision `%s`, consecutive stop decisions `%d`, repository changes `%d`); rerun deepreview with a higher --max-rounds",
+				round,
+				o.config.MaxRounds,
+				status.Decision,
+				consecutiveStopDecisions,
+				len(roundChangedFiles),
+			)
+		}
+		o.reporter.StageProgress("execute stage", control.message, roundPtr(round))
 	}
 
 	if len(roundSummaries) == 0 {
@@ -444,6 +410,13 @@ func (o *Orchestrator) Run() (retErr error) {
 	if err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 		return err
+	}
+	if o.config.Mode == ModePR {
+		changedFiles, err = o.runPRPreparation(candidateBranch, changedFiles)
+		if err != nil {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+			return err
+		}
 	}
 	if len(changedFiles) == 0 {
 		delivery := DeliveryResult{
@@ -482,11 +455,6 @@ func (o *Orchestrator) Run() (retErr error) {
 			return nil
 		}
 	}
-	if err := o.runDeliveryQualityChecks(candidateBranch); err != nil {
-		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		return err
-	}
-
 	delivery, err := o.deliver(defaultBranch, candidateBranch, roundSummaries, changedFiles)
 	if err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
@@ -534,6 +502,10 @@ func (o *Orchestrator) preflight() error {
 		deliveryTemplate := filepath.Join(o.promptsRoot, "delivery", "pr-description-summary.md")
 		if _, err := os.Stat(deliveryTemplate); err != nil {
 			return NewDeepReviewError("delivery prompt template missing: %s", deliveryTemplate)
+		}
+		prepTemplate := filepath.Join(o.promptsRoot, "delivery", "pr-prepare.md")
+		if _, err := os.Stat(prepTemplate); err != nil {
+			return NewDeepReviewError("delivery prompt template missing: %s", prepTemplate)
 		}
 		privacyTemplate := filepath.Join(o.promptsRoot, "delivery", "privacy-fix.md")
 		if _, err := os.Stat(privacyTemplate); err != nil {
@@ -691,6 +663,58 @@ func (o *Orchestrator) verifyYoloDefaultBranchPushAllowed(candidateBranch, defau
 func roundPtr(round int) *int {
 	v := round
 	return &v
+}
+
+type roundLoopControl struct {
+	nextStopStreak int
+	shouldContinue bool
+	message        string
+}
+
+func evaluateRoundLoopControl(previousStopStreak int, status RoundStatus, changed bool, changedCount int) roundLoopControl {
+	if status.Decision == "continue" {
+		message := "codex requested another round; continuing review loop"
+		if changed {
+			message = fmt.Sprintf(
+				"codex requested another round and execute produced %d repository change(s); continuing review loop",
+				changedCount,
+			)
+		}
+		return roundLoopControl{
+			nextStopStreak: 0,
+			shouldContinue: true,
+			message:        message,
+		}
+	}
+
+	stopStreak := previousStopStreak + 1
+	if stopStreak >= 2 {
+		message := "codex produced a second consecutive stop decision; stopping round loop"
+		if changed {
+			message = fmt.Sprintf(
+				"codex produced a second consecutive stop decision; stopping round loop despite %d repository change(s) in this round",
+				changedCount,
+			)
+		}
+		return roundLoopControl{
+			nextStopStreak: stopStreak,
+			shouldContinue: false,
+			message:        message,
+		}
+	}
+
+	message := "codex produced the first stop decision; running one confirmation round"
+	if changed {
+		message = fmt.Sprintf(
+			"codex produced the first stop decision, but execute also produced %d repository change(s); running one confirmation round",
+			changedCount,
+		)
+	}
+	return roundLoopControl{
+		nextStopStreak: stopStreak,
+		shouldContinue: true,
+		message:        message,
+	}
 }
 
 type promptWatchdogPolicy struct {
@@ -1220,7 +1244,6 @@ func (o *Orchestrator) runExecuteStage(
 	roundDir, candidateBranch, candidateHead, defaultBranch string,
 	reviewReports []string,
 	maxRounds int,
-	auditOnly bool,
 ) (RoundStatus, string, error) {
 	o.reporter.StageStarted("execute stage", roundPtr(round), "running execute workflow (consolidate+plan, execute+verify, cleanup)")
 	executeDir := filepath.Join(roundDir, "execute")
@@ -1297,25 +1320,8 @@ func (o *Orchestrator) runExecuteStage(
 		reviewReportPathsBullet += "- " + p + "\n"
 	}
 	reviewReportPathsBullet = strings.TrimSpace(reviewReportPathsBullet)
-
 	roundModeNote := ""
 	roundExecuteModeOverride := ""
-	if auditOnly {
-		roundModeNote = strings.TrimSpace(`
-Mode note:
-- This is the automatic final audit round reserved after the last code-changing execute round.
-- Keep the same review bar as every other round.
-- Do not modify code, docs, configuration, or git state in this round.
-- Use the injected review summaries plus the on-disk review files to audit the candidate state and decide whether delivery is still appropriate.
-- If you find remaining critical/high issues that should block delivery, record them and set round status to continue in prompt 3.
-`)
-		roundExecuteModeOverride = strings.TrimSpace(`
-Audit-round override:
-- This prompt is audit-only. Do not edit files, do not create commits, and do not change git state.
-- Perform final verification and investigation only.
-- If you discover material remaining issues, record them in the verification artifact and leave prompt 3 to set round status to continue.
-`)
-	}
 
 	variables := map[string]string{
 		"REPO_SLUG":                   o.repoIdentity.Slug(),
@@ -1440,65 +1446,32 @@ Audit-round override:
 		return RoundStatus{}, "", err
 	}
 
-	var candidateHeadAfter string
-	if auditOnly {
-		changed, err := HasUncommittedChanges(executeWorktree, o.config.GitBin)
-		if err != nil {
+	changed, err := HasUncommittedChanges(executeWorktree, o.config.GitBin)
+	if err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+	if changed {
+		if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round), o.commitIdentity); err != nil {
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
 		}
-		if changed {
-			err := NewDeepReviewError(
-				"automatic final audit round %d left uncommitted changes in execute worktree; audit rounds must remain read-only: %s",
-				round,
-				executeWorktree,
-			)
-			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-			return RoundStatus{}, "", err
-		}
+	}
+	changed, err = HasUncommittedChanges(executeWorktree, o.config.GitBin)
+	if err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
+	if changed {
+		err := NewDeepReviewError("execute worktree has uncommitted changes after auto-commit: %s", executeWorktree)
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
+	}
 
-		candidateHeadAfter, err = RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
-		if err != nil {
-			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-			return RoundStatus{}, "", err
-		}
-		if candidateHeadAfter != candidateHead {
-			err := NewDeepReviewError(
-				"automatic final audit round %d moved candidate branch HEAD; audit rounds must remain read-only",
-				round,
-			)
-			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-			return RoundStatus{}, "", err
-		}
-	} else {
-		changed, err := HasUncommittedChanges(executeWorktree, o.config.GitBin)
-		if err != nil {
-			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-			return RoundStatus{}, "", err
-		}
-		if changed {
-			if err := CommitAllChanges(executeWorktree, o.config.GitBin, fmt.Sprintf("deepreview: round %02d execute updates", round), o.commitIdentity); err != nil {
-				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-				return RoundStatus{}, "", err
-			}
-		}
-
-		changed, err = HasUncommittedChanges(executeWorktree, o.config.GitBin)
-		if err != nil {
-			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-			return RoundStatus{}, "", err
-		}
-		if changed {
-			err := NewDeepReviewError("execute worktree has uncommitted changes after auto-commit: %s", executeWorktree)
-			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-			return RoundStatus{}, "", err
-		}
-
-		candidateHeadAfter, err = RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
-		if err != nil {
-			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-			return RoundStatus{}, "", err
-		}
+	candidateHeadAfter, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+		return RoundStatus{}, "", err
 	}
 	if err := o.validateNoManagedOperationalArtifactChanges(candidateHead, candidateHeadAfter); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
@@ -1829,15 +1802,11 @@ func (o *Orchestrator) evaluatePRPrivacyState(privacyWorktreePath, candidateBran
 	return updatedFiles, commitScanErr, fileScanErr, nil
 }
 
-func (o *Orchestrator) ensurePrivacyWorktreeClean(privacyWorktreePath string) error {
-	dirty, err := HasUncommittedChanges(privacyWorktreePath, o.config.GitBin)
-	if err != nil {
-		return err
-	}
-	if dirty {
-		return NewDeepReviewError("privacy remediation attempt left uncommitted worktree changes; commit remediation edits before reporting completion")
-	}
-	return nil
+func (o *Orchestrator) finalizePrivacyWorktreeAttempt(privacyWorktreePath string, attempt int) error {
+	return o.autoCommitWorktreeChangesIfNeeded(
+		privacyWorktreePath,
+		fmt.Sprintf("deepreview: privacy remediation attempt %02d", attempt),
+	)
 }
 
 func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles []string) ([]string, error) {
@@ -1862,7 +1831,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 			return nil, err
 		}
 		changedFiles = updatedFiles
-		worktreeErr := o.ensurePrivacyWorktreeClean(privacyWorktreePath)
+		worktreeErr := o.finalizePrivacyWorktreeAttempt(privacyWorktreePath, attempt)
 		if worktreeErr == nil && commitScanErr == nil && fileScanErr == nil {
 			o.reporter.StageProgress(
 				"delivery",
@@ -1935,18 +1904,9 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 			}
 		}
 
-		worktreeErr = o.ensurePrivacyWorktreeClean(privacyWorktreePath)
+		worktreeErr = o.finalizePrivacyWorktreeAttempt(privacyWorktreePath, attempt)
 		if worktreeErr != nil {
-			o.reporter.StageProgress(
-				"delivery",
-				fmt.Sprintf(
-					"privacy remediation attempt %d/%d left uncommitted worktree changes; continuing bounded remediation loop: %s",
-					attempt,
-					prPrivacyMaxAttempts,
-					progressMessage(worktreeErr),
-				),
-				nil,
-			)
+			return nil, worktreeErr
 		}
 
 		updatedFiles, commitScanErr, fileScanErr, err = o.evaluatePRPrivacyState(privacyWorktreePath, candidateBranch)
@@ -2529,103 +2489,123 @@ func replaceLocalPathsWithPlaceholder(text string) string {
 	return sanitized
 }
 
-func (o *Orchestrator) runDeliveryQualityChecks(candidateBranch string) error {
-	deliveryDir := filepath.Join(o.runRoot, "delivery")
-	if err := os.MkdirAll(deliveryDir, 0o755); err != nil {
+func (o *Orchestrator) autoCommitWorktreeChangesIfNeeded(repoPath, message string) error {
+	changed, err := HasUncommittedChanges(repoPath, o.config.GitBin)
+	if err != nil {
 		return err
 	}
+	if !changed {
+		return nil
+	}
+	if err := CommitAllChanges(repoPath, o.config.GitBin, message, o.commitIdentity); err != nil {
+		return err
+	}
+	changed, err = HasUncommittedChanges(repoPath, o.config.GitBin)
+	if err != nil {
+		return err
+	}
+	if changed {
+		return NewDeepReviewError("worktree still has uncommitted changes after auto-commit: %s", repoPath)
+	}
+	return nil
+}
 
+func (o *Orchestrator) runPRPreparation(candidateBranch string, changedFiles []string) ([]string, error) {
 	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 	if err != nil {
-		return err
+		return nil, err
 	}
-	qualityWorktreePath := filepath.Join(deliveryDir, "quality-worktree")
-	// Run quality gates in an isolated snapshot of the candidate tip so checks
-	// mirror the branch content that will be delivered.
-	if err := AddDetachedWorktree(o.managedRepoPath, o.config.GitBin, qualityWorktreePath, candidateHead); err != nil {
-		return err
+	prepWorktreePath := filepath.Join(o.runRoot, "delivery", "pr-prepare", "worktree")
+	if err := AddBranchWorktree(o.managedRepoPath, o.config.GitBin, prepWorktreePath, candidateBranch, candidateHead); err != nil {
+		return nil, err
 	}
 	defer func() {
-		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, qualityWorktreePath)
+		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, prepWorktreePath)
 	}()
-	if err := EnsureWorktreeOperationalExcludes(qualityWorktreePath, o.config.GitBin); err != nil {
-		return err
+	if err := EnsureWorktreeOperationalExcludes(prepWorktreePath, o.config.GitBin); err != nil {
+		return nil, err
 	}
 
-	if err := o.runPreCommitAllFilesIfConfigured(qualityWorktreePath); err != nil {
-		return err
+	templatePath := filepath.Join(o.promptsRoot, "delivery", "pr-prepare.md")
+	templateText, err := ReadTemplate(templatePath)
+	if err != nil {
+		return nil, err
 	}
-	if err := o.runSetupEnvIfPresent(qualityWorktreePath); err != nil {
-		return err
+	prepDir := filepath.Join(o.runRoot, "delivery", "pr-prepare")
+	if err := os.MkdirAll(prepDir, 0o755); err != nil {
+		return nil, err
 	}
-	return nil
-}
+	changedFilesValue := "none"
+	if len(changedFiles) > 0 {
+		items := make([]string, 0, len(changedFiles))
+		for _, file := range changedFiles {
+			items = append(items, "- `"+sanitizePublicText(strings.TrimSpace(file))+"`")
+		}
+		changedFilesValue = strings.Join(items, "\n")
+	}
 
-func (o *Orchestrator) runPreCommitAllFilesIfConfigured(repoPath string) error {
-	configPath := filepath.Join(repoPath, ".pre-commit-config.yaml")
-	st, err := os.Stat(configPath)
+	variables := map[string]string{
+		"REPO_SLUG":         o.repoIdentity.Slug(),
+		"SOURCE_BRANCH":     o.config.SourceBranch,
+		"CANDIDATE_BRANCH":  candidateBranch,
+		"RUN_ID":            o.config.RunID,
+		"MANAGED_REPO_PATH": ".",
+		"CHANGED_FILES":     changedFilesValue,
+	}
+	prompt, err := RenderTemplate(templateText, variables)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return nil, err
 	}
-	if st.IsDir() {
-		return nil
-	}
-	available, err := which("pre-commit")
-	if err != nil {
-		return err
-	}
-	if !available {
-		return NewDeepReviewError("delivery blocked: `.pre-commit-config.yaml` present but `pre-commit` not found in PATH")
-	}
-	o.reporter.StageProgress("delivery", "running pre-commit --all-files before delivery", nil)
-	completed, err := RunCommand([]string{"pre-commit", "run", "--all-files"}, repoPath, "", false, 0)
-	if err != nil {
-		return err
-	}
-	if completed.ReturnCode != 0 {
-		detail := strings.TrimSpace(firstNonEmptyLine(completed.Stderr))
-		if detail == "" {
-			detail = strings.TrimSpace(firstNonEmptyLine(completed.Stdout))
-		}
-		if detail != "" {
-			detail = ": " + trimForDisplay(sanitizePublicText(detail), 180)
-		}
-		return NewDeepReviewError("delivery blocked: pre-commit checks failed%s", detail)
-	}
-	return nil
-}
 
-func (o *Orchestrator) runSetupEnvIfPresent(repoPath string) error {
-	scriptPath := filepath.Join(repoPath, "setup_env.sh")
-	st, err := os.Stat(scriptPath)
+	logPrefix := filepath.Join(prepDir, "pr-prepare")
+	_, _, err = o.runPromptWithWatchdog(
+		currentRunCommandContext(),
+		monitoredPromptRequest{
+			label:        "delivery/pr-prepare",
+			cwd:          prepWorktreePath,
+			prompt:       prompt,
+			threadID:     nil,
+			logPrefix:    logPrefix,
+			useGitStatus: true,
+			monitoredPaths: []string{
+				logPrefix + ".stdout.jsonl",
+				logPrefix + ".stderr.log",
+			},
+		},
+		monitoredPromptCallbacks{
+			onHeartbeat: func(elapsed, silence time.Duration) {
+				message := fmt.Sprintf("running pr preparation before privacy remediation (elapsed %s)", elapsed.Round(time.Second))
+				policy := o.promptWatchdogPolicy()
+				if policy.inactivity > 0 {
+					remaining := policy.inactivity - silence
+					if remaining < 0 {
+						remaining = 0
+					}
+					message = fmt.Sprintf("%s | inactivity timeout in %s", message, remaining.Round(time.Second))
+				}
+				o.reporter.StageProgress("delivery", message, nil)
+			},
+			onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
+				o.reporter.StageProgress(
+					"delivery",
+					fmt.Sprintf(
+						"pr preparation stalled for %s; restarting codex worker attempt %d/%d",
+						inactivityErr.silence.Round(time.Second),
+						nextAttempt,
+						maxAttempts,
+					),
+					nil,
+				)
+			},
+		},
+	)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
+		return nil, err
 	}
-	if st.IsDir() {
-		return nil
+	if err := o.autoCommitWorktreeChangesIfNeeded(prepWorktreePath, "deepreview: prepare delivery branch"); err != nil {
+		return nil, err
 	}
-	o.reporter.StageProgress("delivery", "running repository CI gate `./setup_env.sh` before delivery", nil)
-	completed, err := RunCommand([]string{"/usr/bin/env", "bash", "./setup_env.sh"}, repoPath, "", false, 0)
-	if err != nil {
-		return err
-	}
-	if completed.ReturnCode != 0 {
-		detail := strings.TrimSpace(firstNonEmptyLine(completed.Stderr))
-		if detail == "" {
-			detail = strings.TrimSpace(firstNonEmptyLine(completed.Stdout))
-		}
-		if detail != "" {
-			detail = ": " + trimForDisplay(sanitizePublicText(detail), 180)
-		}
-		return NewDeepReviewError("delivery blocked: setup_env.sh failed%s", detail)
-	}
-	return nil
+	return o.validateDeliveryFiles(candidateBranch)
 }
 
 func (o *Orchestrator) deliveryCommitMessageScan(candidateBranch string) error {
@@ -2937,6 +2917,11 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 
 	o.reporter.StageStarted("delivery", nil, "publishing incomplete draft PR to preserve work")
 	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
+	if err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
+	}
+	changedFiles, err = o.runPRPreparation(candidateBranch, changedFiles)
 	if err != nil {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 		return false, err

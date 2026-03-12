@@ -212,10 +212,12 @@ What this command does:
   1) Clones/fetches a branch-scoped managed copy of the repository under ~/deepreview (or override env).
   2) Runs independent review workers in isolated worktrees.
   3) Runs three execute-stage prompts in one Codex thread: consolidate+plan, execute+verify, cleanup+summary+commit.
-  4) Repeats rounds up to max rounds while execute rounds produce repository changes.
-     Stops early when an execute round produces no repository changes.
+  4) Repeats rounds up to max rounds while another round is still required.
+     A `+"`continue`"+` decision always forces another round.
+     A first `+"`stop`"+` still forces one confirmation round.
+     A second consecutive `+"`stop`"+` ends the loop, even if that round also changed the repository.
   5) Delivers once at the end:
-     - mode=pr (default): pushes candidate branch + opens PR back into source branch
+     - mode=pr (default): optionally runs a Codex PR-preparation pass, then privacy remediation, then pushes candidate branch + opens PR back into source branch
      - mode=yolo: pushes directly to source branch
 
 Usage:
@@ -253,10 +255,11 @@ Optional flags:
     Higher means more parallel review coverage but more local load.
 
   --max-rounds <int>    (default: %d)
-    Maximum code-changing review/execute rounds before stopping.
-    If the last allowed execute round changes the repository, deepreview automatically
-    schedules one final audit round with the same review bar and no repository edits.
-    Process stops early when an execute round produces no repository changes.
+    Maximum review/execute rounds before stopping.
+    `+"`continue`"+` always requires another round.
+    A first consecutive `+"`stop`"+` still requires one confirmation round.
+    A second consecutive `+"`stop`"+` ends the loop, even if the second stop round also made repository changes.
+    If another round is still required at max rounds, deepreview fails and asks you to rerun with a higher limit.
 
   --mode <pr|yolo>      (default: %s)
     Delivery strategy:
@@ -882,11 +885,13 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 		fmt.Fprintln(out, "     3. cleanup, summary, commit")
 	}
 
-	fmt.Fprintln(out, "   - if execute changed repository files, run another review round")
-	fmt.Fprintln(out, "   - if execute made no repository changes, stop additional rounds")
+	fmt.Fprintln(out, "   - if round status is `continue`, run another review round")
+	fmt.Fprintln(out, "   - if round status is first consecutive `stop`, run one confirmation round")
+	fmt.Fprintln(out, "   - if round status is second consecutive `stop`, stop the round loop")
 	fmt.Fprintln(out, "5. delivery stage")
 	if cfg.Mode == ModePR {
 		fmt.Fprintln(out, "   - validate delivery files")
+		fmt.Fprintln(out, "   - run one Codex PR-preparation pass before privacy remediation")
 		fmt.Fprintln(out, "   - run bounded privacy remediation attempts (up to 3) before delivery")
 		fmt.Fprintln(out, "   - push candidate branch and open one pull request into source branch")
 	} else {

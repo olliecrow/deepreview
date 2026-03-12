@@ -326,7 +326,7 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		userClone,
 		"--source-branch", "feature/a",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "yolo",
 		"--no-tui",
 	)
@@ -339,7 +339,7 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		userClone,
 		"--source-branch", "feature/b",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "yolo",
 		"--no-tui",
 	)
@@ -635,7 +635,7 @@ func TestEndToEndPRModeFailsWhenPRURLMissing(t *testing.T) {
 		userClone,
 		"--source-branch", "feature/test",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
@@ -944,8 +944,8 @@ func TestEndToEndPRModePrivacyDirtyWorktreeDoesNotCountAsComplete(t *testing.T) 
 	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
 		t.Fatalf("expected PR creation after bounded attempts, got: %s", output)
 	}
-	if !strings.Contains(logs, "left uncommitted worktree changes; continuing bounded remediation loop") {
-		t.Fatalf("expected dirty worktree remediation to be rejected, got:\n%s", logs)
+	if strings.Contains(logs, "left uncommitted worktree changes; continuing bounded remediation loop") {
+		t.Fatalf("expected dirty worktree edits to be auto-committed, got:\n%s", logs)
 	}
 	if !strings.Contains(logs, "privacy fix gate reached max attempts (3); proceeding with delivery by policy") {
 		t.Fatalf("expected bounded max-attempt policy log, got:\n%s", logs)
@@ -1006,14 +1006,8 @@ func TestEndToEndPRModePrivacyDirtyBinaryRemediationDoesNotPassEarly(t *testing.
 	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
 		t.Fatalf("expected PR creation after bounded attempts, got: %s", output)
 	}
-	if !strings.Contains(logs, "left uncommitted worktree changes; continuing bounded remediation loop") {
-		t.Fatalf("expected dirty binary remediation to be rejected, got:\n%s", logs)
-	}
-	if strings.Contains(logs, "privacy fix gate passed on attempt 2/3") {
-		t.Fatalf("dirty binary remediation must not satisfy the top-of-loop pass condition, got:\n%s", logs)
-	}
-	if !strings.Contains(logs, "privacy fix gate reached max attempts (3); proceeding with delivery by policy") {
-		t.Fatalf("expected bounded max-attempt policy log, got:\n%s", logs)
+	if !strings.Contains(logs, "privacy fix gate passed after remediation on attempt 1/3") {
+		t.Fatalf("expected auto-committed binary remediation to pass immediately, got:\n%s", logs)
 	}
 }
 
@@ -1145,7 +1139,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 		userClone,
 		"--source-branch", "main",
 		"--concurrency", "2",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
@@ -1223,7 +1217,7 @@ func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
 		userClone,
 		"--source-branch", "main",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
@@ -1269,7 +1263,7 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		userClone,
 		"--source-branch", "main",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
@@ -1285,8 +1279,8 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
 	}
 	runDir := runsGlob[0]
-	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
-		t.Fatalf("expected no second round when only operational artifacts were produced")
+	if _, err := os.Stat(filepath.Join(runDir, "round-02", "round-summary.md")); err != nil {
+		t.Fatalf("expected confirmation round artifacts when first stop had no changes, got: %v", err)
 	}
 	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
 	if err != nil {
@@ -1343,7 +1337,7 @@ func TestEndToEndPRModeAllowsNewTrackedFilesUnderRepoOwnedOperationalPath(t *tes
 		userClone,
 		"--source-branch", "main",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
@@ -1508,7 +1502,70 @@ func TestRunFailsWhenExecuteForceCommitsNewOperationalArtifacts(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeCompletesWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) {
+func TestEndToEndPRModeFailsWhenNoChangesButCodexStillRequestsAnotherRound(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		"FAKE_CODEX_DECISION=continue",
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
+		"FAKE_CODEX_STALL_ONCE_CONTAINS=prompt 2 of 3",
+		"FAKE_CODEX_STALL_ONCE_MS_MATCH=15000",
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "requires another review round") {
+		t.Fatalf("expected max-round failure output, got: %s", output)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	if _, err := os.Stat(filepath.Join(runDir, "final-summary.md")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect final-summary.md after max-round failure")
+	}
+}
+
+func TestEndToEndPRModeCompletesAfterTwoConsecutiveStopDecisionsWithoutChanges(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1536,30 +1593,19 @@ func TestEndToEndPRModeCompletesWhenNoChangesEvenIfStatusSaysContinue(t *testing
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env,
-		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
-		"FAKE_CODEX_DECISION=continue",
-		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
-		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
-		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
-		"FAKE_CODEX_STALL_ONCE_CONTAINS=prompt 2 of 3",
-		"FAKE_CODEX_STALL_ONCE_MS_MATCH=15000",
-	)
-	output, logs := runCmdCapture(t, root, env,
+	env = append(env, "FAKE_CODEX_SKIP_CODE_CHANGE=1")
+	output := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
 		"--source-branch", "main",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
 		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
-	}
-	if !strings.Contains(logs, "execute / execute and verify inactive for") {
-		t.Fatalf("expected execute inactivity restart evidence in logs, got:\n%s", logs)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
@@ -1581,8 +1627,8 @@ func TestEndToEndPRModeCompletesWhenNoChangesEvenIfStatusSaysContinue(t *testing
 		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
 	}
 	runDir := runsGlob[0]
-	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
-		t.Fatalf("expected no second round when execute produced no changes")
+	if _, err := os.Stat(filepath.Join(runDir, "round-02", "round-summary.md")); err != nil {
+		t.Fatalf("expected confirmation round artifacts, got: %v", err)
 	}
 	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
 	if err != nil {
@@ -1636,7 +1682,7 @@ func TestEndToEndPRModeCompletesWhenPrivacyRemediationRemovesAllDeliverableChang
 		userClone,
 		"--source-branch", "main",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
@@ -1668,7 +1714,7 @@ func TestEndToEndPRModeCompletesWhenPrivacyRemediationRemovesAllDeliverableChang
 	}
 }
 
-func TestRunAutoSchedulesFinalAuditRoundWhenLastAllowedExecuteRoundChangesCode(t *testing.T) {
+func TestRunStopsAfterSecondStopEvenWhenSecondRoundStillChangesCode(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1704,13 +1750,14 @@ func TestRunAutoSchedulesFinalAuditRoundWhenLastAllowedExecuteRoundChangesCode(t
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_CHANGE_CONTENT_BY_ROUND=1")
 	out := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
 		"--source-branch", "feature/test",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "yolo",
 		"--no-tui",
 	)
@@ -1727,7 +1774,7 @@ func TestRunAutoSchedulesFinalAuditRoundWhenLastAllowedExecuteRoundChangesCode(t
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 	if before == after {
-		t.Fatalf("expected auto-audit run to complete delivery and update remote source branch")
+		t.Fatalf("expected second-stop flow to complete delivery and update remote source branch")
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -1739,18 +1786,82 @@ func TestRunAutoSchedulesFinalAuditRoundWhenLastAllowedExecuteRoundChangesCode(t
 	}
 	runDir := runsGlob[0]
 	if _, err := os.Stat(filepath.Join(runDir, "round-02", "round-summary.md")); err != nil {
-		t.Fatalf("expected automatic audit round artifacts, missing round-02 summary: %v", err)
+		t.Fatalf("expected second-round artifacts, missing round-02 summary: %v", err)
 	}
 	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
 	if err != nil {
 		t.Fatalf("missing final-summary.md: %v", err)
 	}
 	if !strings.Contains(string(finalSummaryBytes), "- rounds: `2`") {
-		t.Fatalf("expected final summary to record both execute and automatic audit rounds, got:\n%s", string(finalSummaryBytes))
+		t.Fatalf("expected final summary to record both execute rounds, got:\n%s", string(finalSummaryBytes))
 	}
 }
 
-func TestRunPRModePublishesIncompleteDraftPRAfterAuditContinue(t *testing.T) {
+func TestRunPRModeRunsPreparationBeforePrivacyAndDeliversPrepChanges(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		"FAKE_CODEX_PR_PREP_WRITE_FILE=1",
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected PR delivery output, got: %s", output)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	var deliveryRef string
+	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
+		ref = strings.TrimSpace(ref)
+		if strings.Contains(ref, "origin/deepreview/main/") {
+			deliveryRef = ref
+			break
+		}
+	}
+	if deliveryRef == "" {
+		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
+	}
+	tree := runCmd(t, td, nil, "git", "-C", userClone, "ls-tree", "-r", "--name-only", deliveryRef)
+	if !strings.Contains(tree, "pr-prepare.txt") {
+		t.Fatalf("expected pr preparation artifact to be delivered, ref=%s tree:\n%s", deliveryRef, tree)
+	}
+}
+
+func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1789,6 +1900,7 @@ func TestRunPRModePublishesIncompleteDraftPRAfterAuditContinue(t *testing.T) {
 	env = append(env,
 		"FAKE_CODEX_DECISION=continue",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+		"FAKE_CODEX_PR_PREP_WRITE_FILE=1",
 	)
 	output := runCmd(t, root, env,
 		bin,
@@ -1796,7 +1908,7 @@ func TestRunPRModePublishesIncompleteDraftPRAfterAuditContinue(t *testing.T) {
 		userClone,
 		"--source-branch", "feature/test",
 		"--concurrency", "1",
-		"--max-rounds", "1",
+		"--max-rounds", "2",
 		"--mode", "pr",
 		"--no-tui",
 	)
@@ -1842,6 +1954,25 @@ func TestRunPRModePublishesIncompleteDraftPRAfterAuditContinue(t *testing.T) {
 	if !strings.Contains(body, "latest decision: `continue`") {
 		t.Fatalf("expected latest continue status in pr body, got:\n%s", body)
 	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	var deliveryRef string
+	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
+		ref = strings.TrimSpace(ref)
+		if strings.Contains(ref, "origin/deepreview/feature/test/") {
+			deliveryRef = ref
+			break
+		}
+	}
+	if deliveryRef == "" {
+		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
+	}
+	tree := runCmd(t, td, nil, "git", "-C", userClone, "ls-tree", "-r", "--name-only", deliveryRef)
+	if !strings.Contains(tree, "pr-prepare.txt") {
+		t.Fatalf("expected incomplete draft delivery to include pr preparation changes, ref=%s tree:\n%s", deliveryRef, tree)
+	}
+
 	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
 	if err != nil {
 		t.Fatalf("missing final-summary.md: %v", err)
@@ -1947,133 +2078,5 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 	}
 	if strings.Contains(finalSummary, "round-01/round-status.json") {
 		t.Fatalf("did not expect round decision entry from missing round record, got:\n%s", finalSummary)
-	}
-}
-
-func TestRunAuditRoundFailsWhenCandidateHeadMovesWithoutTreeChanges(t *testing.T) {
-	root := repoRoot(t)
-	bin := buildBinary(t, root)
-	fakeCodex, fakeGH := buildFakeBinaries(t, root)
-
-	td := t.TempDir()
-	remote := filepath.Join(td, "remote.git")
-	seed := filepath.Join(td, "seed")
-	userClone := filepath.Join(td, "user")
-	workspace := filepath.Join(td, "workspace")
-
-	runCmd(t, td, nil, "git", "init", "--bare", remote)
-	runCmd(t, td, nil, "git", "clone", remote, seed)
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
-
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
-	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
-
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
-	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
-	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
-
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env, "FAKE_CODEX_AUDIT_ALLOW_EMPTY_COMMIT=1")
-	out := runCmdExpectFailure(t, root, env,
-		bin,
-		"review",
-		userClone,
-		"--source-branch", "feature/test",
-		"--concurrency", "1",
-		"--max-rounds", "1",
-		"--mode", "yolo",
-		"--no-tui",
-	)
-	if !strings.Contains(out, "automatic final audit round 2 moved candidate branch HEAD; audit rounds must remain read-only") {
-		t.Fatalf("expected audit round head-movement error, got: %s", out)
-	}
-
-	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
-	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
-	if before != after {
-		t.Fatalf("expected failed audit round to leave remote source branch unchanged")
-	}
-
-	managedRepo := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/test"))
-	logs := runCmd(t, td, nil, "git", "-C", managedRepo, "log", "--oneline", "--all", "-n", "10")
-	if !strings.Contains(logs, "audit empty commit") {
-		t.Fatalf("expected audit-only empty commit repro to move candidate history, got:\n%s", logs)
-	}
-}
-
-func TestRunAuditRoundFailsBeforeAutoCommitOnDirtyWorktree(t *testing.T) {
-	root := repoRoot(t)
-	bin := buildBinary(t, root)
-	fakeCodex, fakeGH := buildFakeBinaries(t, root)
-
-	td := t.TempDir()
-	remote := filepath.Join(td, "remote.git")
-	seed := filepath.Join(td, "seed")
-	userClone := filepath.Join(td, "user")
-	workspace := filepath.Join(td, "workspace")
-
-	runCmd(t, td, nil, "git", "init", "--bare", remote)
-	runCmd(t, td, nil, "git", "clone", remote, seed)
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
-
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
-	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
-
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
-	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
-	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
-
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env, "FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE=1")
-	out := runCmdExpectFailure(t, root, env,
-		bin,
-		"review",
-		userClone,
-		"--source-branch", "feature/test",
-		"--concurrency", "1",
-		"--max-rounds", "1",
-		"--mode", "yolo",
-		"--no-tui",
-	)
-	if !strings.Contains(out, "automatic final audit round 2 left uncommitted changes in execute worktree; audit rounds must remain read-only") {
-		t.Fatalf("expected audit round dirty-worktree error, got: %s", out)
-	}
-
-	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
-	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
-	if before != after {
-		t.Fatalf("expected failed audit round to leave remote source branch unchanged")
-	}
-
-	managedRepo := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/test"))
-	logs := runCmd(t, td, nil, "git", "-C", managedRepo, "log", "--oneline", "--all", "-n", "10")
-	if strings.Contains(logs, "deepreview: round 02 execute updates") {
-		t.Fatalf("expected dirty audit round to fail before deepreview auto-commit, got:\n%s", logs)
 	}
 }

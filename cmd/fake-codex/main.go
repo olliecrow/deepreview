@@ -80,6 +80,52 @@ func regexGet(pattern, prompt string) string {
 	return m[1]
 }
 
+func roundNumberFromPrompt(prompt string) int {
+	raw := regexGet("round `([0-9]+)`", prompt)
+	if raw == "" {
+		raw = regexGet("Round: `([0-9]+)` / max", prompt)
+	}
+	if raw == "" {
+		return 0
+	}
+	value, err := strconv.Atoi(raw)
+	if err != nil || value < 1 {
+		return 0
+	}
+	return value
+}
+
+func csvSequenceValue(raw string, index int) string {
+	if index < 1 {
+		return ""
+	}
+	parts := strings.Split(raw, ",")
+	if index > len(parts) {
+		return ""
+	}
+	return strings.TrimSpace(parts[index-1])
+}
+
+func csvContainsRound(raw string, round int) bool {
+	if round < 1 {
+		return false
+	}
+	for _, item := range strings.Split(raw, ",") {
+		item = strings.TrimSpace(item)
+		if item == "" {
+			continue
+		}
+		value, err := strconv.Atoi(item)
+		if err != nil {
+			continue
+		}
+		if value == round {
+			return true
+		}
+	}
+	return false
+}
+
 func runGit(args ...string) (string, error) {
 	cmd := exec.Command("git", args...)
 	out, err := cmd.CombinedOutput()
@@ -146,6 +192,7 @@ func handlePrompt(prompt string) (string, error) {
 	}
 
 	if strings.Contains(prompt, "prompt 2 of 3") {
+		roundNumber := roundNumberFromPrompt(prompt)
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
 		if err := requirePromptOutputWithinCWD(verification, "verification output path"); err != nil {
 			return "", err
@@ -195,9 +242,16 @@ func handlePrompt(prompt string) (string, error) {
 				}
 			}
 		}
-		if os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE") == "" && !auditOnly {
+		skipCodeChange := strings.TrimSpace(os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE")) != ""
+		if !skipCodeChange && roundNumber > 0 {
+			skipCodeChange = csvContainsRound(os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS"), roundNumber)
+		}
+		if !skipCodeChange && !auditOnly {
 			changeContent := "round change\n"
 			changePath := filepath.Join(".", "deepreview_test_round.txt")
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_CHANGE_CONTENT_BY_ROUND")) != "" && roundNumber > 0 {
+				changeContent = fmt.Sprintf("round %d change\n", roundNumber)
+			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE")) != "" {
 				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
 			}
@@ -227,6 +281,7 @@ func handlePrompt(prompt string) (string, error) {
 	}
 
 	if strings.Contains(prompt, "prompt 3 of 3") {
+		roundNumber := roundNumberFromPrompt(prompt)
 		summary := regexGet("Write round summary to `([^`]+)`", prompt)
 		if err := requirePromptOutputWithinCWD(summary, "summary output path"); err != nil {
 			return "", err
@@ -242,7 +297,10 @@ func handlePrompt(prompt string) (string, error) {
 			return "", err
 		}
 		if statusPath != "" {
-			decision := os.Getenv("FAKE_CODEX_DECISION")
+			decision := strings.TrimSpace(csvSequenceValue(os.Getenv("FAKE_CODEX_DECISION_SEQUENCE"), roundNumber))
+			if decision == "" {
+				decision = os.Getenv("FAKE_CODEX_DECISION")
+			}
 			if decision == "" {
 				decision = "stop"
 			}
@@ -259,6 +317,25 @@ func handlePrompt(prompt string) (string, error) {
 			}
 		}
 		return "finalize complete", nil
+	}
+
+	if strings.Contains(prompt, "pre-delivery PR preparation stage") {
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_WRITE_FILE")) != "" {
+			if err := writeText(filepath.Join(".", "pr-prepare.txt"), "prepared\n"); err != nil {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_DELETE_ROUND_FILE")) != "" {
+			if err := os.Remove(filepath.Join(".", "deepreview_test_round.txt")); err != nil && !os.IsNotExist(err) {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_STAGE_ALL")) != "" {
+			if err := gitCommitIfPossible("deepreview: prepare delivery branch"); err != nil {
+				return "", err
+			}
+		}
+		return "pr preparation complete", nil
 	}
 
 	if strings.Contains(prompt, "post-delivery PR description enhancement stage") {

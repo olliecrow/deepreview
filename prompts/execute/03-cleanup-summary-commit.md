@@ -42,7 +42,10 @@ Process:
 10. Ensure output artifacts are complete and consistent for orchestrator post-processing.
 11. Keep a high bar for additional follow-up work: if confidence is not high, prefer `stop` and document rationale.
 12. In summary output, explicitly call out complexity/size impact (reduced/neutral/increased) and why.
-13. Round-loop control is change-driven by repository diff after execute; this status decision is not the control signal.
+13. Round-loop control uses both your status decision and repository change detection:
+- `continue` always forces another round
+- a first consecutive `stop` still forces one confirmation round
+- a second consecutive `stop` ends the loop, even if that second stop round also made repository changes
 
 Rules:
 - Never push in this prompt.
