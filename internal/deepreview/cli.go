@@ -563,6 +563,14 @@ func runReviewCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
+	if err := validateLocalBranchReadyForRemoteReview(parsed.Config.GitBin, parsed.Config.Repo, parsed.Config.SourceBranch); err != nil {
+		if isInterruptError(err) || interruptCount.Load() > 0 {
+			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+			return 130
+		}
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
+		return 1
+	}
 
 	stdoutFD := int(os.Stdout.Fd())
 	stdinFD := int(os.Stdin.Fd())

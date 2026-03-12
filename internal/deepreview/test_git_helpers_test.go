@@ -4,7 +4,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 	"testing"
 )
 
@@ -37,25 +36,29 @@ func withWorkingDir(t *testing.T, dir string, fn func()) {
 func createSyncedGitHubLikeRepo(t *testing.T, branch string) string {
 	t.Helper()
 	td := t.TempDir()
+	remote := filepath.Join(td, "github.com", "example-org", "example-repo.git")
+	seed := filepath.Join(td, "seed")
 	repo := filepath.Join(td, "repo")
-	if err := os.MkdirAll(repo, 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(remote), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
-	runGitCommand(t, td, "init", repo)
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, seed)
+	runGitCommand(t, td, "-C", seed, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", branch)
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "README.md")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "seed")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", branch)
+
+	runGitCommand(t, td, "clone", remote, repo)
 	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
 	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
-	runGitCommand(t, td, "-C", repo, "checkout", "-b", branch)
-	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGitCommand(t, td, "-C", repo, "add", "README.md")
-	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
-	runGitCommand(t, td, "-C", repo, "remote", "add", "origin", "https://github.com/example-org/example-repo.git")
-
-	head := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
-	runGitCommand(t, td, "-C", repo, "update-ref", "refs/remotes/origin/"+branch, head)
-	runGitCommand(t, td, "-C", repo, "branch", "--set-upstream-to=origin/"+branch, branch)
+	runGitCommand(t, td, "-C", repo, "checkout", branch)
 	return repo
 }
 

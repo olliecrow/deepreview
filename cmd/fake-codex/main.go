@@ -204,6 +204,10 @@ func handlePrompt(prompt string) (string, error) {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE")) != "" {
 				changeContent = "key " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n"
 			}
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_BINARY_SECRET_PATTERN_CHANGE")) != "" {
+				changePath = filepath.Join(".", "secret.bin")
+				changeContent = "prefix\x00" + "AKIA" + "ABCDEFGHIJKLMNOP" + "\x00suffix"
+			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
 				changePath = filepath.Join(".", "docs", "generated.md")
 				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
@@ -277,6 +281,16 @@ func handlePrompt(prompt string) (string, error) {
 
 	if strings.Contains(prompt, "pre-delivery privacy remediation stage") {
 		statusPath := regexGet("Output status path: `([^`]+)`", prompt)
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_WRITE_UNCOMMITTED_FILE")) != "" {
+			if err := writeText(filepath.Join(".", "privacy-fix-dirty.txt"), "dirty remediation\n"); err != nil {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_SANITIZE_BINARY_UNCOMMITTED")) != "" {
+			if err := writeText(filepath.Join(".", "secret.bin"), "prefix\x00clean\x00suffix"); err != nil {
+				return "", err
+			}
+		}
 		if statusPath != "" {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD")) != "" {
 				cwd, err := os.Getwd()
@@ -298,6 +312,11 @@ func handlePrompt(prompt string) (string, error) {
 			}
 			b, _ := json.MarshalIndent(payload, "", "  ")
 			if err := writeText(statusPath, string(b)+"\n"); err != nil {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_STAGE_ALL")) != "" {
+			if err := gitCommitIfPossible("deepreview: privacy remediation attempt"); err != nil {
 				return "", err
 			}
 		}
