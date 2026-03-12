@@ -129,17 +129,30 @@ References:
 `README.md`, `AGENTS.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Resolve the Codex launcher dynamically by name, preferring `multicodex` and falling back to `codex` unless explicitly forbidden.
+Resolve the Codex launcher dynamically by name, always using `multicodex` when it is available and falling back to `codex` only when `multicodex` is unavailable and fallback is allowed.
 Context:
 Some machines expose a live `multicodex` wrapper on `PATH` that should always be used for prompt runs, but deepreview should remain portable to systems that only have plain `codex`.
 Rationale:
-Name-based resolution avoids hardcoded workstation paths while still letting operators enforce strict `multicodex` usage with `DEEPREVIEW_REQUIRE_MULTICODEX=1`. Requiring a real `multicodex` command on `PATH` keeps execution simple and avoids fragile interactive-shell wrapper behavior while still allowing the `PATH` command itself to manage rebuilding or dispatching to the latest multicodex implementation.
+Name-based resolution avoids hardcoded workstation paths while still letting operators enforce strict `multicodex` usage with `DEEPREVIEW_REQUIRE_MULTICODEX=1`. Treating `multicodex` as authoritative whenever it exists keeps deepreview aligned with the operator's intended routing policy. Requiring a real `multicodex` command on `PATH` keeps execution simple and avoids fragile interactive-shell wrapper behavior while still allowing the `PATH` command itself to manage rebuilding or dispatching to the latest multicodex implementation.
 Trade-offs:
 Launcher behavior now depends on `PATH` setup, and operators who previously relied on shell-only functions or aliases must expose `multicodex` as a real command instead.
 Enforcement:
-`CodexRunner.resolveLauncher` prefers `PATH` `multicodex`, `DEEPREVIEW_REQUIRE_MULTICODEX` fails fast when unavailable, and doctor validates the selected launcher with matching auth checks.
+`CodexRunner.resolveLauncher` selects `PATH` `multicodex` whenever it exists, `DEEPREVIEW_REQUIRE_MULTICODEX` fails fast when unavailable, `DEEPREVIEW_CODEX_BIN` only affects the codex fallback path, and doctor validates the selected launcher with matching auth checks.
 References:
 `internal/deepreview/codex.go`, `internal/deepreview/cli.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
+
+Decision:
+Bias deepreview review and execute prompts toward simplification, deletion, and scope reduction when those are the cleanest high-confidence fixes.
+Context:
+Repeated deepreview runs can drift toward additive fixes because prompts emphasize implementation and verification pressure more than removal pressure.
+Rationale:
+Explicitly naming deletion and simplification as preferred outcomes when they cleanly solve accepted issues counterbalances additive bias without broadening scope into speculative refactoring.
+Trade-offs:
+Prompt guidance still requires high confidence, so some worthwhile cleanup will remain out of scope when it is not tightly tied to accepted critical/high work.
+Enforcement:
+Independent review, execute planning, execute/verify, and PR-preparation prompts tell Codex not to bias toward additive fixes and to treat high-confidence removals or simplifications as first-class options.
+References:
+`prompts/review/independent-review.md`, `prompts/execute/01-consolidate-plan.md`, `prompts/execute/02-execute-verify.md`, `prompts/delivery/pr-prepare.md`, `docs/architecture.md`
 
 Decision:
 Keep durable contracts in `docs/spec.md` and `docs/architecture.md`; keep unresolved implementation questions in `plan/current/` scratch artifacts.
@@ -692,9 +705,9 @@ References:
 Decision:
 Write privacy remediation status inside the remediation worktree, then persist it into run artifacts after the worker exits.
 Context:
-Codex privacy-remediation workers execute under a write sandbox limited to the remediation worktree. Writing `privacy-status.json` directly into the run artifact directory can fail even when remediation itself succeeds.
+Deepreview keeps prompt-written artifacts worktree-local during execution. Writing `privacy-status.json` directly into the run artifact directory couples prompt behavior to orchestrator-owned paths and makes delivery staging less consistent.
 Rationale:
-Keeping the worker-written status file inside the worktree matches the worker sandbox while still preserving the status artifact under the run directory for diagnostics and tests. The worktree path must also remain reserved deepreview space so repo-owned `.tmp/` content cannot accidentally deliver worker status files.
+Keeping the worker-written status file inside the worktree preserves one simple rule for prompt outputs while still preserving the status artifact under the run directory for diagnostics and tests. The worktree path must also remain reserved deepreview space so repo-owned `.tmp/` content cannot accidentally deliver worker status files.
 Trade-offs:
 This adds one post-run copy step for the status artifact and reserves `.tmp/deepreview/` from repository delivery even when a repo tracks `.tmp/`.
 Enforcement:
@@ -781,11 +794,11 @@ References:
 `prompts/execute/01-consolidate-plan.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
-Codex prompt workers should stage review and execute artifacts inside their worktree sandbox, while deepreview persists canonical copies under the run directory and records round completion with one authoritative `round.json` per successful round.
+Codex prompt workers should stage review and execute artifacts inside their current worktree, while deepreview persists canonical copies under the run directory and records round completion with one authoritative `round.json` per successful round.
 Context:
-The old artifact flow mixed worktree-local writes, promotion/copy steps, and inferred round completion from multiple files. Simplifying to direct run-directory writes improved accounting, but it conflicted with the existing Codex write sandbox: real workers can only write inside their current worktree, as already demonstrated by the privacy-remediation flow.
+The old artifact flow mixed worktree-local writes, promotion/copy steps, and inferred round completion from multiple files. Keeping prompt outputs worktree-local and promoting canonical copies later keeps prompt IO simple while still giving the orchestrator one stable reporting location.
 Rationale:
-Sandbox-safe worker writes are required for correctness. Keeping canonical artifacts in the run directory still gives one stable place for summaries, diagnostics, and completion reporting, while a single orchestrator-written `round.json` keeps round accounting explicit and reliable.
+Worktree-local prompt writes keep artifact ownership straightforward. Keeping canonical artifacts in the run directory still gives one stable place for summaries, diagnostics, and completion reporting, while a single orchestrator-written `round.json` keeps round accounting explicit and reliable.
 Trade-offs:
 Some copy/promotion logic remains for prompt-written artifacts, and docs/tests must distinguish between transient staged files in worktrees and canonical persisted artifacts in the run directory.
 Enforcement:
@@ -833,15 +846,15 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `README.md`
 
 Decision:
-Pin deepreview Codex execution to `gpt-5.4` with `model_reasoning_effort=high` for all prompt executions and resume turns.
+Run deepreview Codex execution with the operator's normal local Codex configuration.
 Context:
-Users want consistent deep-review quality and deterministic model behavior across runs.
+Deepreview was forcing a pinned model/reasoning pair and a separate deepreview-specific execution style. That diverged from how operators normally run `multicodex exec` or `codex exec` locally.
 Rationale:
-Hard-pinning model and reasoning removes drift from local CLI defaults/profile changes and ensures every stage runs with the intended capability level.
+Using the normal local Codex configuration keeps deepreview aligned with direct terminal usage, removes deepreview-specific execution drift, and simplifies the runner.
 Trade-offs:
-Reduced flexibility to switch model/effort at runtime from deepreview CLI flags.
+Prompt execution behavior now depends more directly on the operator's local Codex configuration and machine environment.
 Enforcement:
-Codex command construction always injects `--model gpt-5.4` and `-c model_reasoning_effort=\"high\"` for new and resumed exec turns; parser defaults and help text reflect the pin.
+Codex command construction uses only the minimal deepreview orchestration flags, preserves the inherited local environment, and help/spec text describe prompt execution as using the operator's normal local Codex config/profile.
 References:
 `internal/deepreview/codex.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/cli.go`, `README.md`
 
@@ -986,15 +999,15 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Run all Codex prompts with worktree-local temp/cache defaults, including Go cache/temp envs.
+Run Codex prompts with the operator's normal local Codex configuration and inherited local environment.
 Context:
-Recent real deepreview artifacts showed Codex workers running `go test` against host-local cache paths like `$HOME/Library/Caches/go-build`, which failed under the sandbox until the model rediscovered ad hoc `GOCACHE` overrides mid-run.
+Deepreview previously forced a separate deepreview-specific execution style, pinned model/reasoning settings, and worktree-local temp/cache overrides. That diverged from how operators normally run `multicodex exec` or `codex exec` locally and made verification behavior more complex than necessary.
 Rationale:
-Providing writable worktree-local temp/cache envs up front makes verification commands deterministic, avoids false-negative sandbox failures, and keeps runtime artifacts inside deepreview-managed paths without relying on writable paths outside the worker sandbox.
+Using the normal local Codex configuration keeps deepreview behavior aligned with direct terminal usage, simplifies the runner, and avoids deepreview-specific assumptions about network reachability or cache layout.
 Trade-offs:
-Every Codex run now creates runtime cache directories under the worker worktree, so deepreview relies on operational excludes and cleanup to keep those paths out of change detection and delivery.
+Deepreview no longer forces extra isolation for prompt subprocesses beyond worktree separation, so verification behavior now depends more directly on the operator's local Codex configuration and machine environment.
 Enforcement:
-Codex runner creates `.deepreview/runtime/` under the worker cwd and injects `TMPDIR`, `TMP`, `TEMP`, `GOCACHE`, `GOMODCACHE`, and `GOTMPDIR` into every Codex subprocess environment. Review and execute prompts instruct Codex to use those inherited paths exactly as provided and to abandon Go verification paths that would require networked module downloads rather than overriding caches ad hoc. Tests assert env propagation, require prompt outputs to stay inside the worker cwd, and require sandbox-safe Go env paths to stay within that same cwd while a worker-side Go command runs successfully under the inherited env.
+Codex runner invokes the resolved launcher with the minimal deepreview orchestration flags only, preserves the inherited local environment, and documentation/prompt guidance treat network/module access as environment-dependent rather than assuming a deepreview-managed offline environment.
 References:
 `internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `prompts/review/independent-review.md`, `prompts/execute/02-execute-verify.md`, `docs/spec.md`
 
