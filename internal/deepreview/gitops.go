@@ -405,6 +405,35 @@ func ListChangedFiles(repoPath, gitBin, baseRef, headRef string) ([]string, erro
 	return files, nil
 }
 
+func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) ([]string, error) {
+	out, err := Git(
+		repoPath,
+		gitBin,
+		true,
+		"diff",
+		"--no-color",
+		"--no-ext-diff",
+		"--unified=0",
+		baseRef+".."+headRef,
+		"--",
+		relPath,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var added []string
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++ "):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added = append(added, strings.TrimPrefix(line, "+"))
+		}
+	}
+	return added, nil
+}
+
 func PushRefspec(repoPath, gitBin, refspec string) error {
 	_, err := RunCommand([]string{gitBin, "-C", repoPath, "push", "origin", refspec}, "", "", true, 0)
 	return err
