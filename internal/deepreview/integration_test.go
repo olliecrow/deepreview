@@ -372,7 +372,11 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		"--mode", "yolo",
 		"--no-tui",
 	)
-	lockA := filepath.Join(workspace, "locks", "local", "user", FilesystemSafeKey("feature/a")+".lock")
+	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, userClone)
+	if err != nil {
+		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	}
+	lockA := filepath.Join(append([]string{workspace, "locks"}, append(identity.NamespaceSegments(), FilesystemSafeKey("feature/a")+".lock")...)...)
 	waitForPath(t, lockA, 5*time.Second)
 
 	cmdB, stdoutB, stderrB := startCmd(t, root, env,
@@ -409,8 +413,8 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		t.Fatalf("expected concurrent branch-b run to update remote branch")
 	}
 
-	managedA := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/a"))
-	managedB := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/b"))
+	managedA := filepath.Join(append([]string{workspace, "repos"}, append(identity.NamespaceSegments(), "branches", FilesystemSafeKey("feature/a"))...)...)
+	managedB := filepath.Join(append([]string{workspace, "repos"}, append(identity.NamespaceSegments(), "branches", FilesystemSafeKey("feature/b"))...)...)
 	if _, err := os.Stat(filepath.Join(managedA, ".git")); err != nil {
 		t.Fatalf("expected branch-a managed repo to exist, got %v", err)
 	}
@@ -785,7 +789,19 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 		t.Fatalf("run should not report successful completion after interrupt")
 	}
 
-	lockFiles, err := filepath.Glob(filepath.Join(workspace, "locks", "*", "*.lock"))
+	var lockFiles []string
+	err := filepath.Walk(filepath.Join(workspace, "locks"), func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if !info.IsDir() && strings.HasSuffix(path, ".lock") {
+			lockFiles = append(lockFiles, path)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}

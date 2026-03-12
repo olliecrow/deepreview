@@ -55,6 +55,9 @@ func TestResolveRepoIdentityLocalPathUsesOriginRemoteAsCloneSource(t *testing.T)
 	if identity.CloneSource != "https://github.com/example-org/example-repo.git" {
 		t.Fatalf("expected clone source to be origin remote, got: %s", identity.CloneSource)
 	}
+	if identity.SourceType != RepoSourceGitHub {
+		t.Fatalf("expected GitHub repo source type, got: %s", identity.SourceType)
+	}
 	if identity.Owner != "example-org" || identity.Name != "example-repo" {
 		t.Fatalf("unexpected slug: %s/%s", identity.Owner, identity.Name)
 	}
@@ -75,14 +78,40 @@ func TestResolveRepoIdentityLocalPathAcceptsFilesystemOriginRemote(t *testing.T)
 	if err != nil {
 		t.Fatalf("resolveRepoIdentity failed: %v", err)
 	}
-	if identity.CloneSource != remote {
+	if canonicalPath(t, identity.CloneSource) != canonicalPath(t, remote) {
 		t.Fatalf("expected clone source to stay local origin path, got: %s", identity.CloneSource)
 	}
-	if identity.Owner != "local" {
-		t.Fatalf("expected local owner for filesystem origin, got: %s", identity.Owner)
+	if identity.SourceType != RepoSourceFilesystem {
+		t.Fatalf("expected filesystem repo source type, got: %s", identity.SourceType)
 	}
-	if identity.Name != "repo" {
-		t.Fatalf("expected local repo name derived from repo path, got: %s", identity.Name)
+	if identity.Name != "remote" {
+		t.Fatalf("expected filesystem repo name derived from clone source, got: %s", identity.Name)
+	}
+}
+
+func TestResolveRepoIdentityCanonicalizesRelativeFilesystemOriginRemote(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", repo)
+	runGitTest(t, td, "-C", repo, "remote", "add", "origin", "../remote.git")
+
+	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, repo)
+	if err != nil {
+		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	}
+	if identity.SourceType != RepoSourceFilesystem {
+		t.Fatalf("expected filesystem repo source type, got: %s", identity.SourceType)
+	}
+	if canonicalPath(t, identity.CloneSource) != canonicalPath(t, remote) {
+		t.Fatalf("expected canonical relative clone source %s, got %s", canonicalPath(t, remote), identity.CloneSource)
+	}
+	if identity.Name != "remote" {
+		t.Fatalf("expected filesystem repo display name remote, got %s", identity.Name)
 	}
 }
 
@@ -139,8 +168,73 @@ func TestNewOrchestratorAllowsYoloModeForFilesystemOriginRemote(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected yolo mode to allow filesystem origin remote, got: %v", err)
 	}
-	if o.repoIdentity.Owner != "local" {
-		t.Fatalf("expected local repo identity, got: %s", o.repoIdentity.Owner)
+	if o.repoIdentity.SourceType != RepoSourceFilesystem {
+		t.Fatalf("expected filesystem repo identity, got: %s", o.repoIdentity.SourceType)
+	}
+}
+
+func TestNewOrchestratorCanonicalizesRelativeFilesystemOriginForDoctorAndClone(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	repo := filepath.Join(td, "repo")
+	workspace := filepath.Join(td, "workspace")
+
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", "-b", "main", seed)
+	runGitTest(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("seed"))
+	runGitTest(t, td, "-C", seed, "config", "user.name", "Seed User")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", seed, "add", "README.md")
+	runGitTest(t, td, "-C", seed, "commit", "-m", "seed")
+	runGitTest(t, td, "-C", seed, "remote", "add", "origin", remote)
+	runGitTest(t, td, "-C", seed, "push", "-u", "origin", "main")
+
+	runGitTest(t, td, "clone", remote, repo)
+	runGitTest(t, td, "-C", repo, "remote", "set-url", "origin", "../remote.git")
+
+	var orchestrator *Orchestrator
+	withWorkingDir(t, t.TempDir(), func() {
+		var err error
+		orchestrator, err = NewOrchestrator(ReviewConfig{
+			Repo:          repo,
+			SourceBranch:  "main",
+			WorkspaceRoot: workspace,
+			RunID:         "run-1",
+			GitBin:        "git",
+			CodexBin:      "codex",
+			GhBin:         "gh",
+			Mode:          ModeYolo,
+		}, &NullProgressReporter{})
+		if err != nil {
+			t.Fatalf("NewOrchestrator failed: %v", err)
+		}
+		if err := CloneOrFetch(orchestrator.managedRepoPath, orchestrator.repoIdentity.CloneSource, "git"); err != nil {
+			t.Fatalf("CloneOrFetch failed with canonicalized local origin: %v", err)
+		}
+	})
+
+	if canonicalPath(t, orchestrator.repoIdentity.CloneSource) != canonicalPath(t, remote) {
+		t.Fatalf("expected canonical clone source %s, got %s", canonicalPath(t, remote), orchestrator.repoIdentity.CloneSource)
+	}
+	checks := buildDoctorChecks(orchestrator)
+	branchCheck := doctorCheck{}
+	for _, check := range checks {
+		if check.Name == "remote source branch reachable" {
+			branchCheck = check
+			break
+		}
+	}
+	if !branchCheck.Passed {
+		t.Fatalf("expected doctor remote branch check to pass, got detail: %s", branchCheck.Detail)
+	}
+	if !strings.Contains(branchCheck.Detail, orchestrator.repoIdentity.CloneSource) {
+		t.Fatalf("expected doctor detail to mention canonical clone source, got: %s", branchCheck.Detail)
+	}
+	if _, err := os.Stat(filepath.Join(orchestrator.managedRepoPath, ".git")); err != nil {
+		t.Fatalf("expected managed repo clone to exist, got %v", err)
 	}
 }
 
@@ -170,6 +264,35 @@ func TestResolveRepoIdentityPreservesExplicitSSHGitHubURL(t *testing.T) {
 	}
 	if identity.CloneSource != repo {
 		t.Fatalf("expected clone source %q, got %q", repo, identity.CloneSource)
+	}
+}
+
+func TestResolveRepoIdentityTreatsGitHubLocalOwnerAsGitHub(t *testing.T) {
+	testCases := []struct {
+		name  string
+		input string
+	}{
+		{name: "slug", input: "local/repo"},
+		{name: "https", input: "https://github.com/local/repo.git"},
+		{name: "scp", input: "git@github.com:local/repo.git"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, tc.input)
+			if err != nil {
+				t.Fatalf("resolveRepoIdentity failed: %v", err)
+			}
+			if identity.SourceType != RepoSourceGitHub {
+				t.Fatalf("expected GitHub repo source type, got: %s", identity.SourceType)
+			}
+			if identity.Owner != "local" || identity.Name != "repo" {
+				t.Fatalf("unexpected slug: %s/%s", identity.Owner, identity.Name)
+			}
+			if !identity.SupportsPRDelivery() {
+				t.Fatalf("expected GitHub local/repo identity to support PR delivery")
+			}
+		})
 	}
 }
 
@@ -465,7 +588,7 @@ func TestAcquireRunLockPreventsConcurrentSameRepoBranch(t *testing.T) {
 	td := t.TempDir()
 	shared := Orchestrator{
 		workspaceRoot: td,
-		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
+		repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
 		config:        ReviewConfig{RunID: "run-1", SourceBranch: "feature/a"},
 	}
 	if err := shared.acquireRunLock(); err != nil {
@@ -475,7 +598,7 @@ func TestAcquireRunLockPreventsConcurrentSameRepoBranch(t *testing.T) {
 
 	second := Orchestrator{
 		workspaceRoot: td,
-		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
+		repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
 		config:        ReviewConfig{RunID: "run-2", SourceBranch: "feature/a"},
 	}
 	err := second.acquireRunLock()
@@ -492,7 +615,7 @@ func TestAcquireRunLockReplacesStaleLock(t *testing.T) {
 	td := t.TempDir()
 	o := Orchestrator{
 		workspaceRoot: td,
-		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
+		repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
 		config:        ReviewConfig{RunID: "new-run", SourceBranch: "feature/a"},
 	}
 	lockPath := o.runLockFilePath()
@@ -536,12 +659,12 @@ func TestAcquireRunLockAllowsDifferentRepos(t *testing.T) {
 	td := t.TempDir()
 	first := Orchestrator{
 		workspaceRoot: td,
-		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo-a"},
+		repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo-a"},
 		config:        ReviewConfig{RunID: "run-a", SourceBranch: "feature/shared"},
 	}
 	second := Orchestrator{
 		workspaceRoot: td,
-		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo-b"},
+		repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo-b"},
 		config:        ReviewConfig{RunID: "run-b", SourceBranch: "feature/shared"},
 	}
 	if err := first.acquireRunLock(); err != nil {
@@ -558,12 +681,12 @@ func TestAcquireRunLockAllowsDifferentBranchesSameRepo(t *testing.T) {
 	td := t.TempDir()
 	first := Orchestrator{
 		workspaceRoot: td,
-		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
+		repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
 		config:        ReviewConfig{RunID: "run-a", SourceBranch: "feature/a"},
 	}
 	second := Orchestrator{
 		workspaceRoot: td,
-		repoIdentity:  RepoIdentity{Owner: "example", Name: "repo"},
+		repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
 		config:        ReviewConfig{RunID: "run-b", SourceBranch: "feature/b"},
 	}
 	if err := first.acquireRunLock(); err != nil {
@@ -605,6 +728,50 @@ func TestNewOrchestratorIsolatesManagedRepoPathPerSourceBranch(t *testing.T) {
 	}
 	if !strings.Contains(first.managedRepoPath, string(filepath.Separator)+"branches"+string(filepath.Separator)) {
 		t.Fatalf("expected managed repo path to include branch isolation directory, got %s", first.managedRepoPath)
+	}
+}
+
+func TestNewOrchestratorIsolatesGitHubAndFilesystemNamespacePaths(t *testing.T) {
+	td := t.TempDir()
+	reporter := &NullProgressReporter{}
+
+	remote := filepath.Join(td, "repo.git")
+	localRepo := filepath.Join(td, "clone")
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", localRepo)
+	runGitTest(t, td, "-C", localRepo, "remote", "add", "origin", remote)
+
+	githubConfig := ReviewConfig{
+		Repo:          "local/repo",
+		WorkspaceRoot: td,
+		RunID:         "run-github",
+		GitBin:        "git",
+		CodexBin:      "codex",
+		SourceBranch:  "feature/test",
+	}
+	filesystemConfig := ReviewConfig{
+		Repo:          localRepo,
+		WorkspaceRoot: td,
+		RunID:         "run-filesystem",
+		GitBin:        "git",
+		CodexBin:      "codex",
+		SourceBranch:  "feature/test",
+	}
+
+	githubOrchestrator, err := NewOrchestrator(githubConfig, reporter)
+	if err != nil {
+		t.Fatalf("NewOrchestrator for GitHub repo failed: %v", err)
+	}
+	filesystemOrchestrator, err := NewOrchestrator(filesystemConfig, reporter)
+	if err != nil {
+		t.Fatalf("NewOrchestrator for filesystem repo failed: %v", err)
+	}
+
+	if githubOrchestrator.managedRepoPath == filesystemOrchestrator.managedRepoPath {
+		t.Fatalf("expected distinct managed repo paths, got %s", githubOrchestrator.managedRepoPath)
+	}
+	if githubOrchestrator.runLockFilePath() == filesystemOrchestrator.runLockFilePath() {
+		t.Fatalf("expected distinct run lock paths, got %s", githubOrchestrator.runLockFilePath())
 	}
 }
 
