@@ -274,7 +274,7 @@ func TestResolveRepoIdentityTreatsGitHubLocalOwnerAsGitHub(t *testing.T) {
 	}{
 		{name: "slug", input: "local/repo"},
 		{name: "https", input: "https://github.com/local/repo.git"},
-		{name: "scp", input: "git@github.com:local/repo.git"},
+		{name: "scp", input: githubSCPLikeCloneURL("local", "repo")},
 	}
 
 	for _, tc := range testCases {
