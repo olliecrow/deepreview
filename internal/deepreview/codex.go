@@ -70,16 +70,13 @@ func (c *CodexRunner) shouldPreferMulticodex() bool {
 	return strings.TrimSpace(c.CodexBin) == "" || strings.TrimSpace(c.CodexBin) == "codex"
 }
 
-func (c *CodexRunner) resolveLauncher(parentCtx context.Context) (codexLauncher, error) {
+func (c *CodexRunner) resolveLauncher() (codexLauncher, error) {
 	if c.shouldPreferMulticodex() {
-		if shellLauncher, ok := resolveShellMulticodex(parentCtx); ok {
-			return shellLauncher, nil
-		}
 		if multicodexPath, err := exec.LookPath("multicodex"); err == nil {
 			return codexLauncher{Command: multicodexPath, Display: "multicodex"}, nil
 		}
 		if requireMulticodex() {
-			return codexLauncher{}, NewDeepReviewError("%s is set but multicodex is not available from the current shell or PATH", envRequireMulticodex)
+			return codexLauncher{}, NewDeepReviewError("%s is set but multicodex is not available on PATH", envRequireMulticodex)
 		}
 	}
 
@@ -92,48 +89,6 @@ func (c *CodexRunner) resolveLauncher(parentCtx context.Context) (codexLauncher,
 		return codexLauncher{}, NewDeepReviewError("resolve codex executable: %v", err)
 	}
 	return codexLauncher{Command: codexPath, Display: "codex"}, nil
-}
-
-func resolveShellMulticodex(parentCtx context.Context) (codexLauncher, bool) {
-	shell := strings.TrimSpace(os.Getenv("SHELL"))
-	if shell == "" {
-		return codexLauncher{}, false
-	}
-	if !supportsShellWrappedMulticodex(shell) {
-		return codexLauncher{}, false
-	}
-	checkCmd := exec.CommandContext(parentCtx, shell, "-ic", "command -v multicodex >/dev/null 2>&1")
-	if err := checkCmd.Run(); err != nil {
-		return codexLauncher{}, false
-	}
-	return codexLauncher{
-		Command: shell,
-		// Interactive shells can expose multicodex as a rebuilding shell function.
-		// Disable job control in the wrapper so worker launchers do not suspend
-		// themselves when deepreview runs under a monitored terminal session.
-		Args:    []string{"-ic", shellWrappedMulticodexCommand(shell), "multicodex"},
-		Display: "multicodex",
-	}, true
-}
-
-func supportsShellWrappedMulticodex(shell string) bool {
-	switch filepath.Base(strings.TrimSpace(shell)) {
-	case "sh", "bash", "zsh", "ksh", "dash":
-		return true
-	default:
-		return false
-	}
-}
-
-func shellWrappedMulticodexCommand(shell string) string {
-	switch filepath.Base(strings.TrimSpace(shell)) {
-	case "zsh":
-		return `unsetopt monitor; multicodex "$@"`
-	case "bash", "ksh":
-		return `set +m; multicodex "$@"`
-	default:
-		return `multicodex "$@"`
-	}
 }
 
 func requireMulticodex() bool {
@@ -214,7 +169,7 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 	if hooks != nil && hooks.Context != nil {
 		parentCtx = hooks.Context
 	}
-	launcher, err := c.resolveLauncher(parentCtx)
+	launcher, err := c.resolveLauncher()
 	if err != nil {
 		return CodexRunResult{}, err
 	}

@@ -41,7 +41,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 Optional launcher:
 
 - `multicodex`
-  - when available in a supported POSIX-style interactive shell or on `PATH`, deepreview prefers `multicodex exec` for Codex prompt runs
+  - when available on `PATH`, deepreview prefers `multicodex exec` for Codex prompt runs
   - when unavailable, deepreview falls back to `codex exec`
   - set `DEEPREVIEW_REQUIRE_MULTICODEX=1` to fail fast instead of falling back
 
@@ -205,7 +205,7 @@ If you are actively editing deepreview source, rebuild after changes:
 go build -o ./bin/deepreview ./cmd/deepreview
 ```
 
-If you also keep `multicodex` under active development, expose it as a real command in your shell or `PATH` rather than relying on a stale copied binary. deepreview only resolves launcher names (`multicodex` first, then `codex`) and does not hardcode repo-specific launcher paths.
+If you also keep `multicodex` under active development, expose it as a real command on `PATH` rather than relying on a stale copied binary. deepreview only resolves launcher names (`multicodex` first, then `codex`) and does not hardcode repo-specific launcher paths.
 
 ## Command summary
 

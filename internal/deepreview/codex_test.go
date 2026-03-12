@@ -1,7 +1,6 @@
 package deepreview
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -107,36 +106,13 @@ func TestCodexRunnerBuildEnvironmentUsesWorktreeLocalSandboxPaths(t *testing.T) 
 	}
 }
 
-func TestCodexRunnerResolveLauncherPrefersShellResolvedMulticodex(t *testing.T) {
-	fakeBin := t.TempDir()
-	writeFakeShell(t, filepath.Join(fakeBin, "zsh"))
-	t.Setenv("SHELL", filepath.Join(fakeBin, "zsh"))
-	t.Setenv("FAKE_SHELL_HAS_MULTICODEX", "1")
-
-	runner := CodexRunner{CodexBin: "codex"}
-	got, err := runner.resolveLauncher(context.Background())
-	if err != nil {
-		t.Fatalf("resolveLauncher failed: %v", err)
-	}
-	if got.Display != "multicodex" {
-		t.Fatalf("expected multicodex launcher, got %+v", got)
-	}
-	if got.Command != filepath.Join(fakeBin, "zsh") {
-		t.Fatalf("expected fake shell launcher command, got %q", got.Command)
-	}
-	if !reflect.DeepEqual(got.Args, []string{"-ic", `unsetopt monitor; multicodex "$@"`, "multicodex"}) {
-		t.Fatalf("unexpected shell launcher args: %#v", got.Args)
-	}
-}
-
 func TestCodexRunnerResolveLauncherPrefersPathMulticodex(t *testing.T) {
 	fakeBin := t.TempDir()
 	writeExecutable(t, filepath.Join(fakeBin, "multicodex"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", fakeBin)
-	t.Setenv("SHELL", "")
 
 	runner := CodexRunner{CodexBin: "codex"}
-	got, err := runner.resolveLauncher(context.Background())
+	got, err := runner.resolveLauncher()
 	if err != nil {
 		t.Fatalf("resolveLauncher failed: %v", err)
 	}
@@ -152,10 +128,9 @@ func TestCodexRunnerResolveLauncherFallsBackToCodex(t *testing.T) {
 	fakeBin := t.TempDir()
 	writeExecutable(t, filepath.Join(fakeBin, "codex"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", fakeBin)
-	t.Setenv("SHELL", "")
 
 	runner := CodexRunner{CodexBin: "codex"}
-	got, err := runner.resolveLauncher(context.Background())
+	got, err := runner.resolveLauncher()
 	if err != nil {
 		t.Fatalf("resolveLauncher failed: %v", err)
 	}
@@ -171,11 +146,10 @@ func TestCodexRunnerResolveLauncherRequiresMulticodex(t *testing.T) {
 	fakeBin := t.TempDir()
 	writeExecutable(t, filepath.Join(fakeBin, "codex"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", fakeBin)
-	t.Setenv("SHELL", "")
 	t.Setenv(envRequireMulticodex, "1")
 
 	runner := CodexRunner{CodexBin: "codex"}
-	_, err := runner.resolveLauncher(context.Background())
+	_, err := runner.resolveLauncher()
 	if err == nil {
 		t.Fatal("expected multicodex requirement failure")
 	}
@@ -184,40 +158,15 @@ func TestCodexRunnerResolveLauncherRequiresMulticodex(t *testing.T) {
 	}
 }
 
-func TestCodexRunnerResolveLauncherSkipsUnsupportedShellWrapper(t *testing.T) {
-	fakeBin := t.TempDir()
-	writeExecutable(t, filepath.Join(fakeBin, "multicodex"), "#!/bin/sh\nexit 0\n")
-	t.Setenv("PATH", fakeBin)
-	t.Setenv("SHELL", "/usr/local/bin/fish")
-
-	runner := CodexRunner{CodexBin: "codex"}
-	got, err := runner.resolveLauncher(context.Background())
-	if err != nil {
-		t.Fatalf("resolveLauncher failed: %v", err)
-	}
-	if got.Display != "multicodex" {
-		t.Fatalf("expected multicodex launcher, got %+v", got)
-	}
-	if got.Command != filepath.Join(fakeBin, "multicodex") {
-		t.Fatalf("expected PATH multicodex launcher, got %q", got.Command)
-	}
-	if len(got.Args) != 0 {
-		t.Fatalf("expected no shell wrapper args for unsupported shell, got %#v", got.Args)
-	}
-}
-
 func TestCodexRunnerResolveLauncherRespectsExplicitCodexOverride(t *testing.T) {
 	fakeBin := t.TempDir()
 	codexPath := filepath.Join(fakeBin, "custom-codex")
 	writeExecutable(t, codexPath, "#!/bin/sh\nexit 0\n")
 	writeExecutable(t, filepath.Join(fakeBin, "multicodex"), "#!/bin/sh\nexit 0\n")
-	writeFakeShell(t, filepath.Join(fakeBin, "zsh"))
 	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
-	t.Setenv("SHELL", filepath.Join(fakeBin, "zsh"))
-	t.Setenv("FAKE_SHELL_HAS_MULTICODEX", "1")
 
 	runner := CodexRunner{CodexBin: codexPath}
-	got, err := runner.resolveLauncher(context.Background())
+	got, err := runner.resolveLauncher()
 	if err != nil {
 		t.Fatalf("resolveLauncher failed: %v", err)
 	}
@@ -234,32 +183,4 @@ func writeExecutable(t *testing.T, path, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
 		t.Fatalf("write executable %s: %v", path, err)
 	}
-}
-
-func writeFakeShell(t *testing.T, path string) {
-	t.Helper()
-	script := `#!/bin/sh
-set -eu
-if [ "${1-}" != "-ic" ]; then
-  echo "expected -ic invocation" >&2
-  exit 1
-fi
-script="$2"
-if [ "$script" = "command -v multicodex >/dev/null 2>&1" ]; then
-  if [ "${FAKE_SHELL_HAS_MULTICODEX:-0}" = "1" ]; then
-    exit 0
-  fi
-  exit 1
-fi
-if [ "$script" = "unsetopt monitor; multicodex \"$@\"" ]; then
-  shift 3
-  exec multicodex "$@"
-fi
-if [ "${FAKE_SHELL_HAS_MULTICODEX:-0}" != "1" ]; then
-  exit 127
-fi
-shift 3
-exec multicodex "$@"
-`
-	writeExecutable(t, path, script)
 }

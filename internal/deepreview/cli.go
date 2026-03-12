@@ -289,8 +289,8 @@ Optional flags:
     Tool binary overrides (name or absolute path).
 
   DEEPREVIEW_REQUIRE_MULTICODEX (default: off)
-    Require `+"`multicodex exec`"+` for prompt runs. When unset, deepreview prefers shell/PATH
-    `+"`multicodex`"+` when available and otherwise falls back to `+"`codex exec`"+`.
+    Require `+"`multicodex exec`"+` for prompt runs. When unset, deepreview prefers
+    `+"`multicodex`"+` from PATH when available and otherwise falls back to `+"`codex exec`"+`.
 
   DEEPREVIEW_REVIEW_INACTIVITY_SECONDS (default: %d)
     Maximum time a worker can run with no evidence of activity before it is restarted.
@@ -318,7 +318,7 @@ Examples:
 
 Troubleshooting:
   - Missing tools: ensure git/codex/(gh for pr mode) are on PATH or set env overrides.
-  - Multicodex routing: install/expose `+"`multicodex`"+` on PATH or via a supported POSIX-style interactive shell; set DEEPREVIEW_REQUIRE_MULTICODEX=1 to fail instead of falling back to codex.
+  - Multicodex routing: install/expose `+"`multicodex`"+` on PATH; set DEEPREVIEW_REQUIRE_MULTICODEX=1 to fail instead of falling back to codex.
   - Auth failures: run local auth flows for the launcher deepreview is using (`+"`multicodex status`"+` or `+"`codex login status`"+`) and gh.
   - Terminal rendering issues: pass --no-tui for stable text logs.
   - To stop a run safely at any time, press Ctrl+C once (deepreview cancels and runs cleanup).
@@ -716,7 +716,7 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 		})
 	}
 
-	launcher, launcherErr := o.codexRunner.resolveLauncher(context.Background())
+	launcher, launcherErr := o.codexRunner.resolveLauncher()
 	if launcherErr != nil {
 		checks = append(checks, doctorCheck{
 			Name:   "codex launcher",

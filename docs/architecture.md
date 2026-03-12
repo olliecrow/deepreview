@@ -19,7 +19,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - concurrency (default `4`)
 - max rounds (default `5`) for total execute rounds
 - UI mode (full-screen UI by default when terminal capabilities are valid; optional `--no-tui` force-off for structured text logs)
-- resolve Codex launcher: prefer `multicodex` exposed through a supported POSIX-style shell, then `PATH` `multicodex`, then `codex`; if `DEEPREVIEW_REQUIRE_MULTICODEX=1`, fail instead of falling back
+- resolve Codex launcher: prefer `multicodex` on `PATH`, then `codex`; if `DEEPREVIEW_REQUIRE_MULTICODEX=1`, fail instead of falling back
 - if source branch is inferred from local repo context, require local readiness:
   - no tracked local changes
   - local branch exactly synchronized with upstream remote branch after refreshing the tracked upstream ref
