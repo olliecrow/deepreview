@@ -1,6 +1,7 @@
 package deepreview
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -36,15 +37,17 @@ func withWorkingDir(t *testing.T, dir string, fn func()) {
 func createSyncedGitHubLikeRepo(t *testing.T, branch string) string {
 	t.Helper()
 	td := t.TempDir()
-	remote := filepath.Join(td, "github.com", "example-org", "example-repo.git")
+	remote := filepath.Join(td, "remote.git")
 	seed := filepath.Join(td, "seed")
 	repo := filepath.Join(td, "repo")
 	if err := os.MkdirAll(filepath.Dir(remote), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	githubURL := fmt.Sprintf("git@github.com:example-org/%s.git", FilesystemSafeKey(td))
+	configureGitHubURLRewrite(t, githubURL, remote)
 
 	runGitCommand(t, td, "init", "--bare", remote)
-	runGitCommand(t, td, "clone", remote, seed)
+	runGitCommand(t, td, "clone", githubURL, seed)
 	runGitCommand(t, td, "-C", seed, "config", "user.email", "test@example.com")
 	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
 	runGitCommand(t, td, "-C", seed, "checkout", "-b", branch)
@@ -55,11 +58,24 @@ func createSyncedGitHubLikeRepo(t *testing.T, branch string) string {
 	runGitCommand(t, td, "-C", seed, "commit", "-m", "seed")
 	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", branch)
 
-	runGitCommand(t, td, "clone", remote, repo)
+	runGitCommand(t, td, "clone", githubURL, repo)
 	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
 	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
 	runGitCommand(t, td, "-C", repo, "checkout", branch)
 	return repo
+}
+
+func configureGitHubURLRewrite(t *testing.T, githubURL, localPath string) {
+	t.Helper()
+	globalConfig := os.Getenv("GIT_CONFIG_GLOBAL")
+	if globalConfig == "" {
+		globalConfig = filepath.Join(t.TempDir(), "global.gitconfig")
+		t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	}
+	if err := os.MkdirAll(filepath.Dir(globalConfig), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, filepath.Dir(globalConfig), "config", "--global", "url."+localPath+".insteadOf", githubURL)
 }
 
 func canonicalPath(t *testing.T, path string) string {

@@ -165,25 +165,25 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 	repoPath := filepath.Clean(repo)
 	if st, err := os.Stat(repoPath); err == nil && st.IsDir() {
 		if gitSt, err := os.Stat(filepath.Join(repoPath, ".git")); err == nil && gitSt != nil {
-			owner := "local"
-			name := SanitizeSegment(filepath.Base(repoPath))
 			remote, err := tryReadRemoteURL(config.GitBin, repoPath)
 			if err != nil {
 				return RepoIdentity{}, err
 			}
-			if strings.TrimSpace(remote) == "" {
+			remote = strings.TrimSpace(remote)
+			if remote == "" {
 				return RepoIdentity{}, NewDeepReviewError("local repo input must have remote.origin.url configured: %s", repoPath)
 			}
-			if o, n, ok := parseOwnerRepo(remote); ok {
-				owner, name = o, n
+			owner, name, ok := parseOwnerRepo(remote)
+			if !ok {
+				return RepoIdentity{}, NewDeepReviewError("local repo input must have a supported GitHub origin remote: %s", repoPath)
 			}
 			return RepoIdentity{Owner: owner, Name: name, CloneSource: remote}, nil
 		}
 	}
 
 	if owner, name, ok := parseOwnerRepo(repo); ok {
-		source := repo
-		if !(strings.HasPrefix(repo, "http://") || strings.HasPrefix(repo, "https://") || strings.HasPrefix(repo, "git@")) {
+		source := strings.TrimSpace(repo)
+		if isOwnerRepoSlug(source) {
 			source = fmt.Sprintf("https://github.com/%s/%s.git", owner, name)
 		}
 		return RepoIdentity{Owner: owner, Name: name, CloneSource: source}, nil
@@ -192,7 +192,9 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 	return RepoIdentity{}, NewDeepReviewError("unable to resolve repo locator: %s", repo)
 }
 
-var ownerRepoRemoteRe = regexp.MustCompile(`github\.com[:/]([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$`)
+var ownerRepoSlugRe = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)
+var ownerRepoSegmentRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
+var githubSCPLikeRemoteRe = regexp.MustCompile(`^git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$`)
 var secretRiskyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
 	regexp.MustCompile(`ghp_[A-Za-z0-9]{36,}`),
@@ -226,14 +228,59 @@ const (
 )
 
 func parseOwnerRepo(text string) (string, string, bool) {
-	if m := ownerRepoRemoteRe.FindStringSubmatch(text); m != nil {
+	trimmed := strings.TrimSpace(text)
+	if m := githubSCPLikeRemoteRe.FindStringSubmatch(trimmed); m != nil {
 		return SanitizeSegment(m[1]), SanitizeSegment(m[2]), true
 	}
-	if strings.Count(text, "/") == 1 && !strings.HasPrefix(text, "/") && !strings.Contains(text, "://") && !strings.HasPrefix(text, "git@") {
-		parts := strings.SplitN(text, "/", 2)
-		return SanitizeSegment(parts[0]), SanitizeSegment(parts[1]), true
+	if owner, name, ok := parseGitHubOwnerRepoURL(trimmed); ok {
+		return owner, name, true
+	}
+	if m := ownerRepoSlugRe.FindStringSubmatch(trimmed); m != nil {
+		return SanitizeSegment(m[1]), SanitizeSegment(m[2]), true
 	}
 	return "", "", false
+}
+
+func parseGitHubOwnerRepoURL(text string) (string, string, bool) {
+	if !strings.Contains(text, "://") {
+		return "", "", false
+	}
+	parsed, err := url.Parse(text)
+	if err != nil {
+		return "", "", false
+	}
+	if parsed.Hostname() != "github.com" || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", "", false
+	}
+	return parseGitHubOwnerRepoPath(parsed.Path)
+}
+
+func parseGitHubOwnerRepoPath(path string) (string, string, bool) {
+	trimmed := strings.Trim(strings.TrimSpace(path), "/")
+	if trimmed == "" {
+		return "", "", false
+	}
+	parts := strings.Split(trimmed, "/")
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	owner := parts[0]
+	name := strings.TrimSuffix(parts[1], ".git")
+	if owner == "" || name == "" {
+		return "", "", false
+	}
+	if !ownerRepoSegmentValid(owner) || !ownerRepoSegmentValid(name) {
+		return "", "", false
+	}
+	return SanitizeSegment(owner), SanitizeSegment(name), true
+}
+
+func ownerRepoSegmentValid(text string) bool {
+	return ownerRepoSegmentRe.MatchString(text)
+}
+
+func isOwnerRepoSlug(text string) bool {
+	return ownerRepoSlugRe.MatchString(strings.TrimSpace(text))
 }
 
 func tryReadRemoteURL(gitBin, repoPath string) (string, error) {
