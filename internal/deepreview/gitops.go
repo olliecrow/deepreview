@@ -297,11 +297,46 @@ func CleanupUntrackedOperationalArtifacts(repoPath, gitBin string) error {
 			continue
 		}
 		targetPath := filepath.Join(repoPath, filepath.FromSlash(relPath))
-		if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
+		if err := removeAllForceWritable(targetPath); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+func removeAllForceWritable(path string) error {
+	if err := makeTreeUserWritable(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func makeTreeUserWritable(path string) error {
+	return filepath.Walk(path, func(current string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		mode := info.Mode()
+		if mode&os.ModeSymlink != 0 {
+			return nil
+		}
+		desired := mode.Perm()
+		if info.IsDir() {
+			desired |= 0o700
+		} else {
+			desired |= 0o600
+		}
+		if mode.Perm() == desired {
+			return nil
+		}
+		return os.Chmod(current, desired)
+	})
 }
 
 func repoHasTrackedEntries(repoPath, gitBin, relPath string) (bool, error) {

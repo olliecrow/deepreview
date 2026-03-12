@@ -146,6 +146,33 @@ func TestEnsureWorktreeOperationalExcludesResolvesRelativeGitPathAgainstRepo(t *
 	}
 }
 
+func TestCleanupUntrackedOperationalArtifactsRemovesReadOnlyGoModuleCache(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+
+	readonlyDir := filepath.Join(repo, ".tmp", "go-mod-cache", "golang.org", "x", "sys@v0.37.0")
+	if err := os.MkdirAll(readonlyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cacheFile := filepath.Join(readonlyDir, "go.mod")
+	if err := os.WriteFile(cacheFile, []byte("module golang.org/x/sys\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(readonlyDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CleanupUntrackedOperationalArtifacts(repo, "git"); err != nil {
+		t.Fatalf("CleanupUntrackedOperationalArtifacts failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("expected .tmp cache tree to be removed, got err=%v", err)
+	}
+}
+
 func TestCommitAllChangesUsesProvidedIdentityAndDisablesSigning(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
