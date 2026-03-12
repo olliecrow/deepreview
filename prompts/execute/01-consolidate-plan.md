@@ -35,6 +35,7 @@ Process:
 10. Prefer solutions that simplify the codebase when that directly helps resolve accepted items.
 11. Treat high-confidence removals, deletions, and scope reductions as first-class fix options when they solve accepted items cleanly.
 12. If no items are accepted, produce a no-op plan and say so explicitly.
+13. Always anchor repo inspection and artifact writes to `{{WORKTREE_PATH}}` and the absolute output/report paths below. If your starting `pwd` is elsewhere, switch to `{{WORKTREE_PATH}}` before investigating.
 
 Rules:
 - Do not modify code in this prompt.

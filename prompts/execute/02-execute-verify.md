@@ -36,6 +36,7 @@ Rules:
 - Do not push.
 - Do not open PRs.
 - Keep behavior simple; no retry loops.
+- Always execute against `{{WORKTREE_PATH}}` and write artifacts to the exact paths provided. If your starting `pwd` is elsewhere, switch to `{{WORKTREE_PATH}}` before making or verifying changes.
 - Use the normal inherited local environment. Do not rewrite temp/cache/network settings unless a specific check clearly requires it.
 - If a planned verification path proves impractical locally, record the blocker in verification output and continue with the best reliable substitute instead of thrashing on setup.
 - You may use multiple sub-agents or staged execution inside this prompt if useful.

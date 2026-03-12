@@ -46,6 +46,7 @@ Process:
 - `continue` always forces another round
 - a first consecutive `stop` still forces one confirmation round
 - a second consecutive `stop` ends the loop, even if that second stop round also made repository changes
+14. Always anchor cleanup, doc updates, and artifact writes to the execute worktree and output paths already provided. If your starting `pwd` is elsewhere, switch to the execute worktree before touching repo files.
 
 Rules:
 - Never push in this prompt.

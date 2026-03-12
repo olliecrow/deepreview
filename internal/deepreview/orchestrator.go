@@ -1208,9 +1208,9 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 				"DEFAULT_BRANCH":     defaultBranch,
 				"WORKER_ID":          fmt.Sprintf("%d", workerID),
 				"CONCURRENCY":        fmt.Sprintf("%d", o.config.Concurrency),
-				"WORKTREE_PATH":      ".",
-				"OUTPUT_REVIEW_PATH": filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID))),
-				"WORKER_NOTES_PATH":  filepath.ToSlash(filepath.Join(".deepreview", fmt.Sprintf("review-%02d.notes.md", workerID))),
+				"WORKTREE_PATH":      filepath.ToSlash(worktreePath),
+				"OUTPUT_REVIEW_PATH": filepath.ToSlash(workerReviewPaths[i]),
+				"WORKER_NOTES_PATH":  filepath.ToSlash(workerNotesPaths[i]),
 				"REVIEW_MODE_LABEL":  scope.ModeLabel,
 				"REVIEW_MODE_NOTE":   scope.ModeNote,
 				"REVIEW_PROCESS_1":   scope.ProcessStep1,
@@ -1405,11 +1405,7 @@ func (o *Orchestrator) runExecuteStage(
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
 		}
-		rel, err := filepath.Rel(executeWorktree, dst)
-		if err != nil {
-			rel = filepath.Base(dst)
-		}
-		localReviewReports = append(localReviewReports, filepath.ToSlash(rel))
+		localReviewReports = append(localReviewReports, filepath.ToSlash(dst))
 	}
 	reviewReportPathsBullet := ""
 	for _, p := range localReviewReports {
@@ -1425,7 +1421,7 @@ func (o *Orchestrator) runExecuteStage(
 		"DEFAULT_BRANCH":              defaultBranch,
 		"ROUND_NUMBER":                fmt.Sprintf("%d", round),
 		"MAX_ROUNDS":                  fmt.Sprintf("%d", maxRounds),
-		"WORKTREE_PATH":               ".",
+		"WORKTREE_PATH":               filepath.ToSlash(executeWorktree),
 		"REVIEW_REPORT_PATHS":         reviewReportPathsBullet,
 		"REVIEW_SUMMARIES_MARKDOWN":   reviewSummaryInjection,
 		"ROUND_MODE_NOTE":             roundModeNote,
@@ -1434,11 +1430,11 @@ func (o *Orchestrator) runExecuteStage(
 		"FANOUT_REVIEW_PATHS":     reviewReportPathsBullet,
 		"FANOUT_REVIEWS_MARKDOWN": reviewSummaryInjection,
 		"REVIEW_REPORTS_MARKDOWN": reviewSummaryInjection,
-		"ROUND_TRIAGE_PATH":       filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-triage.md")),
-		"ROUND_PLAN_PATH":         filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-plan.md")),
-		"ROUND_VERIFICATION_PATH": filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-verification.md")),
-		"ROUND_STATUS_PATH":       filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-status.json")),
-		"ROUND_SUMMARY_PATH":      filepath.ToSlash(filepath.Join(".deepreview", "artifacts", "round-summary.md")),
+		"ROUND_TRIAGE_PATH":       filepath.ToSlash(roundTriageWorktreePath),
+		"ROUND_PLAN_PATH":         filepath.ToSlash(roundPlanWorktreePath),
+		"ROUND_VERIFICATION_PATH": filepath.ToSlash(roundVerificationWorktreePath),
+		"ROUND_STATUS_PATH":       filepath.ToSlash(roundStatusWorktreePath),
+		"ROUND_SUMMARY_PATH":      filepath.ToSlash(roundSummaryWorktreePath),
 	}
 
 	var threadID *string
