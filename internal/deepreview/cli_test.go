@@ -211,6 +211,7 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"--concurrency <int>   (default: 4)",
 		"--max-rounds <int>    (default: 5)",
 		"--mode <pr|yolo>      (default: pr)",
+		"PR mode requires a GitHub-backed remote",
 		"DEEPREVIEW_WORKSPACE_ROOT",
 		"DEEPREVIEW_CALLER_CWD",
 		"DEEPREVIEW_REQUIRE_MULTICODEX",
@@ -317,9 +318,9 @@ func TestPrintDryRunPlanUsesRepoBranchLockLanguage(t *testing.T) {
 			Concurrency:  2,
 			MaxRounds:    3,
 		},
-		repoIdentity:    RepoIdentity{Owner: "example", Name: "repo"},
+		repoIdentity:    RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
 		workspaceRoot:   "/tmp/workspace",
-		managedRepoPath: "/tmp/workspace/repos/example/repo/branches/feature-test-1234567890abcdef",
+		managedRepoPath: "/tmp/workspace/repos/github/example/repo/branches/feature-test-1234567890abcdef",
 		promptsRoot:     filepath.Join(repoRoot(t), "prompts"),
 	}
 
@@ -329,7 +330,7 @@ func TestPrintDryRunPlanUsesRepoBranchLockLanguage(t *testing.T) {
 	if !strings.Contains(text, "acquire per-repo+branch run lock") {
 		t.Fatalf("expected dry-run plan to mention repo+branch lock, got:\n%s", text)
 	}
-	if !strings.Contains(text, "managed repo path: /tmp/workspace/repos/example/repo/branches/") {
+	if !strings.Contains(text, "managed repo path: /tmp/workspace/repos/github/example/repo/branches/") {
 		t.Fatalf("expected dry-run plan to show branch-scoped managed repo path, got:\n%s", text)
 	}
 	if !strings.Contains(text, "sync branch-scoped managed repository copy") {
@@ -599,6 +600,46 @@ func TestRunDoctorCommandUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) 
 			t.Fatalf("expected multicodex auth check output, got:\n%s", stdout)
 		}
 	})
+}
+
+func TestRunDoctorCommandRejectsPRModeForFilesystemOriginRemote(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "remote", "add", "origin", remote)
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runDoctorCommand([]string{repo, "--source-branch", "main"})
+	})
+	if code != 1 {
+		t.Fatalf("expected doctor to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "--mode pr requires a GitHub-backed repo identity") {
+		t.Fatalf("expected PR-mode filesystem remote error, got stderr=\n%s", stderr)
+	}
+}
+
+func TestRunDryRunCommandRejectsPRModeForFilesystemOriginRemote(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "remote", "add", "origin", remote)
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		return runDryRunCommand([]string{repo, "--source-branch", "main"})
+	})
+	if code != 1 {
+		t.Fatalf("expected dry-run to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+	}
+	if !strings.Contains(stderr, "--mode pr requires a GitHub-backed repo identity") {
+		t.Fatalf("expected PR-mode filesystem remote error, got stderr=\n%s", stderr)
+	}
 }
 
 func TestIsInterruptError(t *testing.T) {

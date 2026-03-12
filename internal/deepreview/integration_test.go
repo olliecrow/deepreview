@@ -177,6 +177,17 @@ func buildFakeBinaries(t *testing.T, root string) (string, string) {
 	return fakeCodex, fakeGH
 }
 
+func cloneUserRepoWithGitHubOrigin(t *testing.T, td, remote, userClone string) string {
+	t.Helper()
+	githubURL := githubSCPLikeCloneURL("example-org", "example-repo")
+	configureGitHubURLRewrite(t, githubURL, remote)
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "remote", "set-url", "origin", githubURL)
+	runCmd(t, td, nil, "git", "-C", userClone, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", userClone, "config", "user.name", "Test User")
+	return githubURL
+}
+
 func baseEnv(root, workspace, codexBin, ghBin string) []string {
 	env := append([]string{}, os.Environ()...)
 	pathPrefix := filepath.Dir(codexBin)
@@ -361,7 +372,11 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		"--mode", "yolo",
 		"--no-tui",
 	)
-	lockA := filepath.Join(workspace, "locks", "local", "user", FilesystemSafeKey("feature/a")+".lock")
+	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, userClone)
+	if err != nil {
+		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	}
+	lockA := filepath.Join(append([]string{workspace, "locks"}, append(identity.NamespaceSegments(), FilesystemSafeKey("feature/a")+".lock")...)...)
 	waitForPath(t, lockA, 5*time.Second)
 
 	cmdB, stdoutB, stderrB := startCmd(t, root, env,
@@ -398,8 +413,8 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		t.Fatalf("expected concurrent branch-b run to update remote branch")
 	}
 
-	managedA := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/a"))
-	managedB := filepath.Join(workspace, "repos", "local", "user", "branches", FilesystemSafeKey("feature/b"))
+	managedA := filepath.Join(append([]string{workspace, "repos"}, append(identity.NamespaceSegments(), "branches", FilesystemSafeKey("feature/a"))...)...)
+	managedB := filepath.Join(append([]string{workspace, "repos"}, append(identity.NamespaceSegments(), "branches", FilesystemSafeKey("feature/b"))...)...)
 	if _, err := os.Stat(filepath.Join(managedA, ".git")); err != nil {
 		t.Fatalf("expected branch-a managed repo to exist, got %v", err)
 	}
@@ -439,7 +454,7 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
@@ -472,10 +487,10 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
 		t.Fatalf("expected pr created summary output, got: %s", output)
 	}
-	if !strings.Contains(output, "delivery commits: https://github.com/local/user/commits/deepreview/feature/test/") {
+	if !strings.Contains(output, "delivery commits: https://github.com/example-org/example-repo/commits/deepreview/feature/test/") {
 		t.Fatalf("expected delivery commits summary output, got: %s", output)
 	}
-	if !strings.Contains(output, "repository reviewed: `local/user`") {
+	if !strings.Contains(output, "repository reviewed: `example-org/example-repo`") {
 		t.Fatalf("expected repository context in completion summary, got: %s", output)
 	}
 	if !strings.Contains(output, "source branch reviewed: `feature/test`") {
@@ -656,7 +671,7 @@ func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testi
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -680,7 +695,7 @@ func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testi
 	if !strings.Contains(output, "delivery status: incomplete (gh pr create did not return a pull request URL)") {
 		t.Fatalf("expected incomplete delivery reason in output, got: %s", output)
 	}
-	if !strings.Contains(output, "delivery commits: https://github.com/local/user/commits/deepreview/feature/test/") {
+	if !strings.Contains(output, "delivery commits: https://github.com/example-org/example-repo/commits/deepreview/feature/test/") {
 		t.Fatalf("expected delivery commits summary output, got: %s", output)
 	}
 	argsBytes, err := os.ReadFile(ghArgsPath)
@@ -738,7 +753,7 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
@@ -774,7 +789,19 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 		t.Fatalf("run should not report successful completion after interrupt")
 	}
 
-	lockFiles, err := filepath.Glob(filepath.Join(workspace, "locks", "*", "*.lock"))
+	var lockFiles []string
+	err := filepath.Walk(filepath.Join(workspace, "locks"), func(path string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if !info.IsDir() && strings.HasSuffix(path, ".lock") {
+			lockFiles = append(lockFiles, path)
+		}
+		return nil
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -829,7 +856,7 @@ func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -906,7 +933,7 @@ func TestEndToEndPRModePrivacyStopRequiresCleanRescan(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -967,7 +994,7 @@ func TestEndToEndPRModePrivacyDirtyWorktreeDoesNotCountAsComplete(t *testing.T) 
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1029,7 +1056,7 @@ func TestEndToEndPRModePrivacyDirtyBinaryRemediationDoesNotPassEarly(t *testing.
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1094,7 +1121,7 @@ func TestEndToEndPRModeAutoSanitizesCandidateBranchDocsWithoutMutatingDefaultBra
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1166,7 +1193,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1247,7 +1274,7 @@ func TestEndToEndPRModeUsesNormalInheritedCodexEnvironment(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1294,7 +1321,7 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1368,7 +1395,7 @@ func TestEndToEndPRModeAllowsNewTrackedFilesUnderRepoOwnedOperationalPath(t *tes
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1446,7 +1473,7 @@ func TestEndToEndPRModeReservesDeepreviewTmpArtifactsInsideRepoOwnedTmp(t *testi
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1515,7 +1542,7 @@ func TestRunFailsWhenExecuteForceCommitsNewOperationalArtifacts(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1570,7 +1597,7 @@ func TestEndToEndPRModeFailsWhenNoChangesButCodexStillRequestsAnotherRound(t *te
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1633,7 +1660,7 @@ func TestEndToEndPRModeCompletesAfterTwoConsecutiveStopDecisionsWithoutChanges(t
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")
 
@@ -1716,7 +1743,7 @@ func TestEndToEndPRModeCompletesWhenPrivacyRemediationRemovesAllDeliverableChang
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1790,7 +1817,7 @@ func TestRunStopsAfterSecondStopEvenWhenSecondRoundStillChangesCode(t *testing.T
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
@@ -1865,7 +1892,7 @@ func TestRunPRModeRunsPreparationBeforePrivacyAndDeliversPrepChanges(t *testing.
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -1938,7 +1965,7 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
@@ -2060,7 +2087,7 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
-	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)

@@ -22,7 +22,9 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview must isolate managed repository clones and run locks by repo plus source branch, so different branches of the same repo can run concurrently while same-branch runs remain serialized.
 - deepreview-managed commits must use the operator's resolved Git identity from the source repository Git config when present, otherwise the operator's global Git config, and must not depend on host GPG signing configuration.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
-- when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
+- when launched via wrappers that `cd` before execution, `DEEPREVIEW_CALLER_CWD` is an explicit caller-context override for repo/branch inference; the implicit `OLDPWD` fallback applies only when the current directory is the deepreview source repo so wrappers do not silently target the tool repo.
+- resolved repo identity must model GitHub-backed and filesystem-local sources explicitly; GitHub repos keep their stable `owner/repo` slug while filesystem-local repos use a deterministic filesystem identity derived from the canonicalized clone source.
+- in `pr` mode, the resolved repo identity must be GitHub-backed; local filesystem origin remotes are rejected before round execution.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization after refreshing the tracked upstream ref.
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
 - deepreview resolves the Codex prompt launcher by name instead of by hardcoded local repo path: use `multicodex` whenever it is available on `PATH`; otherwise fall back to `codex` unless `DEEPREVIEW_REQUIRE_MULTICODEX` is set.
@@ -83,7 +85,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - none when running inside a valid local GitHub repo context
   - otherwise provide enough explicit context (`<repo>` and/or `--source-branch`) to resolve target repo + source branch
 - optional inference override:
-  - `DEEPREVIEW_CALLER_CWD` can be set by launch wrappers to preserve caller repo inference when the wrapper changes directories before invoking deepreview.
+  - `DEEPREVIEW_CALLER_CWD` can be set by launch wrappers as an explicit caller-context override when the wrapper changes directories before invoking deepreview.
 - optional launcher requirement:
 - `DEEPREVIEW_REQUIRE_MULTICODEX=1` disables fallback to `codex exec` and fails preflight/doctor if `multicodex exec` is unavailable.
 - `DEEPREVIEW_CODEX_BIN` overrides only the codex fallback path used when `multicodex` is unavailable.

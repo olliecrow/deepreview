@@ -48,10 +48,20 @@ func resolveImplicitRepoState(gitBin string, cwdState *LocalGitHubRepoState) *Lo
 	if state := resolveCallerCWDRepoState(gitBin, cwdState); state != nil {
 		return state
 	}
-	if state := resolveOldPWDRepoState(gitBin, cwdState); state != nil {
-		return state
+	if callerContextFallbackAllowed(cwdState) {
+		if state := resolveOldPWDRepoState(gitBin, cwdState); state != nil {
+			return state
+		}
 	}
 	return cwdState
+}
+
+func callerContextFallbackAllowed(cwdState *LocalGitHubRepoState) bool {
+	if cwdState == nil {
+		return false
+	}
+	sourceRoot, ok := detectDeepreviewSourceRoot()
+	return ok && samePath(cwdState.Path, sourceRoot)
 }
 
 func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
@@ -70,11 +80,7 @@ func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *L
 }
 
 func resolveOldPWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
-	if cwdState == nil {
-		return nil
-	}
-	sourceRoot, ok := detectDeepreviewSourceRoot()
-	if !ok || !samePath(cwdState.Path, sourceRoot) {
+	if !callerContextFallbackAllowed(cwdState) {
 		return nil
 	}
 
