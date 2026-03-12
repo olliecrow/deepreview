@@ -508,6 +508,19 @@ References:
 `docs/spec.md`, `prompts/README.md`, `internal/deepreview/templates.go`, `internal/deepreview/template_test.go`, `internal/deepreview/orchestrator.go`
 
 Decision:
+Trust prompt discovery only from explicit override or deepreview-owned prompt roots.
+Context:
+deepreview is routinely launched from inside the target repository being reviewed. Trusting a caller checkout's own `./prompts` directory lets an untrusted repo override deepreview's review, execute, and delivery instructions.
+Rationale:
+Restricting default prompt discovery to explicit override or deepreview-owned locations preserves prompt editability for operators while keeping the prompt control plane out of the reviewed repository.
+Trade-offs:
+Ad hoc local prompt experimentation from arbitrary working directories now requires setting `DEEPREVIEW_PROMPTS_ROOT` explicitly.
+Enforcement:
+Default prompt discovery ignores caller-CWD `./prompts` and resolves only `DEEPREVIEW_PROMPTS_ROOT` or deepreview-owned executable/source-relative prompt directories; regression tests cover the caller-CWD hijack case.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
+
+Decision:
 Treat prompt `{{...}}` markers as strict template variables and fail fast if any remain unresolved at render time.
 Context:
 Prompt templates include runtime fields (for example round id, artifact paths, and injected review content) that must be concrete before execution.
@@ -629,11 +642,11 @@ In PR mode, pre-delivery privacy handling uses a bounded remediation loop (maxim
 Context:
 Hard-failing delivery on first privacy scan miss caused repeated runs to complete review/execute work but fail at the final gate, creating avoidable delivery dead-ends.
 Rationale:
-Treating privacy as a bounded fix loop keeps privacy hygiene proactive while preserving delivery momentum; Codex can stop early when it judges remediation complete.
+Treating privacy as a bounded fix loop keeps privacy hygiene proactive while preserving delivery momentum, while requiring clean post-attempt scans and a clean remediation worktree prevents a single inaccurate `stop` or uncommitted local edit from bypassing the gate.
 Trade-offs:
 Residual privacy findings may still exist when bounded attempts are exhausted; this approach prioritizes bounded autonomy and delivery continuity over hard-stop guarantees at this gate.
 Enforcement:
-PR-mode delivery runs a Codex-guided privacy remediation attempt loop (`max=3`) in a candidate-branch worktree before push/PR actions; attempts may stop early on Codex `stop`, and delivery proceeds by policy after bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
+PR-mode delivery runs a Codex-guided privacy remediation attempt loop (`max=3`) in a candidate-branch worktree before push/PR actions; attempts may stop early only after post-attempt commit-message and changed-file scans pass and the remediation worktree is clean, and delivery proceeds by policy after bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
 References:
 `internal/deepreview/orchestrator.go`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
 
@@ -694,11 +707,11 @@ When source branch is inferred, require local branch readiness: no tracked local
 Context:
 deepreview reviews remote branch state; inferred local context should match the remote state to avoid reviewing stale or partial work.
 Rationale:
-Failing fast on unsynced local context prevents accidental reviews of outdated remote state.
+Failing fast on unsynced local context prevents accidental reviews of outdated remote state, but the comparison is only trustworthy after refreshing the tracked upstream ref.
 Trade-offs:
 Adds strict pre-run checks that may require operator prep (`commit/push/pull`) before review can start.
 Enforcement:
-Inference path validates tracked-working-tree cleanliness and local/upstream SHA equality before run start.
+Inference path validates tracked-working-tree cleanliness and local/upstream SHA equality after refreshing the tracked upstream ref before run start.
 References:
 `internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `README.md`
 

@@ -126,9 +126,6 @@ func findPromptsRoot() (string, string, error) {
 	}
 
 	candidates := []string{}
-	if cwd, err := os.Getwd(); err == nil {
-		candidates = append(candidates, filepath.Join(cwd, "prompts"))
-	}
 	if exe, err := os.Executable(); err == nil {
 		exeDir := filepath.Dir(exe)
 		candidates = append(candidates,
@@ -1822,6 +1819,27 @@ func (o *Orchestrator) validateDeliveryFiles(candidateBranch string) ([]string, 
 	return files, nil
 }
 
+func (o *Orchestrator) evaluatePRPrivacyState(privacyWorktreePath, candidateBranch string) ([]string, error, error, error) {
+	updatedFiles, err := o.validateDeliveryFiles(candidateBranch)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	commitScanErr := o.deliveryCommitMessageScan(candidateBranch)
+	fileScanErr := o.secretHygieneScan(privacyWorktreePath, candidateBranch)
+	return updatedFiles, commitScanErr, fileScanErr, nil
+}
+
+func (o *Orchestrator) ensurePrivacyWorktreeClean(privacyWorktreePath string) error {
+	dirty, err := HasUncommittedChanges(privacyWorktreePath, o.config.GitBin)
+	if err != nil {
+		return err
+	}
+	if dirty {
+		return NewDeepReviewError("privacy remediation attempt left uncommitted worktree changes; commit remediation edits before reporting completion")
+	}
+	return nil
+}
+
 func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles []string) ([]string, error) {
 	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 	if err != nil {
@@ -1839,8 +1857,11 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 	}
 
 	for attempt := 1; attempt <= prPrivacyMaxAttempts; attempt++ {
-		commitScanErr := o.deliveryCommitMessageScan(candidateBranch)
-		fileScanErr := o.secretHygieneScan(privacyWorktreePath, candidateBranch)
+		updatedFiles, commitScanErr, fileScanErr, err := o.evaluatePRPrivacyState(privacyWorktreePath, candidateBranch)
+		if err != nil {
+			return nil, err
+		}
+		changedFiles = updatedFiles
 		if commitScanErr == nil && fileScanErr == nil {
 			o.reporter.StageProgress(
 				"delivery",
@@ -1856,7 +1877,7 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 				"privacy fix gate attempt %d/%d detected issues: %s",
 				attempt,
 				prPrivacyMaxAttempts,
-				summarizePrivacyScanIssues(commitScanErr, fileScanErr),
+				summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, nil),
 			),
 			nil,
 		)
@@ -1913,14 +1934,46 @@ func (o *Orchestrator) runPRPrivacyFixGate(candidateBranch string, changedFiles 
 			}
 		}
 
-		updatedFiles, err := o.validateDeliveryFiles(candidateBranch)
+		worktreeErr := o.ensurePrivacyWorktreeClean(privacyWorktreePath)
+		if worktreeErr != nil {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf(
+					"privacy remediation attempt %d/%d left uncommitted worktree changes; continuing bounded remediation loop: %s",
+					attempt,
+					prPrivacyMaxAttempts,
+					progressMessage(worktreeErr),
+				),
+				nil,
+			)
+		}
+
+		updatedFiles, commitScanErr, fileScanErr, err = o.evaluatePRPrivacyState(privacyWorktreePath, candidateBranch)
 		if err != nil {
 			return nil, err
 		}
 		changedFiles = updatedFiles
 
-		if codexRequestedStop {
+		if worktreeErr == nil && commitScanErr == nil && fileScanErr == nil {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf("privacy fix gate passed after remediation on attempt %d/%d", attempt, prPrivacyMaxAttempts),
+				nil,
+			)
 			return changedFiles, nil
+		}
+
+		if codexRequestedStop && (worktreeErr != nil || commitScanErr != nil || fileScanErr != nil) {
+			o.reporter.StageProgress(
+				"delivery",
+				fmt.Sprintf(
+					"privacy remediation attempt %d/%d requested stop but unresolved issues remain; continuing bounded remediation loop: %s",
+					attempt,
+					prPrivacyMaxAttempts,
+					sanitizePublicText(summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, worktreeErr)),
+				),
+				nil,
+			)
 		}
 	}
 
@@ -1939,6 +1992,23 @@ func summarizePrivacyScanIssues(commitScanErr, fileScanErr error) string {
 	}
 	if fileScanErr != nil {
 		issues = append(issues, "changed-file scan: "+progressMessage(fileScanErr))
+	}
+	if len(issues) == 0 {
+		return "none"
+	}
+	return strings.Join(issues, " | ")
+}
+
+func summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, worktreeErr error) string {
+	issues := make([]string, 0, 3)
+	if commitScanErr != nil {
+		issues = append(issues, "commit-message scan: "+progressMessage(commitScanErr))
+	}
+	if fileScanErr != nil {
+		issues = append(issues, "changed-file scan: "+progressMessage(fileScanErr))
+	}
+	if worktreeErr != nil {
+		issues = append(issues, "worktree state: "+progressMessage(worktreeErr))
 	}
 	if len(issues) == 0 {
 		return "none"

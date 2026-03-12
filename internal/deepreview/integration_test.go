@@ -829,6 +829,129 @@ func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
 	}
 }
 
+func TestEndToEndPRModePrivacyStopRequiresCleanRescan(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice"+"@corp.com",
+		"FAKE_CODEX_PRIVACY_DECISION=stop",
+		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
+	)
+	output, logs := runCmdCapture(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected PR creation after bounded attempts, got: %s", output)
+	}
+	if !strings.Contains(logs, "requested stop but unresolved issues remain; continuing bounded remediation loop") {
+		t.Fatalf("expected stop request to be ignored until scans are clean, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "privacy fix gate reached max attempts (3); proceeding with delivery by policy") {
+		t.Fatalf("expected bounded max-attempt policy log, got:\n%s", logs)
+	}
+}
+
+func TestEndToEndPRModePrivacyDirtyWorktreeDoesNotCountAsComplete(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice"+"@corp.com",
+		"FAKE_CODEX_PRIVACY_DECISION=stop",
+		"FAKE_CODEX_PRIVACY_WRITE_UNCOMMITTED_FILE=1",
+		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
+	)
+	output, logs := runCmdCapture(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected PR creation after bounded attempts, got: %s", output)
+	}
+	if !strings.Contains(logs, "left uncommitted worktree changes; continuing bounded remediation loop") {
+		t.Fatalf("expected dirty worktree remediation to be rejected, got:\n%s", logs)
+	}
+	if !strings.Contains(logs, "privacy fix gate reached max attempts (3); proceeding with delivery by policy") {
+		t.Fatalf("expected bounded max-attempt policy log, got:\n%s", logs)
+	}
+}
+
 func TestEndToEndPRModeAutoSanitizesCandidateBranchDocsWithoutMutatingDefaultBranch(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)

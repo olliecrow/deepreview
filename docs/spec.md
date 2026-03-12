@@ -23,7 +23,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview-managed commits must use the operator's resolved Git identity from the source repository Git config when present, otherwise the operator's global Git config, and must not depend on host GPG signing configuration.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
-- source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization.
+- source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization after refreshing the tracked upstream ref.
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, then lock/worktree cleanup runs before process exit.
@@ -63,7 +63,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - run both gates in an isolated detached worktree created at the candidate branch HEAD to match the exact content being delivered
 - default delivery mode is `pr` and must not push source branch directly.
 - in `pr` mode, run a bounded pre-delivery privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree so changed-file scans and auto-remediation inspect the exact candidate content rather than the managed repo's default checked-out branch.
-- in `pr` mode, privacy remediation attempts may stop early when Codex reports `stop`; otherwise proceed automatically after the configured max attempts.
+- in `pr` mode, privacy remediation attempts may stop early only after post-attempt privacy scans are clean and the remediation worktree has no uncommitted changes; otherwise proceed automatically after the configured max attempts.
 - in `pr` mode, privacy remediation is a fix gate (attempted remediation + scan feedback), not a hard terminal blocker after max attempts.
 - in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
@@ -186,6 +186,7 @@ PR bodies should include these sections in the final Codex-generated output:
 ## Prompt-template contract
 - Prompt templates are file-based and unversioned.
 - Prompt root directory is `prompts/`.
+- Default prompt discovery trusts only `DEEPREVIEW_PROMPTS_ROOT` or deepreview-owned executable/source-relative prompt directories; a target repository's own `./prompts` directory is never auto-trusted.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
 - PR mode uses one pre-delivery privacy remediation template: `prompts/delivery/privacy-fix.md`.

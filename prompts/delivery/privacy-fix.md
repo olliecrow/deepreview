@@ -34,7 +34,7 @@ Process:
 5. If no safe high-confidence fixes remain, do not force speculative edits.
 
 Decision policy:
-- `stop` when you judge privacy remediation is sufficiently complete for delivery.
+- `stop` only when you judge privacy remediation is sufficiently complete for delivery, the worktree is clean, and remaining privacy scans should pass without relying on uncommitted edits.
 - `continue` when another remediation attempt is likely to add meaningful value.
 
 Output:
