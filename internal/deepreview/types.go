@@ -26,8 +26,6 @@ type ReviewConfig struct {
 	RunID               string         `json:"run_id"`
 	GitBin              string         `json:"git_bin"`
 	CodexBin            string         `json:"codex_bin"`
-	CodexModel          string         `json:"codex_model"`
-	CodexReasoning      string         `json:"codex_reasoning_effort"`
 	GhBin               string         `json:"gh_bin"`
 	CodexTimeoutSeconds int            `json:"codex_timeout_seconds"`
 	CodexTimeout        time.Duration  `json:"-"`

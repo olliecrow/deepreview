@@ -19,7 +19,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 2. It launches several independent review workers in parallel.
 3. Each independent review worker must complete and write its review markdown report; deepreview monitors all Codex workers for activity and restarts stalled workers with bounded retries to avoid pipeline stalls.
 4. The execute stage runs three prompts in one Codex thread: consolidate and plan, execute and verify, cleanup/summary/commit.
-5. Canonical round artifacts, logs, temp directories, and caches are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside its isolated worktree sandbox first, and deepreview copies the canonical artifacts back into the run directory.
+5. Canonical round artifacts and logs are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside the active worktree first, and deepreview copies the canonical artifacts back into the run directory.
 6. If execute says `continue`, deepreview always runs another review round.
 7. If execute says `stop` once, deepreview still runs one confirmation round.
 8. If execute says `stop` for two consecutive rounds, deepreview stops the loop, even if the second stop round also changed code.
@@ -41,15 +41,17 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 Optional launcher:
 
 - `multicodex`
-  - when available on `PATH`, deepreview prefers `multicodex exec` for Codex prompt runs
+  - when available on `PATH`, deepreview always uses `multicodex exec` for Codex prompt runs
   - when unavailable, deepreview falls back to `codex exec`
   - set `DEEPREVIEW_REQUIRE_MULTICODEX=1` to fail fast instead of falling back
+  - `DEEPREVIEW_CODEX_BIN` only changes the codex fallback path; it does not override a working `multicodex`
 
 ## Safety and isolation
 
 - Review and execute work happen under `~/deepreview`, not in your local checkout.
 - Run-scoped logs, canonical artifacts, temp directories, and caches live under `~/deepreview/runs/<run-id>/`.
 - Codex workers stage prompt-written artifacts under reserved worktree-local `.deepreview/` paths, which deepreview excludes from delivery and copies back into the run directory for canonical storage.
+- Codex prompt runs use your normal local Codex configuration by default; deepreview does not force a separate profile/model/runtime layer.
 - Managed repository state is isolated per repo and source branch, so different branches of the same repo can run concurrently without sharing a checkout.
 - deepreview blocks concurrent runs only when both the repo and source branch match.
 - Default mode works on a delivery branch and opens a pull request.

@@ -21,22 +21,23 @@ Execution requirements:
 5. Prioritize fixes for critical/high-severity accepted items first.
 6. Execute only accepted `critical|high` items; do not add low/medium severity cleanup or optional improvements.
 7. Keep implementation simple and pragmatic; avoid speculative over-engineering.
-8. Maintain a high no-regret bar while implementing; if confidence drops materially, stop and document instead of forcing changes.
-9. Prefer simplification outcomes only when they are directly required for accepted critical/high fixes.
-10. Run codex-led verification:
+8. Prefer deleting dead code, removing unnecessary branches, or shrinking scope over adding new machinery when that cleanly resolves the accepted issue.
+9. Maintain a high no-regret bar while implementing; if confidence drops materially, stop and document instead of forcing changes.
+10. Prefer simplification outcomes when they clearly improve the accepted critical/high fix or remove obvious bloat uncovered during that fix.
+11. Run codex-led verification:
    - run relevant tests when available
    - run pre-commit checks when available
    - run locally runnable CI-like checks when available
-11. Add quick empirical checks (for changed behavior) when feasible and not long-running.
-12. Capture command-level evidence and outcomes.
-13. If verification fails, stop and report failures clearly with actionable context.
+12. Add quick empirical checks (for changed behavior) when feasible and not long-running.
+13. Capture command-level evidence and outcomes.
+14. If verification fails, stop and report failures clearly with actionable context.
 
 Rules:
 - Do not push.
 - Do not open PRs.
 - Keep behavior simple; no retry loops.
-- The inherited environment already points temp/cache paths at writable worktree-local directories; use that environment exactly as inherited and do not override `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`, `TMPDIR`, `TMP`, or `TEMP`.
-- If a Go verification command starts trying to download modules, requires network access, or otherwise cannot run offline with the inherited environment, stop that specific check, record the blocker in verification output, and continue with the best reliable offline substitute instead of thrashing on cache/network setup.
+- Use the normal inherited local environment. Do not rewrite temp/cache/network settings unless a specific check clearly requires it.
+- If a planned verification path proves impractical locally, record the blocker in verification output and continue with the best reliable substitute instead of thrashing on setup.
 - You may use multiple sub-agents or staged execution inside this prompt if useful.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.

@@ -43,7 +43,7 @@ func createSyncedGitHubLikeRepo(t *testing.T, branch string) string {
 	if err := os.MkdirAll(filepath.Dir(remote), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	githubURL := githubSCPLikeCloneURL("example-org", FilesystemSafeKey(td))
+	githubURL := githubSCPLikeCloneURL("example-org", "example-repo")
 	configureGitHubURLRewrite(t, githubURL, remote)
 
 	runGitCommand(t, td, "init", "--bare", remote)

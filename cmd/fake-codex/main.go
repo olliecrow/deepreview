@@ -514,31 +514,6 @@ func hasArg(args []string, target string) bool {
 	return false
 }
 
-func requireSandboxGoEnvWithinCWD() error {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return err
-	}
-	required := []string{"GOCACHE", "GOMODCACHE", "GOTMPDIR", "TMPDIR"}
-	for _, key := range required {
-		value := strings.TrimSpace(os.Getenv(key))
-		if value == "" {
-			return fmt.Errorf("missing required %s", key)
-		}
-		if !pathWithinBase(cwd, value) {
-			return fmt.Errorf("%s must stay within cwd: %s", key, value)
-		}
-		info, err := os.Stat(value)
-		if err != nil {
-			return fmt.Errorf("%s path stat failed: %w", key, err)
-		}
-		if !info.IsDir() {
-			return fmt.Errorf("%s must point to a directory: %s", key, value)
-		}
-	}
-	return nil
-}
-
 func runGo(args ...string) error {
 	cmd := exec.Command("go", args...)
 	// Keep stdout reserved for Codex JSON events so inherited go-tool output
@@ -578,12 +553,6 @@ func main() {
 	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK")) != "" && !hasArg(args, "--skip-git-repo-check") {
 		fmt.Fprintln(os.Stderr, "missing required --skip-git-repo-check")
 		os.Exit(1)
-	}
-	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD")) != "" {
-		if err := requireSandboxGoEnvWithinCWD(); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
 	}
 	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SELF_AUDIT_REVIEW_PROMPT")) != "" && strings.Contains(prompt, "independent deepreview reviewer in the independent review stage") {
 		if err := requireSelfAuditReviewPrompt(prompt); err != nil {

@@ -28,10 +28,11 @@ Rules:
 15. Keep primary focus on critical red flags and serious merge-blocking issues.
 16. Do not include optional/non-blocking improvement suggestions; keep output focused on critical/high, merge-relevant issues only.
 17. Avoid speculative hardening, rare-edge-case complexity, or broad refactors unless impact is demonstrably material and urgent.
-18. Optional: keep lightweight, useful working notes in `{{WORKER_NOTES_PATH}}` while investigating.
-19. Notes are scratch artifacts only; do not pad them for heartbeat or busywork.
-20. If you use Go tooling, the inherited environment already points temp/cache paths at writable worktree-local directories; use that environment exactly as inherited and do not override `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`, `TMPDIR`, `TMP`, or `TEMP`.
-21. If a Go command starts trying to download modules, touch the network, or fails because dependencies are unavailable offline, stop that verification path and continue with offline inspection instead of burning the whole review on cache/network setup.
+18. If a serious issue is best fixed by deleting code, reducing scope, or removing unnecessary complexity, say that plainly; do not bias toward additive fixes.
+19. Optional: keep lightweight, useful working notes in `{{WORKER_NOTES_PATH}}` while investigating.
+20. Notes are scratch artifacts only; do not pad them for heartbeat or busywork.
+21. Use the normal inherited local environment. Do not rewrite temp/cache/network settings unless a specific check clearly requires it.
+22. If a verification path proves impractical locally, record the blocker and continue with the best reliable substitute instead of thrashing on setup.
 
 {{REVIEW_MODE_NOTE}}
 

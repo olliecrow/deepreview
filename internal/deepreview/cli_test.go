@@ -61,6 +61,27 @@ func writeFakeTool(t *testing.T, dir, name string) string {
 	return path
 }
 
+func writeFakeMulticodexTool(t *testing.T, dir string) string {
+	t.Helper()
+	path := filepath.Join(dir, "multicodex")
+	script := `#!/bin/sh
+case "$1" in
+  status)
+    printf '%s\n' 'profile: logged-in'
+    exit 0
+    ;;
+  exec)
+    exit 0
+    ;;
+esac
+exit 0
+`
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake multicodex: %v", err)
+	}
+	return path
+}
+
 func TestParseReviewArgsYoloAliasOverridesMode(t *testing.T) {
 	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature/test", "--mode", "pr", "--yolo"}, time.Unix(1700000000, 0))
 	if err != nil {
@@ -116,12 +137,6 @@ func TestParseReviewArgsDefaults(t *testing.T) {
 	}
 	if parsed.Config.ReviewMaxRestarts != defaultReviewMaxRestarts {
 		t.Fatalf("expected review max restarts %d, got %d", defaultReviewMaxRestarts, parsed.Config.ReviewMaxRestarts)
-	}
-	if parsed.Config.CodexModel != forcedCodexModel {
-		t.Fatalf("expected codex model %s, got %s", forcedCodexModel, parsed.Config.CodexModel)
-	}
-	if parsed.Config.CodexReasoning != forcedCodexReasoningEffort {
-		t.Fatalf("expected codex reasoning %s, got %s", forcedCodexReasoningEffort, parsed.Config.CodexReasoning)
 	}
 	if parsed.NoTUI {
 		t.Fatalf("expected --no-tui default to false")
@@ -205,8 +220,7 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"If <repo> is omitted:",
 		"Troubleshooting:",
 		"press Ctrl+C once",
-		"Codex model: gpt-5.4",
-		"Codex reasoning effort: high",
+		"Codex execution uses your normal local Codex config/profile",
 		"Codex prompt timeout per prompt: 3600s",
 	} {
 		if !strings.Contains(help, want) {
@@ -490,7 +504,13 @@ func TestRunDoctorCommandBypassesReviewReadinessValidation(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
 	toolDir := t.TempDir()
-	t.Setenv("DEEPREVIEW_CODEX_BIN", writeFakeTool(t, toolDir, "codex"))
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+filepath.Dir(gitPath))
+	t.Setenv("DEEPREVIEW_GIT_BIN", gitPath)
+	writeFakeMulticodexTool(t, toolDir)
 	t.Setenv("DEEPREVIEW_GH_BIN", writeFakeTool(t, toolDir, "gh"))
 
 	withWorkingDir(t, repo, func() {

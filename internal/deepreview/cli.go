@@ -33,8 +33,6 @@ const (
 	defaultReviewInactivitySec = 300
 	defaultReviewActivityPollS = 15
 	defaultReviewMaxRestarts   = 1
-	forcedCodexModel           = "gpt-5.4"
-	forcedCodexReasoningEffort = "high"
 )
 
 func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
@@ -127,8 +125,6 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		RunID:               runID,
 		GitBin:              gitBin,
 		CodexBin:            envOrDefault("DEEPREVIEW_CODEX_BIN", "codex"),
-		CodexModel:          forcedCodexModel,
-		CodexReasoning:      forcedCodexReasoningEffort,
 		GhBin:               envOrDefault("DEEPREVIEW_GH_BIN", "gh"),
 		CodexTimeoutSeconds: defaultCodexTimeoutSeconds,
 		CodexTimeout:        defaultCodexTimeoutSeconds * time.Second,
@@ -226,7 +222,7 @@ Usage:
 Arguments:
   <repo>
     Repository locator. Supported forms:
-      - local git repo path (directory containing .git and a supported GitHub origin remote)
+      - local git repo path (directory containing .git and a supported GitHub or local filesystem origin remote)
       - owner/repo
       - GitHub remote URL (HTTPS, SSH, or SCP-style GitHub clone URL)
     Context:
@@ -285,6 +281,7 @@ Optional flags:
 
   DEEPREVIEW_GIT_BIN          (default: git)
   DEEPREVIEW_CODEX_BIN        (default: codex)
+    Fallback `+"`codex`"+` binary override used only when `+"`multicodex`"+` is unavailable.
   DEEPREVIEW_GH_BIN           (default: gh)
     Tool binary overrides (name or absolute path).
 
@@ -303,8 +300,7 @@ Optional flags:
     Maximum inactivity-triggered restarts per worker before the stage fails.
 
 Operational defaults:
-  Codex model: %s
-  Codex reasoning effort: %s
+  Codex execution uses your normal local Codex config/profile for model, approvals, and network access.
   Codex prompt timeout per prompt: %ds
   Run ID: auto-generated UTC timestamp + random suffix
 
@@ -323,7 +319,7 @@ Troubleshooting:
   - Terminal rendering issues: pass --no-tui for stable text logs.
   - To stop a run safely at any time, press Ctrl+C once (deepreview cancels and runs cleanup).
   - Invalid mode: allowed values are only pr or yolo (case-insensitive).
-`, defaultConcurrency, defaultMaxRounds, ModePR, defaultReviewInactivitySec, defaultReviewActivityPollS, defaultReviewMaxRestarts, forcedCodexModel, forcedCodexReasoningEffort, defaultCodexTimeoutSeconds)
+`, defaultConcurrency, defaultMaxRounds, ModePR, defaultReviewInactivitySec, defaultReviewActivityPollS, defaultReviewMaxRestarts, defaultCodexTimeoutSeconds)
 }
 
 func DoctorHelpText() string {
@@ -790,7 +786,7 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 			})
 		}
 	} else {
-		codexStatus, codexErr := RunCommand([]string{launcher.Command, "login", "status"}, "", "", false, 20*time.Second)
+		codexStatus, codexErr := RunCommand(launcher.withArgs("login", "status"), "", "", false, 20*time.Second)
 		if codexErr != nil {
 			checks = append(checks, doctorCheck{
 				Name:   "codex login status",
