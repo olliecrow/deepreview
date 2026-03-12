@@ -242,6 +242,70 @@ func TestSecretHygieneScanIgnoresPreexistingSecretPatternInModifiedBinaryFile(t 
 	}
 }
 
+func TestSecretHygieneScanRejectsBoundarySpanningLocalPathInModifiedBinaryFile(t *testing.T) {
+	o, repoPath, _ := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	basePath := strings.Join([]string{"", "Users", "alice", "project"}, "/")
+	headPath := strings.Join([]string{"", "Users", "bob", "project"}, "/")
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "feature/test")
+	binaryPath := filepath.Join(repoPath, "secret.bin")
+	if err := os.WriteFile(binaryPath, []byte("prefix\x00"+basePath+"\x00suffix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "seed binary path fixture")
+	sourceSHA := runGitTest(t, repoParent, "-C", repoPath, "rev-parse", "HEAD")
+	runGitTest(t, repoParent, "-C", repoPath, "update-ref", "refs/remotes/origin/feature/test", sourceSHA)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(binaryPath, []byte("prefix\x00"+headPath+"\x00suffix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "modify binary local path")
+
+	err := o.secretHygieneScan(repoPath, "candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail for boundary-spanning local path in modified binary file")
+	}
+	if !strings.Contains(err.Error(), "local path pattern") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSecretHygieneScanRejectsBoundarySpanningAKIAPatternInModifiedBinaryFile(t *testing.T) {
+	o, repoPath, _ := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	baseToken := "AKIA" + strings.Repeat("0", 16)
+	headToken := "AKIA" + "ABCDEFGHIJKLMNOP"
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "feature/test")
+	binaryPath := filepath.Join(repoPath, "secret.bin")
+	if err := os.WriteFile(binaryPath, []byte("prefix\x00"+baseToken+"\x00suffix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "seed binary secret fixture")
+	sourceSHA := runGitTest(t, repoParent, "-C", repoPath, "rev-parse", "HEAD")
+	runGitTest(t, repoParent, "-C", repoPath, "update-ref", "refs/remotes/origin/feature/test", sourceSHA)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(binaryPath, []byte("prefix\x00"+headToken+"\x00suffix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "modify binary boundary-spanning secret")
+
+	err := o.secretHygieneScan(repoPath, "candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail for boundary-spanning AKIA pattern in modified binary file")
+	}
+	if !strings.Contains(err.Error(), "secret-like pattern") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
 	repoParent := filepath.Dir(repoPath)

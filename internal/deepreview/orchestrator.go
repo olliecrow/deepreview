@@ -2351,14 +2351,21 @@ func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error
 		if err != nil || !isBinaryDiff {
 			continue
 		}
-		content, err := AddedBinaryContentBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		headContent, err := FileContentAtRef(o.managedRepoPath, o.config.GitBin, candidateBranch, rel)
 		if err != nil {
 			continue
 		}
-		if len(content) == 0 {
+		if len(headContent) == 0 {
 			continue
 		}
-		if err := privacyScanText(string(content), rel); err != nil {
+		var baseContent []byte
+		if status == "M" {
+			baseContent, err = FileContentAtRef(o.managedRepoPath, o.config.GitBin, baseRef, rel)
+			if err != nil {
+				continue
+			}
+		}
+		if err := privacyScanModifiedBinaryText(string(baseContent), string(headContent), rel); err != nil {
 			return err
 		}
 	}
@@ -2385,6 +2392,70 @@ func privacyScanText(text, rel string) error {
 		}
 	}
 	return nil
+}
+
+func privacyScanModifiedBinaryText(baseText, headText, rel string) error {
+	if hasNewDisallowedEmail(baseText, headText) {
+		return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
+	}
+	if hasNewRegexMatch(baseText, headText, secretRiskyPatterns) {
+		return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
+	}
+	if hasNewRegexMatch(baseText, headText, personalRiskyPatterns) {
+		return NewDeepReviewError("privacy scan failed: personal-info-like pattern matched in %s", rel)
+	}
+	if hasNewRegexMatch(baseText, headText, privatePathPatterns) {
+		return NewDeepReviewError("privacy scan failed: local path pattern matched in %s", rel)
+	}
+	return nil
+}
+
+func hasNewDisallowedEmail(baseText, headText string) bool {
+	return hasNewExactMatch(disallowedEmailMatches(baseText), disallowedEmailMatches(headText))
+}
+
+func disallowedEmailMatches(text string) []string {
+	allMatches := emailPattern.FindAllString(text, -1)
+	matches := make([]string, 0, len(allMatches))
+	for _, match := range allMatches {
+		if isAllowedPlaceholderEmail(match) {
+			continue
+		}
+		matches = append(matches, match)
+	}
+	return matches
+}
+
+func hasNewRegexMatch(baseText, headText string, patterns []*regexp.Regexp) bool {
+	return hasNewExactMatch(regexMatchKeys(baseText, patterns), regexMatchKeys(headText, patterns))
+}
+
+func regexMatchKeys(text string, patterns []*regexp.Regexp) []string {
+	var matches []string
+	for idx, pattern := range patterns {
+		for _, match := range pattern.FindAllString(text, -1) {
+			matches = append(matches, fmt.Sprintf("%d:%s", idx, match))
+		}
+	}
+	return matches
+}
+
+func hasNewExactMatch(baseMatches, headMatches []string) bool {
+	if len(headMatches) == 0 {
+		return false
+	}
+	counts := make(map[string]int, len(baseMatches))
+	for _, match := range baseMatches {
+		counts[match]++
+	}
+	for _, match := range headMatches {
+		if counts[match] > 0 {
+			counts[match]--
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 const localPathScanFailurePrefix = "privacy scan failed: local path pattern matched in "

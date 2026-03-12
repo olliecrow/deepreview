@@ -206,37 +206,6 @@ func TestCommitAllChangesUsesProvidedIdentityAndDisablesSigning(t *testing.T) {
 	}
 }
 
-func TestChangedHeadWindowTrimsSharedPrefixAndSuffix(t *testing.T) {
-	tests := []struct {
-		name string
-		base []byte
-		head []byte
-		want []byte
-	}{
-		{
-			name: "modified payload keeps only changed middle",
-			base: []byte("prefix\x00safe\x00suffix"),
-			head: []byte("prefix\x00SECRETTOKEN123\x00suffix"),
-			want: []byte("SECRETTOKEN123"),
-		},
-		{
-			name: "appended bytes ignore preexisting sensitive prefix",
-			base: []byte("prefix\x00SECRETTOKEN123\x00suffix"),
-			head: []byte("prefix\x00SECRETTOKEN123\x00suffix\x00harmless"),
-			want: []byte("\x00harmless"),
-		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := changedHeadWindow(tc.base, tc.head)
-			if string(got) != string(tc.want) {
-				t.Fatalf("unexpected changed window\nwant=%q\ngot=%q", string(tc.want), string(got))
-			}
-		})
-	}
-}
-
 func TestResolveCommitIdentityUsesRepoConfigForLocalRepo(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
