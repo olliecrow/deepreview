@@ -277,6 +277,11 @@ func handlePrompt(prompt string) (string, error) {
 
 	if strings.Contains(prompt, "pre-delivery privacy remediation stage") {
 		statusPath := regexGet("Output status path: `([^`]+)`", prompt)
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_WRITE_UNCOMMITTED_FILE")) != "" {
+			if err := writeText(filepath.Join(".", "privacy-fix-dirty.txt"), "dirty remediation\n"); err != nil {
+				return "", err
+			}
+		}
 		if statusPath != "" {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD")) != "" {
 				cwd, err := os.Getwd()

@@ -209,6 +209,9 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 	if err != nil {
 		return err
 	}
+	if err := refreshUpstreamRef(gitBin, state.Path, upstreamRef); err != nil {
+		return err
+	}
 
 	localSHA, err := Git(state.Path, gitBin, true, "rev-parse", "--verify", "HEAD")
 	if err != nil {
@@ -232,6 +235,18 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 		ahead,
 		behind,
 	)
+}
+
+func refreshUpstreamRef(gitBin, repoPath, upstreamRef string) error {
+	parts := strings.SplitN(strings.TrimSpace(upstreamRef), "/", 2)
+	if len(parts) != 2 || strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return NewDeepReviewError("unable to refresh upstream ref `%s`: unsupported upstream format", upstreamRef)
+	}
+	refspec := "refs/heads/" + parts[1] + ":refs/remotes/" + upstreamRef
+	if _, err := RunCommand([]string{gitBin, "-C", repoPath, "fetch", "--no-tags", "--prune", parts[0], refspec}, "", "", true, 0); err != nil {
+		return NewDeepReviewError("unable to refresh upstream ref `%s` before readiness check: %s", upstreamRef, progressMessage(err))
+	}
+	return nil
 }
 
 func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {

@@ -21,7 +21,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - UI mode (full-screen UI by default when terminal capabilities are valid; optional `--no-tui` force-off for structured text logs)
 - if source branch is inferred from local repo context, require local readiness:
   - no tracked local changes
-  - local branch exactly synchronized with upstream remote branch
+  - local branch exactly synchronized with upstream remote branch after refreshing the tracked upstream ref
 
 2. Prepare managed workspace under `~/deepreview`:
 - replace stale managed checkout for the source branch with a fresh clone
@@ -60,7 +60,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 4. Final delivery (single push point):
 - require completed round execution and no blocking verification failures
 - run delivery quality gates (`pre-commit --all-files`, optional `./setup_env.sh`) in a detached worktree at candidate HEAD so gating matches deliverable branch content
-- `pr` mode (default): run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree, then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; terminal outcomes are complete PR, incomplete draft PR, or failure
+- `pr` mode (default): run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree; early stop is allowed only after clean post-attempt scans and a clean remediation worktree; then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; terminal outcomes are complete PR, incomplete draft PR, or failure
 - `yolo` mode: push committed candidate state directly to source branch
 
 5. Finalization:
@@ -80,7 +80,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - `yolo` mode is explicit opt-in.
 - no pushes occur during intermediate rounds.
 - verification quality gates block final delivery.
-- in PR mode, privacy remediation runs as a bounded pre-delivery Codex loop (up to 3 attempts) over delivery commit messages and changed files, then delivery proceeds by policy.
+- in PR mode, privacy remediation runs as a bounded pre-delivery Codex loop (up to 3 attempts) over delivery commit messages and changed files; early stop requires clean post-attempt scans and a clean remediation worktree, then delivery proceeds by policy if bounded attempts are exhausted.
 - privacy guardrails remain enforced on delivery/public text surfaces (PR title/body and delivery summaries).
 - local terminal progress/error output is intentionally literal and unredacted for operator debugging.
 - verification execution is codex-led (tests, pre-commit checks, locally runnable CI-like checks when available) with explicit evidence in round/final summaries.

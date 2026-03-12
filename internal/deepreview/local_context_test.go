@@ -93,6 +93,36 @@ func TestInferRepoAndBranchRejectsAheadOfRemote(t *testing.T) {
 	})
 }
 
+func TestInferRepoAndBranchRejectsWhenRemoteAdvancedWithoutLocalFetch(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	originURL := strings.TrimSpace(runGitCommand(t, repo, "config", "--get", "remote.origin.url"))
+	if originURL == "" {
+		t.Fatal("expected origin remote URL")
+	}
+
+	otherClone := filepath.Join(t.TempDir(), "other")
+	runGitCommand(t, filepath.Dir(otherClone), "clone", originURL, otherClone)
+	runGitCommand(t, otherClone, "config", "user.email", "test@example.com")
+	runGitCommand(t, otherClone, "config", "user.name", "Test User")
+	runGitCommand(t, otherClone, "checkout", "feature/test")
+	if err := os.WriteFile(filepath.Join(otherClone, "README.md"), []byte("remote advanced\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, otherClone, "add", "README.md")
+	runGitCommand(t, otherClone, "commit", "-m", "remote advance")
+	runGitCommand(t, otherClone, "push", "origin", "feature/test")
+
+	withWorkingDir(t, repo, func() {
+		_, _, err := inferRepoAndBranch("git", "", "")
+		if err == nil {
+			t.Fatalf("expected stale local tracking ref to be detected after refresh")
+		}
+		if !strings.Contains(err.Error(), "not synchronized") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestInferRepoAndBranchExplicitSourceBranchRejectsTrackedUncommittedChanges(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {
