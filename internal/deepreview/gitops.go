@@ -100,16 +100,24 @@ func ResolveDefaultBranch(repoPath, gitBin string) (string, error) {
 		}
 	}
 
-	remoteBranches, err := Git(repoPath, gitBin, true, "branch", "-r")
-	if err != nil {
-		return "", err
-	}
 	for _, candidate := range []string{"main", "master"} {
-		if strings.Contains(remoteBranches, "origin/"+candidate) {
+		exists, err := remoteRefExists(repoPath, gitBin, "refs/remotes/origin/"+candidate)
+		if err != nil {
+			return "", err
+		}
+		if exists {
 			return candidate, nil
 		}
 	}
 	return "", NewDeepReviewError("unable to resolve default branch from origin/HEAD")
+}
+
+func remoteRefExists(repoPath, gitBin, ref string) (bool, error) {
+	completed, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--verify", "--quiet", ref}, "", "", false, 0)
+	if err != nil {
+		return false, err
+	}
+	return completed.ReturnCode == 0 && strings.TrimSpace(completed.Stdout) != "", nil
 }
 
 func RequireRemoteBranch(repoPath, gitBin, branch string) (string, error) {

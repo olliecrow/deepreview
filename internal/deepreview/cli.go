@@ -226,9 +226,9 @@ Usage:
 Arguments:
   <repo>
     Repository locator. Supported forms:
-      - local git repo path (directory containing .git and origin remote)
+      - local git repo path (directory containing .git and a supported GitHub origin remote)
       - owner/repo
-      - github remote URL (https://... or git@...)
+      - GitHub remote URL (https://..., ssh://git@github.com/..., or git@github.com:...)
     Context:
       Local path mode reads remote.origin.url and clones/fetches in managed workspace.
       deepreview never runs review work directly in your local repo directory.
