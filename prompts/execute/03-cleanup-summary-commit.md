@@ -1,6 +1,6 @@
 You are in deepreview execute stage for round `{{ROUND_NUMBER}}`.
 
-This is prompt 4 of 4, in the same Codex chat context as prompts 1-3.
+This is prompt 3 of 3, in the same Codex chat context as prompts 1-2.
 
 ## Inputs
 - Triage decisions: `{{ROUND_TRIAGE_PATH}}`
@@ -18,14 +18,14 @@ Process:
 1. Work proactively and autonomously; complete all in-scope finalization in this prompt.
 2. Clean obvious temporary artifacts and redundant noise in the execute worktree.
 3. Ensure docs/notes updates required by implemented changes are present and consistent with current behavior.
-4. Ensure durable decision/rationale updates are captured where applicable (for example docs decisions sections).
+4. Ensure durable decision/rationale updates are captured where applicable.
 5. Write round summary to `{{ROUND_SUMMARY_PATH}}` with:
 - accepted/rejected/deferred triage outcomes
 - implemented changes
 - verification evidence overview
 - residual risks
 - strict-scope statement confirming accepted work remained critical/high only
-6. Decide round status with high confidence (informational metadata for artifact traceability):
+6. Decide round status with high confidence:
 - `stop` when quality is sufficient or no further meaningful changes are needed
 - `continue` when another round is likely to materially improve quality
 7. Write `{{ROUND_STATUS_PATH}}` JSON with strict schema:
@@ -47,34 +47,6 @@ Process:
 Rules:
 - Never push in this prompt.
 - Never open PRs in this prompt.
-- Never stage, commit, or push `.deepreview` operational artifacts.
 - Keep round decision conservative and evidence-backed.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - Do not recommend speculative robustness work for rare edge cases without clear material impact.
-
-Recommended `{{ROUND_SUMMARY_PATH}}` shape (example):
-
-```markdown
-# Round Summary
-
-## Triage Outcomes
-- accepted: <n>
-- rejected: <n>
-- deferred: <n>
-
-## Implemented Changes
-- <change 1>
-- <change 2>
-
-## Verification Evidence Overview
-- <command>: pass|fail
-
-## Residual Risks
-- <none>|<risk + mitigation>
-
-## Scope Statement
-- All accepted and implemented work in this round remained strictly high-confidence `critical|high` scope.
-
-## Complexity/Size Impact
-- reduced|neutral|increased: <brief justification>
-```

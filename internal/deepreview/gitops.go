@@ -297,11 +297,46 @@ func CleanupUntrackedOperationalArtifacts(repoPath, gitBin string) error {
 			continue
 		}
 		targetPath := filepath.Join(repoPath, filepath.FromSlash(relPath))
-		if err := os.RemoveAll(targetPath); err != nil && !os.IsNotExist(err) {
+		if err := removeAllForceWritable(targetPath); err != nil && !os.IsNotExist(err) {
 			return err
 		}
 	}
 	return nil
+}
+
+func removeAllForceWritable(path string) error {
+	if err := makeTreeUserWritable(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	if err := os.RemoveAll(path); err != nil && !os.IsNotExist(err) {
+		return err
+	}
+	return nil
+}
+
+func makeTreeUserWritable(path string) error {
+	return filepath.Walk(path, func(current string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		mode := info.Mode()
+		if mode&os.ModeSymlink != 0 {
+			return nil
+		}
+		desired := mode.Perm()
+		if info.IsDir() {
+			desired |= 0o700
+		} else {
+			desired |= 0o600
+		}
+		if mode.Perm() == desired {
+			return nil
+		}
+		return os.Chmod(current, desired)
+	})
 }
 
 func repoHasTrackedEntries(repoPath, gitBin, relPath string) (bool, error) {
@@ -328,7 +363,7 @@ func HasUncommittedChanges(repoPath, gitBin string) (bool, error) {
 	return strings.TrimSpace(status) != "", nil
 }
 
-func CommitAllChanges(repoPath, gitBin, message string) error {
+func CommitAllChanges(repoPath, gitBin, message string, identity CommitIdentity) error {
 	if _, err := RunCommand([]string{gitBin, "-C", repoPath, "add", "-A"}, "", "", true, 0); err != nil {
 		return err
 	}
@@ -339,7 +374,19 @@ func CommitAllChanges(repoPath, gitBin, message string) error {
 	if !changed {
 		return nil
 	}
-	_, err = RunCommand([]string{gitBin, "-C", repoPath, "commit", "-m", message}, "", "", true, 0)
+	command := []string{
+		gitBin,
+		"-C", repoPath,
+		"-c", "commit.gpgsign=false",
+	}
+	if strings.TrimSpace(identity.Name) != "" {
+		command = append(command, "-c", "user.name="+identity.Name)
+	}
+	if strings.TrimSpace(identity.Email) != "" {
+		command = append(command, "-c", "user.email="+identity.Email)
+	}
+	command = append(command, "commit", "--no-gpg-sign", "-m", message)
+	_, err = RunCommand(command, "", "", true, 0)
 	return err
 }
 
@@ -356,6 +403,35 @@ func ListChangedFiles(repoPath, gitBin, baseRef, headRef string) ([]string, erro
 		}
 	}
 	return files, nil
+}
+
+func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) ([]string, error) {
+	out, err := Git(
+		repoPath,
+		gitBin,
+		true,
+		"diff",
+		"--no-color",
+		"--no-ext-diff",
+		"--unified=0",
+		baseRef+".."+headRef,
+		"--",
+		relPath,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	var added []string
+	for _, line := range strings.Split(out, "\n") {
+		switch {
+		case strings.HasPrefix(line, "+++ "):
+			continue
+		case strings.HasPrefix(line, "+"):
+			added = append(added, strings.TrimPrefix(line, "+"))
+		}
+	}
+	return added, nil
 }
 
 func PushRefspec(repoPath, gitBin, refspec string) error {

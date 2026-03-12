@@ -14,25 +14,26 @@ const (
 )
 
 type ReviewConfig struct {
-	Repo                string        `json:"repo"`
-	SourceBranch        string        `json:"source_branch"`
-	Concurrency         int           `json:"concurrency"`
-	MaxRounds           int           `json:"max_rounds"`
-	ReviewInactivitySec int           `json:"review_inactivity_seconds"`
-	ReviewActivityPollS int           `json:"review_activity_poll_seconds"`
-	ReviewMaxRestarts   int           `json:"review_max_restarts"`
-	Mode                string        `json:"mode"`
-	WorkspaceRoot       string        `json:"workspace_root"`
-	RunID               string        `json:"run_id"`
-	GitBin              string        `json:"git_bin"`
-	CodexBin            string        `json:"codex_bin"`
-	CodexModel          string        `json:"codex_model"`
-	CodexReasoning      string        `json:"codex_reasoning_effort"`
-	GhBin               string        `json:"gh_bin"`
-	CodexTimeoutSeconds int           `json:"codex_timeout_seconds"`
-	CodexTimeout        time.Duration `json:"-"`
-	ReviewInactivity    time.Duration `json:"-"`
-	ReviewActivityPoll  time.Duration `json:"-"`
+	Repo                string         `json:"repo"`
+	SourceBranch        string         `json:"source_branch"`
+	Concurrency         int            `json:"concurrency"`
+	MaxRounds           int            `json:"max_rounds"`
+	ReviewInactivitySec int            `json:"review_inactivity_seconds"`
+	ReviewActivityPollS int            `json:"review_activity_poll_seconds"`
+	ReviewMaxRestarts   int            `json:"review_max_restarts"`
+	Mode                string         `json:"mode"`
+	WorkspaceRoot       string         `json:"workspace_root"`
+	RunID               string         `json:"run_id"`
+	GitBin              string         `json:"git_bin"`
+	CodexBin            string         `json:"codex_bin"`
+	CodexModel          string         `json:"codex_model"`
+	CodexReasoning      string         `json:"codex_reasoning_effort"`
+	GhBin               string         `json:"gh_bin"`
+	CodexTimeoutSeconds int            `json:"codex_timeout_seconds"`
+	CodexTimeout        time.Duration  `json:"-"`
+	ReviewInactivity    time.Duration  `json:"-"`
+	ReviewActivityPoll  time.Duration  `json:"-"`
+	CommitIdentity      CommitIdentity `json:"-"`
 }
 
 type RepoIdentity struct {
@@ -52,6 +53,12 @@ type RoundStatus struct {
 	NextFocus  *string  `json:"next_focus,omitempty"`
 }
 
+type RoundRecord struct {
+	Round   int         `json:"round"`
+	Status  RoundStatus `json:"status"`
+	Summary string      `json:"summary"`
+}
+
 type CodexRunResult struct {
 	ThreadID      string
 	AgentMessages []string
@@ -64,10 +71,15 @@ type DeliveryResult struct {
 	PushedRefspec    string
 	PRURL            string
 	CommitsURL       string
-	Incomplete       bool
-	IncompleteReason string
 	Skipped          bool
 	SkipReason       string
+	Incomplete       bool
+	IncompleteReason string
+}
+
+type CommitIdentity struct {
+	Name  string
+	Email string
 }
 
 func BuildRunID(now time.Time) (string, error) {

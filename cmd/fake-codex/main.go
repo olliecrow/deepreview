@@ -46,6 +46,24 @@ func emitThread(threadID, message string) error {
 	return nil
 }
 
+func requirePathWithinCWD(path, label string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	if !pathWithinBase(cwd, path) {
+		return fmt.Errorf("%s must stay within cwd: %s", label, path)
+	}
+	return nil
+}
+
+func requirePromptOutputWithinCWD(path, label string) error {
+	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_PROMPT_OUTPUTS_WITHIN_CWD")) == "" || path == "" {
+		return nil
+	}
+	return requirePathWithinCWD(path, label)
+}
+
 func writeText(path, text string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -88,6 +106,9 @@ func gitCommitIfPossible(message string) error {
 func handlePrompt(prompt string) (string, error) {
 	if strings.Contains(prompt, "independent deepreview reviewer in the independent review stage") {
 		outPath := regexGet("Output report path: `([^`]+)`", prompt)
+		if err := requirePromptOutputWithinCWD(outPath, "review output path"); err != nil {
+			return "", err
+		}
 		if outPath != "" {
 			if err := writeText(outPath, "# Independent Review\n\n## Findings\n- no actionable findings\n"); err != nil {
 				return "", err
@@ -96,28 +117,39 @@ func handlePrompt(prompt string) (string, error) {
 		return "review complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 1 of 4") {
+	if strings.Contains(prompt, "prompt 1 of 3") {
 		triage := regexGet("Write triage decisions to `([^`]+)`", prompt)
+		if triage == "" {
+			triage = regexGet("Triage output path: `([^`]+)`", prompt)
+		}
+		if err := requirePromptOutputWithinCWD(triage, "triage output path"); err != nil {
+			return "", err
+		}
 		if triage != "" {
 			if err := writeText(triage, "# Triage\n\n- accept: sample change\n"); err != nil {
 				return "", err
 			}
 		}
-		return "triage complete", nil
-	}
-
-	if strings.Contains(prompt, "prompt 2 of 4") {
 		plan := regexGet("Write the plan to `([^`]+)`", prompt)
+		if plan == "" {
+			plan = regexGet("Plan output path: `([^`]+)`", prompt)
+		}
+		if err := requirePromptOutputWithinCWD(plan, "plan output path"); err != nil {
+			return "", err
+		}
 		if plan != "" {
 			if err := writeText(plan, "# Plan\n\n- apply sample change\n"); err != nil {
 				return "", err
 			}
 		}
-		return "plan complete", nil
+		return "triage and plan complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 3 of 4") {
+	if strings.Contains(prompt, "prompt 2 of 3") {
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
+		if err := requirePromptOutputWithinCWD(verification, "verification output path"); err != nil {
+			return "", err
+		}
 		if verification != "" {
 			if err := writeText(verification, "# Verification\n\n- fake checks passed\n"); err != nil {
 				return "", err
@@ -142,6 +174,11 @@ func handlePrompt(prompt string) (string, error) {
 		}
 		if strings.TrimSpace(os.Getenv("FAKE_CODEX_ADD_REPO_TMP_FILE")) != "" {
 			if err := writeText(filepath.Join(".", ".tmp", "repo-added.txt"), "repo tmp file\n"); err != nil {
+				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_RUN_GO_TEST_WITH_INHERITED_ENV")) != "" {
+			if err := runGo("test", "./..."); err != nil {
 				return "", err
 			}
 		}
@@ -185,8 +222,11 @@ func handlePrompt(prompt string) (string, error) {
 		return "execute complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 4 of 4") {
+	if strings.Contains(prompt, "prompt 3 of 3") {
 		summary := regexGet("Write round summary to `([^`]+)`", prompt)
+		if err := requirePromptOutputWithinCWD(summary, "summary output path"); err != nil {
+			return "", err
+		}
 		if summary != "" {
 			if err := writeText(summary, "# Round Summary\n\n- complete\n"); err != nil {
 				return "", err
@@ -194,14 +234,23 @@ func handlePrompt(prompt string) (string, error) {
 		}
 
 		statusPath := regexGet("Write `([^`]+)` JSON", prompt)
+		if err := requirePromptOutputWithinCWD(statusPath, "status output path"); err != nil {
+			return "", err
+		}
 		if statusPath != "" {
 			decision := os.Getenv("FAKE_CODEX_DECISION")
 			if decision == "" {
 				decision = "stop"
 			}
-			payload := map[string]any{"decision": decision, "reason": "ready"}
-			b, _ := json.MarshalIndent(payload, "", "  ")
-			if err := writeText(statusPath, string(b)+"\n"); err != nil {
+			statusText := ""
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_INVALID_ROUND_STATUS")) != "" {
+				statusText = "{invalid json}\n"
+			} else {
+				payload := map[string]any{"decision": decision, "reason": "ready"}
+				b, _ := json.MarshalIndent(payload, "", "  ")
+				statusText = string(b) + "\n"
+			}
+			if err := writeText(statusPath, statusText); err != nil {
 				return "", err
 			}
 		}
@@ -392,6 +441,16 @@ func requireSandboxGoEnvWithinCWD() error {
 		}
 	}
 	return nil
+}
+
+func runGo(args ...string) error {
+	cmd := exec.Command("go", args...)
+	// Keep stdout reserved for Codex JSON events so inherited go-tool output
+	// cannot corrupt the event stream seen by the orchestrator.
+	cmd.Stdout = os.Stderr
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	return cmd.Run()
 }
 
 func requireSelfAuditReviewPrompt(prompt string) error {

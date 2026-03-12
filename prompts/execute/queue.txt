@@ -1,4 +1,3 @@
-01-consolidate-reviews.md
-02-plan.md
-03-execute-verify.md
-04-cleanup-summary-commit.md
+01-consolidate-plan.md
+02-execute-verify.md
+03-cleanup-summary-commit.md

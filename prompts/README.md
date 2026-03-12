@@ -21,10 +21,9 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 ## Layout
 - `prompts/review/independent-review.md`: template used by every independent-review worker.
 - `prompts/execute/queue.txt`: ordered list of execute prompt templates.
-- `prompts/execute/01-consolidate-reviews.md`
-- `prompts/execute/02-plan.md`
-- `prompts/execute/03-execute-verify.md`
-- `prompts/execute/04-cleanup-summary-commit.md`
+- `prompts/execute/01-consolidate-plan.md`
+- `prompts/execute/02-execute-verify.md`
+- `prompts/execute/03-cleanup-summary-commit.md`
 - `prompts/delivery/privacy-fix.md`: pre-delivery privacy remediation template (PR mode only, bounded attempts).
 - `prompts/delivery/pr-description-summary.md`: post-PR template used to generate the final PR title and description body.
 

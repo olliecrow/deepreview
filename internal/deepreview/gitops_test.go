@@ -145,3 +145,193 @@ func TestEnsureWorktreeOperationalExcludesResolvesRelativeGitPathAgainstRepo(t *
 		t.Fatalf("expected idempotent exclude content\nprevious content\n%s\ncurrent content\n%s", excludeContent, string(excludeBytesAfter))
 	}
 }
+
+func TestCleanupUntrackedOperationalArtifactsRemovesReadOnlyGoModuleCache(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+
+	readonlyDir := filepath.Join(repo, ".tmp", "go-mod-cache", "golang.org", "x", "sys@v0.37.0")
+	if err := os.MkdirAll(readonlyDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cacheFile := filepath.Join(readonlyDir, "go.mod")
+	if err := os.WriteFile(cacheFile, []byte("module golang.org/x/sys\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(readonlyDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := CleanupUntrackedOperationalArtifacts(repo, "git"); err != nil {
+		t.Fatalf("CleanupUntrackedOperationalArtifacts failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, ".tmp")); !os.IsNotExist(err) {
+		t.Fatalf("expected .tmp cache tree to be removed, got err=%v", err)
+	}
+}
+
+func TestCommitAllChangesUsesProvidedIdentityAndDisablesSigning(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "wrong@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Wrong User")
+	runGitCommand(t, td, "-C", repo, "config", "commit.gpgsign", "true")
+	runGitCommand(t, td, "-C", repo, "config", "gpg.program", "/nonexistent-gpg")
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAllChanges(repo, "git", "seed", CommitIdentity{Name: "Loopy Test", Email: "loopy-test@example.com"}); err != nil {
+		t.Fatalf("initial commit failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("updated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := CommitAllChanges(repo, "git", "update", CommitIdentity{Name: "Loopy Test", Email: "loopy-test@example.com"}); err != nil {
+		t.Fatalf("CommitAllChanges failed with signing disabled path: %v", err)
+	}
+
+	authorName := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%an"))
+	if authorName != "Loopy Test" {
+		t.Fatalf("expected author name Loopy Test, got %q", authorName)
+	}
+	authorEmail := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%ae"))
+	if authorEmail != "loopy-test@example.com" {
+		t.Fatalf("expected author email loopy-test@example.com, got %q", authorEmail)
+	}
+}
+
+func TestResolveCommitIdentityUsesRepoConfigForLocalRepo(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(td, "empty.gitconfig"))
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "repo-user@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Repo User")
+
+	identity, err := ResolveCommitIdentity("git", repo)
+	if err != nil {
+		t.Fatalf("ResolveCommitIdentity failed: %v", err)
+	}
+	if identity.Name != "Repo User" {
+		t.Fatalf("expected repo user name, got %q", identity.Name)
+	}
+	if identity.Email != "repo-user@example.com" {
+		t.Fatalf("expected repo user email, got %q", identity.Email)
+	}
+}
+
+func TestResolveCommitIdentityUsesRepoConfigForLocalWorktreePath(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	worktree := filepath.Join(td, "worktrees", "feature")
+	globalConfig := filepath.Join(td, "global.gitconfig")
+
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	runGitCommand(t, td, "config", "--global", "user.name", "Global User")
+	runGitCommand(t, td, "config", "--global", "user.email", "global-user@example.com")
+
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "repo-user@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Repo User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+	runGitCommand(t, td, "-C", repo, "worktree", "add", "-b", "feature/test", worktree)
+
+	identity, err := ResolveCommitIdentity("git", worktree)
+	if err != nil {
+		t.Fatalf("ResolveCommitIdentity failed for worktree path: %v", err)
+	}
+	if identity.Name != "Repo User" {
+		t.Fatalf("expected repo worktree user name, got %q", identity.Name)
+	}
+	if identity.Email != "repo-user@example.com" {
+		t.Fatalf("expected repo worktree user email, got %q", identity.Email)
+	}
+}
+
+func TestResolveCommitIdentityUsesGlobalConfigWhenRepoConfigMissing(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	globalConfig := filepath.Join(td, "global.gitconfig")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	t.Setenv("GIT_CONFIG_GLOBAL", globalConfig)
+	runGitCommand(t, td, "config", "--global", "user.name", "Global User")
+	runGitCommand(t, td, "config", "--global", "user.email", "global-user@example.com")
+
+	identity, err := ResolveCommitIdentity("git", repo)
+	if err != nil {
+		t.Fatalf("ResolveCommitIdentity failed: %v", err)
+	}
+	if identity.Name != "Global User" {
+		t.Fatalf("expected global user name, got %q", identity.Name)
+	}
+	if identity.Email != "global-user@example.com" {
+		t.Fatalf("expected global user email, got %q", identity.Email)
+	}
+}
+
+func TestResolveCommitIdentityUsesMatchedLocalRepoConfigForRepoLocator(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "empty.gitconfig"))
+
+	testCases := []struct {
+		name    string
+		locator string
+	}{
+		{name: "owner repo", locator: "example-org/example-repo"},
+		{name: "remote url", locator: "https://github.com/example-org/example-repo.git"},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			withWorkingDir(t, repo, func() {
+				identity, err := ResolveCommitIdentity("git", tc.locator)
+				if err != nil {
+					t.Fatalf("ResolveCommitIdentity failed: %v", err)
+				}
+				if identity.Name != "Test User" {
+					t.Fatalf("expected repo-matched user name, got %q", identity.Name)
+				}
+				if identity.Email != "test@example.com" {
+					t.Fatalf("expected repo-matched user email, got %q", identity.Email)
+				}
+			})
+		})
+	}
+}
+
+func TestConfigureManagedGitIdentityEnablesPlainGitCommitWithoutSigner(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "commit.gpgsign", "true")
+	runGitCommand(t, td, "-C", repo, "config", "gpg.program", "/nonexistent-gpg")
+
+	if err := ConfigureManagedGitIdentity(repo, "git", CommitIdentity{Name: "Loopy Test", Email: "loopy-test@example.com"}); err != nil {
+		t.Fatalf("ConfigureManagedGitIdentity failed: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+
+	authorName := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%an"))
+	if authorName != "Loopy Test" {
+		t.Fatalf("expected author name Loopy Test, got %q", authorName)
+	}
+	authorEmail := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%ae"))
+	if authorEmail != "loopy-test@example.com" {
+		t.Fatalf("expected author email loopy-test@example.com, got %q", authorEmail)
+	}
+}

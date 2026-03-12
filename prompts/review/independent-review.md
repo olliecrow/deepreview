@@ -30,7 +30,8 @@ Rules:
 17. Avoid speculative hardening, rare-edge-case complexity, or broad refactors unless impact is demonstrably material and urgent.
 18. Optional: keep lightweight, useful working notes in `{{WORKER_NOTES_PATH}}` while investigating.
 19. Notes are scratch artifacts only; do not pad them for heartbeat or busywork.
-20. If you use Go tooling, the inherited environment already points temp/cache paths at writable worktree-local directories; use that environment instead of overriding back to host cache paths.
+20. If you use Go tooling, the inherited environment already points temp/cache paths at writable worktree-local directories; use that environment exactly as inherited and do not override `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`, `TMPDIR`, `TMP`, or `TEMP`.
+21. If a Go command starts trying to download modules, touch the network, or fails because dependencies are unavailable offline, stop that verification path and continue with offline inspection instead of burning the whole review on cache/network setup.
 
 {{REVIEW_MODE_NOTE}}
 

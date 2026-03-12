@@ -1,6 +1,6 @@
 You are in deepreview execute stage for round `{{ROUND_NUMBER}}`.
 
-This is prompt 3 of 4, in the same Codex chat context as prompts 1-2.
+This is prompt 2 of 3, in the same Codex chat context as prompt 1.
 
 ## Inputs
 - Approved plan: `{{ROUND_PLAN_PATH}}`
@@ -35,7 +35,8 @@ Rules:
 - Do not push.
 - Do not open PRs.
 - Keep behavior simple; no retry loops.
-- If you use Go tooling, the inherited environment already points temp/cache paths at writable worktree-local directories; use that environment instead of host cache paths.
+- The inherited environment already points temp/cache paths at writable worktree-local directories; use that environment exactly as inherited and do not override `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`, `TMPDIR`, `TMP`, or `TEMP`.
+- If a Go verification command starts trying to download modules, requires network access, or otherwise cannot run offline with the inherited environment, stop that specific check, record the blocker in verification output, and continue with the best reliable offline substitute instead of thrashing on cache/network setup.
 - You may use multiple sub-agents or staged execution inside this prompt if useful.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.
 - You may inspect git history, PR comments, issues, and other GitHub context if useful.
@@ -49,26 +50,3 @@ Output:
   - checks skipped with reason
   - unresolved failures or blockers
   - residual risks
-
-Recommended output shape (example):
-
-```markdown
-# Round Verification
-
-## Commands Attempted
-- `go test ./...`
-- `pre-commit run --all-files`
-
-## Outcomes
-- `go test ./...`: pass
-- `pre-commit run --all-files`: pass
-
-## Skipped Checks
-- `<none>` or `<check>: <reason>`
-
-## Unresolved Failures / Blockers
-- `<none>` or `<failure>: <impact + next action>`
-
-## Residual Risks
-- `<none>` or `<risk>: <why + mitigation>`
-```
