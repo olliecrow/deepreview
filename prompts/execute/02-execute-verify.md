@@ -35,7 +35,7 @@ Rules:
 - Do not push.
 - Do not open PRs.
 - Keep behavior simple; no retry loops.
-- The inherited environment already points temp/cache paths at run-scoped writable directories outside the repo worktree; use that environment exactly as inherited and do not override `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`, `TMPDIR`, `TMP`, or `TEMP`.
+- The inherited environment already points temp/cache paths at writable worktree-local directories; use that environment exactly as inherited and do not override `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`, `TMPDIR`, `TMP`, or `TEMP`.
 - If a Go verification command starts trying to download modules, requires network access, or otherwise cannot run offline with the inherited environment, stop that specific check, record the blocker in verification output, and continue with the best reliable offline substitute instead of thrashing on cache/network setup.
 - You may use multiple sub-agents or staged execution inside this prompt if useful.
 - Do not expose secrets, tokens, personal information, or sensitive values in outputs.

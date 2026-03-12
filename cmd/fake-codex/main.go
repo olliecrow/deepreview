@@ -177,6 +177,11 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_RUN_GO_TEST_WITH_INHERITED_ENV")) != "" {
+			if err := runGo("test", "./..."); err != nil {
+				return "", err
+			}
+		}
 		auditOnly := strings.Contains(prompt, "automatic final audit round")
 		if auditOnly {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE")) != "" {
@@ -407,7 +412,7 @@ func hasArg(args []string, target string) bool {
 	return false
 }
 
-func requireSandboxGoEnvOutsideCWD() error {
+func requireSandboxGoEnvWithinCWD() error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -418,8 +423,8 @@ func requireSandboxGoEnvOutsideCWD() error {
 		if value == "" {
 			return fmt.Errorf("missing required %s", key)
 		}
-		if pathWithinBase(cwd, value) {
-			return fmt.Errorf("%s must stay outside cwd: %s", key, value)
+		if !pathWithinBase(cwd, value) {
+			return fmt.Errorf("%s must stay within cwd: %s", key, value)
 		}
 		info, err := os.Stat(value)
 		if err != nil {
@@ -430,6 +435,14 @@ func requireSandboxGoEnvOutsideCWD() error {
 		}
 	}
 	return nil
+}
+
+func runGo(args ...string) error {
+	cmd := exec.Command("go", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	cmd.Env = os.Environ()
+	return cmd.Run()
 }
 
 func requireSelfAuditReviewPrompt(prompt string) error {
@@ -462,8 +475,8 @@ func main() {
 		fmt.Fprintln(os.Stderr, "missing required --skip-git-repo-check")
 		os.Exit(1)
 	}
-	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_OUTSIDE_CWD")) != "" {
-		if err := requireSandboxGoEnvOutsideCWD(); err != nil {
+	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD")) != "" {
+		if err := requireSandboxGoEnvWithinCWD(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}

@@ -48,7 +48,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - prompt 3: cleanup/summary/commit (docs/decision upkeep, round status flag write, and complete round artifacts)
 - execute prompts stage their output files inside reserved worktree-local `.deepreview/artifacts/` paths; after prompt queue completion, the orchestrator validates those staged files, persists canonical copies into the run directory, performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist), and then writes the authoritative `round.json` completion record for that round
 - apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
-- all Codex workers inherit run-scoped temp/cache defaults under the run log/runtime directory so verification tools do not write to host-global caches or repo worktrees
+- all Codex workers inherit worktree-local temp/cache defaults under `.deepreview/runtime/` so verification tools do not write to host-global caches or escape the worker sandbox
 - allow local checkpoint commits throughout execution; never push during rounds
 - Codex writes the round status file inside the execute worktree sandbox, and the orchestrator persists the canonical copy at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - the orchestrator writes `~/deepreview/runs/<run-id>/round-<round>/round.json` after successful execute-stage completion; final completion reporting counts only rounds with that authoritative record
