@@ -431,6 +431,31 @@ func ChangedFileStatusBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath st
 	return "", nil
 }
 
+func DiffIsBinaryBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (bool, error) {
+	out, err := Git(
+		repoPath,
+		gitBin,
+		true,
+		"diff",
+		"--numstat",
+		"--find-renames=0",
+		baseRef+".."+headRef,
+		"--",
+		relPath,
+	)
+	if err != nil {
+		return false, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(strings.TrimSpace(line))
+		if len(fields) < 3 {
+			continue
+		}
+		return fields[0] == "-" && fields[1] == "-", nil
+	}
+	return false, nil
+}
+
 func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) ([]string, error) {
 	out, err := Git(
 		repoPath,
