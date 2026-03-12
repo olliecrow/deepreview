@@ -131,13 +131,13 @@ References:
 Decision:
 Resolve the Codex launcher dynamically by name, preferring `multicodex` and falling back to `codex` unless explicitly forbidden.
 Context:
-Some machines expose a live `multicodex` wrapper that should always be used for prompt runs, but deepreview should remain portable to systems that only have plain `codex`.
+Some machines expose a live `multicodex` wrapper on `PATH` that should always be used for prompt runs, but deepreview should remain portable to systems that only have plain `codex`.
 Rationale:
-Name-based resolution avoids hardcoded workstation paths while still letting operators enforce strict `multicodex` usage with `DEEPREVIEW_REQUIRE_MULTICODEX=1`. Checking a supported POSIX-style interactive shell first also lets shell-managed launchers stay current without relying on stale copied binaries, while avoiding broken wrapper invocation on shells with incompatible argument semantics.
+Name-based resolution avoids hardcoded workstation paths while still letting operators enforce strict `multicodex` usage with `DEEPREVIEW_REQUIRE_MULTICODEX=1`. Requiring a real `multicodex` command on `PATH` keeps execution simple and avoids fragile interactive-shell wrapper behavior while still allowing the `PATH` command itself to manage rebuilding or dispatching to the latest multicodex implementation.
 Trade-offs:
-Launcher behavior now depends on shell/PATH setup, and doctor/preflight must validate the real launcher path rather than assuming plain `codex`.
+Launcher behavior now depends on `PATH` setup, and operators who previously relied on shell-only functions or aliases must expose `multicodex` as a real command instead.
 Enforcement:
-`CodexRunner.resolveLauncher` prefers shell/PATH `multicodex`, `DEEPREVIEW_REQUIRE_MULTICODEX` fails fast when unavailable, and doctor validates the selected launcher with matching auth checks.
+`CodexRunner.resolveLauncher` prefers `PATH` `multicodex`, `DEEPREVIEW_REQUIRE_MULTICODEX` fails fast when unavailable, and doctor validates the selected launcher with matching auth checks.
 References:
 `internal/deepreview/codex.go`, `internal/deepreview/cli.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
 
