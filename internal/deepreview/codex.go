@@ -108,7 +108,10 @@ func resolveShellMulticodex(parentCtx context.Context) (codexLauncher, bool) {
 	}
 	return codexLauncher{
 		Command: shell,
-		Args:    []string{"-ic", `multicodex "$@"`, "multicodex"},
+		// Interactive shells can expose multicodex as a rebuilding shell function.
+		// Disable job control in the wrapper so worker launchers do not suspend
+		// themselves when deepreview runs under a monitored terminal session.
+		Args:    []string{"-ic", shellWrappedMulticodexCommand(shell), "multicodex"},
 		Display: "multicodex",
 	}, true
 }
@@ -119,6 +122,17 @@ func supportsShellWrappedMulticodex(shell string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func shellWrappedMulticodexCommand(shell string) string {
+	switch filepath.Base(strings.TrimSpace(shell)) {
+	case "zsh":
+		return `unsetopt monitor; multicodex "$@"`
+	case "bash", "ksh":
+		return `set +m; multicodex "$@"`
+	default:
+		return `multicodex "$@"`
 	}
 }
 
