@@ -1036,3 +1036,16 @@ Enforcement:
 Independent-review prompt rendering now injects explicit self-audit mode guidance when source and default branch names match, and integration tests require fake-codex to see that prompt mode.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/integration_test.go`, `prompts/review/independent-review.md`, `docs/spec.md`
+
+Decision:
+Reject non-GitHub repo identities in default `pr` mode before round execution begins.
+Context:
+`deepreview` accepts local repo paths whose `origin` remote is a local filesystem path so managed clones can still be created from local sources. PR delivery, however, is implemented only through GitHub URLs plus `gh pr create`.
+Rationale:
+Fail-fast validation is simpler and safer than allowing a full multi-round run to proceed and then discovering at final delivery that the repo has no valid PR target.
+Trade-offs:
+Users reviewing local-only remotes must choose a non-PR flow instead of relying on late delivery failure.
+Enforcement:
+`NewOrchestrator` rejects `--mode pr` when repo identity resolution produces a non-GitHub/local synthetic repo identity; help text and spec call out the restriction explicitly.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/cli.go`, `README.md`, `docs/spec.md`

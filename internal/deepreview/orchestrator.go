@@ -60,6 +60,9 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDeliveryModeRepoIdentity(config.Mode, repoIdentity); err != nil {
+		return nil, err
+	}
 
 	if reporter == nil {
 		reporter = &NullProgressReporter{}
@@ -220,6 +223,18 @@ func localCloneSource(remote string) (string, bool) {
 		return trimmed, true
 	}
 	return "", false
+}
+
+func validateDeliveryModeRepoIdentity(mode string, repoIdentity RepoIdentity) error {
+	if strings.TrimSpace(mode) != ModePR {
+		return nil
+	}
+	if repoIdentity.SupportsPRDelivery() {
+		return nil
+	}
+	return NewDeepReviewError(
+		"--mode pr requires a GitHub-backed repo identity; local filesystem origin remotes are not supported for PR delivery",
+	)
 }
 
 var ownerRepoSlugRe = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)

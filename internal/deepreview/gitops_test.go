@@ -372,6 +372,31 @@ func TestResolveCommitIdentityUsesMatchedLocalRepoConfigForRepoLocator(t *testin
 	}
 }
 
+func TestResolveCommitIdentityIgnoresCallerCWDOutsideSourceRootForRepoLocator(t *testing.T) {
+	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "empty.gitconfig"))
+	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
+
+	runGitCommand(t, filepath.Dir(currentRepo), "-C", currentRepo, "config", "user.name", "Current User")
+	runGitCommand(t, filepath.Dir(currentRepo), "-C", currentRepo, "config", "user.email", "current-user@example.com")
+	runGitCommand(t, filepath.Dir(callerRepo), "-C", callerRepo, "config", "user.name", "Caller User")
+	runGitCommand(t, filepath.Dir(callerRepo), "-C", callerRepo, "config", "user.email", "caller-user@example.com")
+
+	withWorkingDir(t, currentRepo, func() {
+		identity, err := ResolveCommitIdentity("git", "example-org/example-repo")
+		if err != nil {
+			t.Fatalf("ResolveCommitIdentity failed: %v", err)
+		}
+		if identity.Name != "Current User" {
+			t.Fatalf("expected current repo user name, got %q", identity.Name)
+		}
+		if identity.Email != "current-user@example.com" {
+			t.Fatalf("expected current repo user email, got %q", identity.Email)
+		}
+	})
+}
+
 func TestConfigureManagedGitIdentityEnablesPlainGitCommitWithoutSigner(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")

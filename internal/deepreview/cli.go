@@ -228,6 +228,7 @@ Arguments:
     Context:
       Local path mode reads remote.origin.url and clones/fetches in managed workspace.
       deepreview never runs review work directly in your local repo directory.
+      PR mode requires a GitHub-backed remote; local filesystem origin remotes are rejected for `+"`--mode pr`"+`.
 
 Inference behavior:
   If <repo> is omitted:
@@ -259,7 +260,7 @@ Optional flags:
 
   --mode <pr|yolo>      (default: %s)
     Delivery strategy:
-      pr   -> open a pull request into the original source branch
+      pr   -> open a pull request into the original source branch (GitHub-backed repos only)
       yolo -> push directly to source branch
     Values are case-insensitive.
 
@@ -341,6 +342,7 @@ Usage:
 Notes:
   - doctor does not clone, commit, push, or open PRs.
   - argument inference and validation follow the same rules as "deepreview review".
+  - `+"`--mode pr`"+` requires a GitHub-backed repo identity.
 
 Examples:
   deepreview doctor
@@ -371,6 +373,7 @@ Usage:
 Notes:
   - dry-run does not run Codex, does not mutate git state, and does not push.
   - argument inference and validation follow the same rules as "deepreview review".
+  - `+"`--mode pr`"+` requires a GitHub-backed repo identity.
 
 Examples:
   deepreview dry-run

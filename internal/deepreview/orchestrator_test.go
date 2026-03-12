@@ -86,6 +86,64 @@ func TestResolveRepoIdentityLocalPathAcceptsFilesystemOriginRemote(t *testing.T)
 	}
 }
 
+func TestNewOrchestratorRejectsPRModeForFilesystemOriginRemote(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", repo)
+	runGitTest(t, td, "-C", repo, "remote", "add", "origin", remote)
+
+	_, err := NewOrchestrator(ReviewConfig{
+		Repo:          repo,
+		SourceBranch:  "main",
+		WorkspaceRoot: t.TempDir(),
+		RunID:         "run-1",
+		GitBin:        "git",
+		CodexBin:      "codex",
+		GhBin:         "gh",
+		Mode:          ModePR,
+	}, &NullProgressReporter{})
+	if err == nil {
+		t.Fatalf("expected PR mode to reject filesystem origin remote")
+	}
+	if !strings.Contains(err.Error(), "--mode pr requires a GitHub-backed repo identity") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestNewOrchestratorAllowsYoloModeForFilesystemOriginRemote(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", repo)
+	runGitTest(t, td, "-C", repo, "remote", "add", "origin", remote)
+
+	o, err := NewOrchestrator(ReviewConfig{
+		Repo:          repo,
+		SourceBranch:  "main",
+		WorkspaceRoot: t.TempDir(),
+		RunID:         "run-1",
+		GitBin:        "git",
+		CodexBin:      "codex",
+		GhBin:         "gh",
+		Mode:          ModeYolo,
+	}, &NullProgressReporter{})
+	if err != nil {
+		t.Fatalf("expected yolo mode to allow filesystem origin remote, got: %v", err)
+	}
+	if o.repoIdentity.Owner != "local" {
+		t.Fatalf("expected local repo identity, got: %s", o.repoIdentity.Owner)
+	}
+}
+
 func TestResolveRepoIdentityLocalPathRejectsNonGitHubOriginRemote(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")

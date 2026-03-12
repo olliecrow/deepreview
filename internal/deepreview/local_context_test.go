@@ -271,6 +271,7 @@ func TestInferRepoAndBranchFallsBackToOldPWDFromSourceRoot(t *testing.T) {
 	setSourceRootDetectorForTest(t, func() (string, bool) {
 		return sourceRepoAbs, true
 	})
+	t.Setenv(deepreviewCallerCWDEnv, "")
 	t.Setenv("OLDPWD", callerRepo)
 
 	withWorkingDir(t, sourceRepo, func() {
@@ -306,6 +307,49 @@ func TestInferRepoAndBranchOldPWDFallbackIgnoredOutsideSourceRoot(t *testing.T) 
 		}
 		if resolvedBranch != "feature/current" {
 			t.Fatalf("expected inferred branch feature/current, got %s", resolvedBranch)
+		}
+	})
+}
+
+func TestInferRepoAndBranchIgnoresCallerCWDOutsideSourceRoot(t *testing.T) {
+	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	currentRepoAbs := canonicalPath(t, currentRepo)
+	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
+
+	withWorkingDir(t, currentRepo, func() {
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		if resolvedRepo != currentRepoAbs {
+			t.Fatalf("expected inferred repo %s, got %s", currentRepoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/current" {
+			t.Fatalf("expected inferred branch feature/current, got %s", resolvedBranch)
+		}
+	})
+}
+
+func TestValidateLocalBranchReadyForRemoteReviewIgnoresCallerCWDOutsideSourceRoot(t *testing.T) {
+	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
+
+	withWorkingDir(t, currentRepo, func() {
+		if err := os.WriteFile(filepath.Join(currentRepo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", "", "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		err = validateLocalBranchReadyForRemoteReview("git", resolvedRepo, resolvedBranch)
+		if err == nil {
+			t.Fatalf("expected tracked-change error")
+		}
+		if !strings.Contains(err.Error(), "local tracked changes are present") {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }
