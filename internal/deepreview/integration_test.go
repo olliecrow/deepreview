@@ -950,7 +950,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 		"FAKE_CODEX_STALL_ONCE_MS_WORKER_2=15000",
 	)
 
-	output := runCmdExpectFailure(t, root, env,
+	output := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -960,8 +960,8 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "no deliverable repository changes were produced") {
-		t.Fatalf("expected no-deliverable failure output, got: %s", output)
+	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
 	}
 	if !strings.Contains(output, "worker-02 inactive for") {
 		t.Fatalf("expected worker-02 inactivity restart evidence in logs, got:\n%s", output)
@@ -1018,7 +1018,7 @@ func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
 		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_OUTSIDE_CWD=1",
 		"FAKE_CODEX_REQUIRE_PROMPT_OUTPUTS_WITHIN_CWD=1",
 	)
-	output := runCmdExpectFailure(t, root, env,
+	output := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1028,8 +1028,8 @@ func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "no deliverable repository changes were produced") {
-		t.Fatalf("expected no-deliverable failure output, got: %s", output)
+	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
 	}
 }
 
@@ -1064,7 +1064,7 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
 	)
-	output := runCmdExpectFailure(t, root, env,
+	output := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1074,8 +1074,8 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "no deliverable repository changes were produced") {
-		t.Fatalf("expected no-deliverable failure output, got: %s", output)
+	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -1089,8 +1089,15 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
 		t.Fatalf("expected no second round when only operational artifacts were produced")
 	}
-	if _, err := os.Stat(filepath.Join(runDir, "final-summary.md")); !os.IsNotExist(err) {
-		t.Fatalf("did not expect final-summary.md after no-deliverable failure")
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("expected final-summary.md after skipped delivery: %v", err)
+	}
+	if !strings.Contains(string(finalSummaryBytes), "- delivery: `skipped`") {
+		t.Fatalf("expected skipped delivery marker in final summary, got:\n%s", string(finalSummaryBytes))
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); !os.IsNotExist(err) {
+		t.Fatalf("pr-body.md should not be created on skipped delivery")
 	}
 }
 
@@ -1222,7 +1229,7 @@ func TestRunFailsWhenExecuteForceCommitsNewOperationalArtifacts(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeFailsWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) {
+func TestEndToEndPRModeCompletesWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1259,7 +1266,7 @@ func TestEndToEndPRModeFailsWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) 
 		"FAKE_CODEX_STALL_ONCE_CONTAINS=prompt 2 of 3",
 		"FAKE_CODEX_STALL_ONCE_MS_MATCH=15000",
 	)
-	output := runCmdExpectFailure(t, root, env,
+	output := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1269,8 +1276,8 @@ func TestEndToEndPRModeFailsWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) 
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "no deliverable repository changes were produced") {
-		t.Fatalf("expected no-deliverable failure output, got: %s", output)
+	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+		t.Fatalf("expected skipped-delivery summary output, got: %s", output)
 	}
 	if !strings.Contains(output, "execute / execute and verify inactive for") {
 		t.Fatalf("expected execute inactivity restart evidence in logs, got:\n%s", output)
@@ -1279,7 +1286,7 @@ func TestEndToEndPRModeFailsWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")
 	if before != after {
-		t.Fatalf("source branch should remain unchanged after no-deliverable failure")
+		t.Fatalf("source branch should remain unchanged after skipped delivery")
 	}
 
 	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
@@ -1298,11 +1305,87 @@ func TestEndToEndPRModeFailsWhenNoChangesEvenIfStatusSaysContinue(t *testing.T) 
 	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
 		t.Fatalf("expected no second round when execute produced no changes")
 	}
-	if _, err := os.Stat(filepath.Join(runDir, "final-summary.md")); !os.IsNotExist(err) {
-		t.Fatalf("did not expect final-summary.md after no-deliverable failure")
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("expected final-summary.md after skipped delivery: %v", err)
+	}
+	if !strings.Contains(string(finalSummaryBytes), "- delivery: `skipped`") {
+		t.Fatalf("expected skipped delivery marker in final summary, got:\n%s", string(finalSummaryBytes))
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); !os.IsNotExist(err) {
-		t.Fatalf("pr-body.md should not be created after no-deliverable failure")
+		t.Fatalf("pr-body.md should not be created on skipped delivery")
+	}
+}
+
+func TestEndToEndPRModeCompletesWhenPrivacyRemediationRemovesAllDeliverableChanges(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "docs", "generated.md"), []byte("path /path/to/project\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "docs/generated.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env, "FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE=1")
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery skipped: privacy remediation removed all deliverable repository changes") {
+		t.Fatalf("expected privacy-remediation skipped-delivery summary output, got: %s", output)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("expected final-summary.md after skipped delivery: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "- delivery: `skipped`") {
+		t.Fatalf("expected skipped delivery marker in final summary, got:\n%s", finalSummary)
+	}
+	if !strings.Contains(finalSummary, "privacy remediation removed all deliverable repository changes") {
+		t.Fatalf("expected skipped-delivery reason in final summary, got:\n%s", finalSummary)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); !os.IsNotExist(err) {
+		t.Fatalf("pr-body.md should not be created on skipped delivery")
 	}
 }
 
@@ -1490,6 +1573,101 @@ func TestRunPRModePublishesIncompleteDraftPRAfterAuditContinue(t *testing.T) {
 	}
 	if !strings.Contains(finalSummary, "## pull request") {
 		t.Fatalf("expected pull request section in final summary, got:\n%s", finalSummary)
+	}
+}
+
+func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, ".tmp"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, ".tmp", "tracked.txt"), []byte("repo-owned\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", ".tmp/tracked.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_ADD_REPO_TMP_FILE=1",
+		"FAKE_CODEX_FORCE_ADD_OPERATIONAL_TMP=1",
+		"FAKE_CODEX_DECISION=continue",
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected incomplete draft PR summary output, got: %s", output)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round-summary.md")); err != nil {
+		t.Fatalf("missing round-summary.md: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round-status.json")); err != nil {
+		t.Fatalf("missing round-status.json: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round.json")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect round.json for failed round recovery path, got err=%v", err)
+	}
+
+	bodyBytes, err := os.ReadFile(filepath.Join(runDir, "pr-body.md"))
+	if err != nil {
+		t.Fatalf("missing pr-body.md: %v", err)
+	}
+	body := string(bodyBytes)
+	if !strings.Contains(body, "- rounds completed: `0`") {
+		t.Fatalf("expected incomplete body to report zero authoritative rounds, got:\n%s", body)
+	}
+	if strings.Contains(body, "latest decision: `continue`") {
+		t.Fatalf("did not expect latest decision from missing round record, got:\n%s", body)
+	}
+
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing final-summary.md: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "- rounds: `0`") {
+		t.Fatalf("expected final summary to report zero authoritative rounds, got:\n%s", finalSummary)
+	}
+	if strings.Contains(finalSummary, "round-01/round-status.json") {
+		t.Fatalf("did not expect round decision entry from missing round record, got:\n%s", finalSummary)
 	}
 }
 
