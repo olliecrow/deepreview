@@ -21,13 +21,13 @@ This document defines how work is tracked so progress compounds without context 
 - Before widening scope, ensure existing plan items are verified and documented.
 
 ## Round-loop operating rules
-- Execute deepreview as bounded rounds (`max_rounds`, default `5`) with change-driven progression between rounds.
+- Execute deepreview as bounded rounds (`max_rounds`, default `5`) with round-loop control driven by Codex status decisions plus repository change detection.
 - Use fresh review/execute worktrees each round; do not reuse stale round worktrees.
 - Use one shared independent-review prompt template and an ordered execute prompt queue in one Codex context per round.
 - Keep orchestration simple: avoid unbounded retries; only bounded inactivity restarts are allowed.
 - Encourage local commits throughout rounds; never push during intermediate rounds.
 - Push only once at final delivery; do not push intermediate-round commits.
-- Run delivery quality gates in a detached worktree snapshot of candidate HEAD so gate results match the exact branch content being delivered.
+- In PR mode, run one Codex PR-preparation pass before privacy remediation so final delivery cleanup/history fixes stay inside the same managed branch workflow.
 - Aggressively clean stale worktrees/transient artifacts after each round.
 
 ## Parallel and subagent workflows

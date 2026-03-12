@@ -27,7 +27,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, then lock/worktree cleanup runs before process exit.
-- round loop runs up to `--max-rounds` (default `5`) code-changing execute rounds and may stop early.
+- round loop runs up to `--max-rounds` (default `5`) total execute rounds and may stop early.
 - independent reviews run in independent worktrees.
 - independent review concurrency defaults to `4` and is configurable.
 - each successful independent-review worker must emit one markdown review report.
@@ -47,23 +47,19 @@ This document defines the canonical runtime and product contract for `deepreview
 - Codex prompt workers must write prompt outputs inside their current worktree sandbox; deepreview then persists canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) under `~/deepreview/runs/<run-id>/round-<round>/`.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` and `.tmp/deepreview/` remain reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
 - all Codex prompt executions must receive writable worktree-local temp/cache defaults for tool execution, including Go cache/temp envs (`TMPDIR`, `GOCACHE`, `GOMODCACHE`, `GOTMPDIR`), rooted under the worker's `.deepreview/runtime/` directory so verification commands do not fall back to host-local caches outside the sandbox.
-- round progression is determined by repository changes produced in execute stage.
-- if an execute round produces repository changes, deepreview must run at least one additional review round.
-- if the last allowed execute round produces repository changes, deepreview must schedule one automatic final audit round with the same review strictness and no repository edits.
-- automatic final audit rounds must remain read-only: after execute artifact extraction, the execute worktree must be clean, the candidate branch HEAD must be identical before and after the round, and deepreview must not auto-commit audit-round changes.
-- automatic final audit rounds must end with round status `stop` before delivery can proceed.
-- if an execute round produces no repository changes, deepreview stops the round loop.
+- round progression is determined by validated execute-stage round status plus repository change detection.
+- if an execute round ends with status `continue`, deepreview must run another review round regardless of repository changes.
+- if an execute round ends with the first consecutive status `stop`, deepreview must run one additional confirmation round regardless of repository changes.
+- if an execute round ends with the second consecutive status `stop`, deepreview stops the round loop even if that round also produced repository changes.
+- if another round is still required after the configured `--max-rounds` limit, the run fails and should be rerun with a higher `--max-rounds`.
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds; only one final push is allowed per full run.
 - final delivery push is allowed only after round execution completes and no blocking verification failures are reported.
 - PR mode has exactly four terminal outcomes: success with complete PR, success with incomplete draft PR, success with no deliverable repository changes (no push/PR), or failure.
-- before delivery, deepreview must run repository quality gates and block delivery on failures:
-  - run `pre-commit run --all-files` when `.pre-commit-config.yaml` exists
-  - run `./setup_env.sh` when `setup_env.sh` exists
-  - run both gates in an isolated detached worktree created at the candidate branch HEAD to match the exact content being delivered
 - default delivery mode is `pr` and must not push source branch directly.
+- in `pr` mode, run one pre-delivery Codex PR-preparation pass in a candidate-branch worktree before privacy remediation so Codex can make optional final tidy/history fixes or leave the branch unchanged when no prep work is needed.
 - in `pr` mode, run a bounded pre-delivery privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree so changed-file scans and auto-remediation inspect the exact candidate content rather than the managed repo's default checked-out branch.
-- in `pr` mode, privacy remediation attempts may stop early only after post-attempt privacy scans are clean and the remediation worktree has no uncommitted changes; otherwise proceed automatically after the configured max attempts.
+- in `pr` mode, privacy remediation attempts may stop early only after post-attempt privacy scans are clean and the remediation worktree has no uncommitted changes after deepreview auto-commits any simple residual edits; otherwise proceed automatically after the configured max attempts.
 - in `pr` mode, privacy remediation is a fix gate (attempted remediation + scan feedback), not a hard terminal blocker after max attempts.
 - in `pr` mode, deepreview creates the PR, then runs one fresh codex prompt to generate a clear final PR title + description body and updates both via `gh pr edit`.
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
@@ -122,7 +118,7 @@ Helper command behavior:
 - Optional fields:
   - `confidence`: number in `[0.0, 1.0]`
   - `next_focus`: string
-- This file is an execute-stage artifact for traceability; round-loop control is change-driven, not decision-driven.
+- This file is an execute-stage artifact for traceability; round-loop control combines consecutive status decisions with repository change detection.
 - Invalid or missing required fields fail the round.
 
 ## Delivery naming contract
@@ -160,7 +156,7 @@ Cleanup policy:
 - in `yolo` mode, do not push when verification fails.
 - in PR mode, deepreview should run at most 3 bounded privacy remediation attempts before delivery; each attempt can apply built-in local-path doc sanitization and/or Codex-guided fixes, then re-scan.
 - in PR mode, after bounded privacy attempts complete, delivery proceeds by policy (privacy findings no longer hard-block delivery).
-- if an automatic final audit round reports `continue` or produces repository changes, `pr` mode should publish an incomplete draft PR when deliverable repository changes exist; `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
+- if another round is still required after `--max-rounds`, `pr` mode should publish an incomplete draft PR when deliverable repository changes exist; `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
 - verification strategy is codex-led: codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)
@@ -189,6 +185,7 @@ PR bodies should include these sections in the final Codex-generated output:
 - Default prompt discovery trusts only `DEEPREVIEW_PROMPTS_ROOT` or deepreview-owned executable/source-relative prompt directories; a target repository's own `./prompts` directory is never auto-trusted.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
+- PR mode uses one pre-delivery preparation template: `prompts/delivery/pr-prepare.md`.
 - PR mode uses one pre-delivery privacy remediation template: `prompts/delivery/privacy-fix.md`.
 - PR mode uses one post-delivery description-enhancement template: `prompts/delivery/pr-description-summary.md`.
 - Post-delivery PR enhancement prompt should provide path-level context and let Codex inspect run artifacts/logs/repo directly; avoid injecting pre-digested round/file summary blocks.
