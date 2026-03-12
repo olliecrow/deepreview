@@ -129,6 +129,19 @@ References:
 `README.md`, `AGENTS.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
+Resolve the Codex launcher dynamically by name, preferring `multicodex` and falling back to `codex` unless explicitly forbidden.
+Context:
+Some machines expose a live `multicodex` wrapper that should always be used for prompt runs, but deepreview should remain portable to systems that only have plain `codex`.
+Rationale:
+Name-based resolution avoids hardcoded workstation paths while still letting operators enforce strict `multicodex` usage with `DEEPREVIEW_REQUIRE_MULTICODEX=1`. Checking a supported POSIX-style interactive shell first also lets shell-managed launchers stay current without relying on stale copied binaries, while avoiding broken wrapper invocation on shells with incompatible argument semantics.
+Trade-offs:
+Launcher behavior now depends on shell/PATH setup, and doctor/preflight must validate the real launcher path rather than assuming plain `codex`.
+Enforcement:
+`CodexRunner.resolveLauncher` prefers shell/PATH `multicodex`, `DEEPREVIEW_REQUIRE_MULTICODEX` fails fast when unavailable, and doctor validates the selected launcher with matching auth checks.
+References:
+`internal/deepreview/codex.go`, `internal/deepreview/cli.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
+
+Decision:
 Keep durable contracts in `docs/spec.md` and `docs/architecture.md`; keep unresolved implementation questions in `plan/current/` scratch artifacts.
 Context:
 Open design questions and iterative choices evolve quickly and create churn when stored in durable docs.

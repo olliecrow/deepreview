@@ -6,6 +6,7 @@ import (
 	"flag"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -197,6 +198,7 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"--mode <pr|yolo>      (default: pr)",
 		"DEEPREVIEW_WORKSPACE_ROOT",
 		"DEEPREVIEW_CALLER_CWD",
+		"DEEPREVIEW_REQUIRE_MULTICODEX",
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS",
 		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS",
 		"DEEPREVIEW_REVIEW_MAX_RESTARTS",
@@ -264,6 +266,7 @@ func TestDoctorHelpTextIncludesCoreSections(t *testing.T) {
 	for _, want := range []string{
 		"deepreview doctor",
 		"Run non-mutating preflight checks",
+		"the selected Codex launcher is runnable",
 		"source branch is reachable on remote",
 	} {
 		if !strings.Contains(help, want) {
@@ -508,6 +511,37 @@ func TestRunDoctorCommandBypassesReviewReadinessValidation(t *testing.T) {
 		}
 		if !strings.Contains(stdout, "doctor result: PASS") {
 			t.Fatalf("expected doctor pass output, got:\n%s", stdout)
+		}
+	})
+}
+
+func TestRunDoctorCommandFailsWhenMulticodexIsRequiredButUnavailable(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	t.Setenv("PATH", toolDir)
+	t.Setenv("DEEPREVIEW_GIT_BIN", gitPath)
+	t.Setenv("DEEPREVIEW_CODEX_BIN", writeFakeTool(t, toolDir, "codex"))
+	t.Setenv("DEEPREVIEW_GH_BIN", writeFakeTool(t, toolDir, "gh"))
+	t.Setenv("DEEPREVIEW_REQUIRE_MULTICODEX", "1")
+	t.Setenv("SHELL", "")
+
+	withWorkingDir(t, repo, func() {
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDoctorCommand([]string{})
+		})
+		if code != 1 {
+			t.Fatalf("expected doctor to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, envRequireMulticodex) {
+			t.Fatalf("expected multicodex requirement failure in stdout, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "doctor result: FAIL") {
+			t.Fatalf("expected doctor fail output, got:\n%s", stdout)
 		}
 	})
 }

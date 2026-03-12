@@ -288,6 +288,10 @@ Optional flags:
   DEEPREVIEW_GH_BIN           (default: gh)
     Tool binary overrides (name or absolute path).
 
+  DEEPREVIEW_REQUIRE_MULTICODEX (default: off)
+    Require `+"`multicodex exec`"+` for prompt runs. When unset, deepreview prefers shell/PATH
+    `+"`multicodex`"+` when available and otherwise falls back to `+"`codex exec`"+`.
+
   DEEPREVIEW_REVIEW_INACTIVITY_SECONDS (default: %d)
     Maximum time a worker can run with no evidence of activity before it is restarted.
     Set to 0 to disable inactivity restarts.
@@ -314,7 +318,8 @@ Examples:
 
 Troubleshooting:
   - Missing tools: ensure git/codex/(gh for pr mode) are on PATH or set env overrides.
-  - Auth failures: run local auth flows for codex and gh.
+  - Multicodex routing: install/expose `+"`multicodex`"+` on PATH or via a supported POSIX-style interactive shell; set DEEPREVIEW_REQUIRE_MULTICODEX=1 to fail instead of falling back to codex.
+  - Auth failures: run local auth flows for the launcher deepreview is using (`+"`multicodex status`"+` or `+"`codex login status`"+`) and gh.
   - Terminal rendering issues: pass --no-tui for stable text logs.
   - To stop a run safely at any time, press Ctrl+C once (deepreview cancels and runs cleanup).
   - Invalid mode: allowed values are only pr or yolo (case-insensitive).
@@ -328,8 +333,9 @@ Run non-mutating preflight checks for a planned deepreview run.
 
 What this checks:
   - required tools are available on PATH
+  - the selected Codex launcher is runnable
   - prompt templates and execute queue are present
-  - Codex login status is healthy
+  - launcher auth status is healthy (`+"`multicodex status`"+` or `+"`codex login status`"+`)
   - GitHub auth status is healthy (when mode=pr)
   - source branch is reachable on remote
 
@@ -687,7 +693,7 @@ func runDoctorCommand(args []string) int {
 
 func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 	cfg := o.config
-	checks := make([]doctorCheck, 0, 8)
+	checks := make([]doctorCheck, 0, 10)
 
 	requiredTools := []string{cfg.GitBin, cfg.CodexBin}
 	if cfg.Mode == ModePR {
@@ -710,6 +716,36 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 		})
 	}
 
+	launcher, launcherErr := o.codexRunner.resolveLauncher(context.Background())
+	if launcherErr != nil {
+		checks = append(checks, doctorCheck{
+			Name:   "codex launcher",
+			Passed: false,
+			Detail: launcherErr.Error(),
+		})
+	} else {
+		launcherHelp, err := RunCommand(launcher.withArgs("exec", "--help"), "", "", false, 20*time.Second)
+		if err != nil {
+			checks = append(checks, doctorCheck{
+				Name:   "codex launcher",
+				Passed: false,
+				Detail: err.Error(),
+			})
+		} else if launcherHelp.ReturnCode != 0 {
+			checks = append(checks, doctorCheck{
+				Name:   "codex launcher",
+				Passed: false,
+				Detail: firstOutputLine(launcherHelp.Stdout, launcherHelp.Stderr),
+			})
+		} else {
+			checks = append(checks, doctorCheck{
+				Name:   "codex launcher",
+				Passed: true,
+				Detail: fmt.Sprintf("%s exec available", launcher.Display),
+			})
+		}
+	}
+
 	if err := checkPromptTemplates(o.promptsRoot); err != nil {
 		checks = append(checks, doctorCheck{
 			Name:   "prompt templates and execute queue",
@@ -724,25 +760,60 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 		})
 	}
 
-	codexStatus, codexErr := RunCommand([]string{cfg.CodexBin, "login", "status"}, "", "", false, 20*time.Second)
-	if codexErr != nil {
+	if launcherErr != nil {
 		checks = append(checks, doctorCheck{
-			Name:   "codex login status",
+			Name:   "codex auth status",
 			Passed: false,
-			Detail: codexErr.Error(),
+			Detail: launcherErr.Error(),
 		})
-	} else if codexStatus.ReturnCode != 0 {
-		checks = append(checks, doctorCheck{
-			Name:   "codex login status",
-			Passed: false,
-			Detail: firstOutputLine(codexStatus.Stdout, codexStatus.Stderr),
-		})
+	} else if launcher.Display == "multicodex" {
+		multicodexStatus, multicodexErr := RunCommand(launcher.withArgs("status"), "", "", false, 20*time.Second)
+		if multicodexErr != nil {
+			checks = append(checks, doctorCheck{
+				Name:   "multicodex status",
+				Passed: false,
+				Detail: multicodexErr.Error(),
+			})
+		} else if multicodexStatus.ReturnCode != 0 {
+			checks = append(checks, doctorCheck{
+				Name:   "multicodex status",
+				Passed: false,
+				Detail: firstOutputLine(multicodexStatus.Stdout, multicodexStatus.Stderr),
+			})
+		} else if !strings.Contains(strings.ToLower(multicodexStatus.Stdout), "logged-in") {
+			checks = append(checks, doctorCheck{
+				Name:   "multicodex status",
+				Passed: false,
+				Detail: "no logged-in multicodex profiles detected",
+			})
+		} else {
+			checks = append(checks, doctorCheck{
+				Name:   "multicodex status",
+				Passed: true,
+				Detail: "at least one logged-in profile available",
+			})
+		}
 	} else {
-		checks = append(checks, doctorCheck{
-			Name:   "codex login status",
-			Passed: true,
-			Detail: "authenticated",
-		})
+		codexStatus, codexErr := RunCommand([]string{cfg.CodexBin, "login", "status"}, "", "", false, 20*time.Second)
+		if codexErr != nil {
+			checks = append(checks, doctorCheck{
+				Name:   "codex login status",
+				Passed: false,
+				Detail: codexErr.Error(),
+			})
+		} else if codexStatus.ReturnCode != 0 {
+			checks = append(checks, doctorCheck{
+				Name:   "codex login status",
+				Passed: false,
+				Detail: firstOutputLine(codexStatus.Stdout, codexStatus.Stderr),
+			})
+		} else {
+			checks = append(checks, doctorCheck{
+				Name:   "codex login status",
+				Passed: true,
+				Detail: "authenticated",
+			})
+		}
 	}
 
 	if cfg.Mode == ModePR {

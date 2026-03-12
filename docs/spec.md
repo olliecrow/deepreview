@@ -25,6 +25,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - when launched from the deepreview source repo via wrappers that `cd` before execution, repo inference may fall back to caller context (`DEEPREVIEW_CALLER_CWD` first, then `OLDPWD`) to avoid silently targeting the tool repo.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization after refreshing the tracked upstream ref.
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
+- deepreview resolves the Codex prompt launcher by name instead of by hardcoded local repo path: prefer `multicodex` from a supported POSIX-style interactive shell, then `multicodex` on `PATH`, then fall back to `codex` unless `DEEPREVIEW_REQUIRE_MULTICODEX` is set.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, then lock/worktree cleanup runs before process exit.
 - round loop runs up to `--max-rounds` (default `5`) total execute rounds and may stop early.
@@ -70,6 +71,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
 - managed repo checkout paths are branch-scoped under the workspace so fresh-clone setup for one source branch cannot race another source branch of the same repo.
 - Codex auth should rely on local Codex CLI session/subscription, not repository-stored API keys.
+- `DEEPREVIEW_REQUIRE_MULTICODEX=1` requires `multicodex exec` to be available from a supported POSIX-style interactive shell or `PATH`; when unset, deepreview may fall back to `codex exec`.
 - all Codex prompt executions (new and resumed threads, including post-delivery prompts) must use `--model gpt-5.4` and `model_reasoning_effort="high"`.
 
 ## Runtime contract
@@ -82,6 +84,8 @@ This document defines the canonical runtime and product contract for `deepreview
   - otherwise provide enough explicit context (`<repo>` and/or `--source-branch`) to resolve target repo + source branch
 - optional inference override:
   - `DEEPREVIEW_CALLER_CWD` can be set by launch wrappers to preserve caller repo inference when the wrapper changes directories before invoking deepreview.
+- optional launcher requirement:
+  - `DEEPREVIEW_REQUIRE_MULTICODEX=1` disables fallback to `codex exec` and fails preflight/doctor if `multicodex exec` is unavailable.
 - core options:
   - `--concurrency <n>` default `4`
   - `--max-rounds <n>` default `5`
@@ -98,6 +102,7 @@ This document defines the canonical runtime and product contract for `deepreview
 
 Helper command behavior:
 - `doctor` runs non-mutating preflight checks for local tools, auth state, prompt assets, and remote source-branch reachability.
+- `doctor` validates the actual prompt launcher that deepreview would use (`multicodex exec --help` when routed through multicodex, otherwise `codex exec --help`) and then checks matching auth state (`multicodex status` or `codex login status`).
 - `dry-run` prints resolved run context and stage order without running Codex or mutating git state.
 
 ## Round artifact contract

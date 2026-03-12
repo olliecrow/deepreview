@@ -38,6 +38,13 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 - `gh` for default pull request mode
 - authenticated local sessions for required tools
 
+Optional launcher:
+
+- `multicodex`
+  - when available in a supported POSIX-style interactive shell or on `PATH`, deepreview prefers `multicodex exec` for Codex prompt runs
+  - when unavailable, deepreview falls back to `codex exec`
+  - set `DEEPREVIEW_REQUIRE_MULTICODEX=1` to fail fast instead of falling back
+
 ## Safety and isolation
 
 - Review and execute work happen under `~/deepreview`, not in your local checkout.
@@ -103,6 +110,13 @@ Show command help.
 ./bin/deepreview dry-run <repo> --source-branch <branch>
 ```
 
+If you want to require `multicodex` on a machine where it is expected to exist:
+
+```bash
+DEEPREVIEW_REQUIRE_MULTICODEX=1 ./bin/deepreview doctor
+DEEPREVIEW_REQUIRE_MULTICODEX=1 ./bin/deepreview review
+```
+
 ## Useful options
 
 ```bash
@@ -135,7 +149,7 @@ source branch: feature/login
 mode: pr
 
 [ok] tool available: git
-[ok] tool available: codex
+[ok] codex launcher
 [ok] gh auth status
 [ok] remote source branch reachable
 
@@ -190,6 +204,8 @@ If you are actively editing deepreview source, rebuild after changes:
 ```bash
 go build -o ./bin/deepreview ./cmd/deepreview
 ```
+
+If you also keep `multicodex` under active development, expose it as a real command in your shell or `PATH` rather than relying on a stale copied binary. deepreview only resolves launcher names (`multicodex` first, then `codex`) and does not hardcode repo-specific launcher paths.
 
 ## Command summary
 
