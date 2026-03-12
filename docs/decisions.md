@@ -181,28 +181,28 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Run iterative deepreview rounds with default `max_rounds=5`, using change-driven progression and a required round-status artifact for traceability.
+Run iterative deepreview rounds with default `max_rounds=5`, using two-signal progression (Codex status decisions plus repository change detection) and a required round-status artifact for traceability.
 Context:
 One review/execute pass may miss issues; iterative passes improve confidence before final delivery.
 Rationale:
-Bounded rounds provide extra review depth while preventing unbounded loops, while change-driven progression keeps control flow deterministic.
+Bounded rounds provide extra review depth while preventing unbounded loops, while using Codex's explicit `continue|stop` judgment keeps the loop aligned with review quality instead of relying only on whether files changed. The second-consecutive-stop rule preserves one confirmation round without needing a separate audit mode.
 Trade-offs:
 Longer wall-clock runtime compared with single-pass flows.
 Enforcement:
-Runtime contract includes `--max-rounds`; architecture/spec require change-driven round-loop control and a validated round-status artifact per execute pass.
+Runtime contract includes `--max-rounds`; architecture/spec require validated round-status artifacts plus orchestrator logic where `continue` always continues, first `stop` forces a confirmation round, and second consecutive `stop` ends the loop even if that round changed the repository.
 References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-When the last allowed execute round changes the repository, automatically add one final audit round instead of failing immediately.
+Do not use a special automatic final audit round; use the normal round loop and fail only when another round is still required at `--max-rounds`.
 Context:
-deepreview requires a post-change reassessment before delivery, but long runs should not fail purely because the last configured execute round happened to produce changes.
+deepreview requires confirmation before delivery, but a dedicated audit-only branch of orchestration added extra policy surface, extra tests, and a second round mode to reason about.
 Rationale:
-An automatic final audit round preserves the same review strictness while converting a bookkeeping failure into a deterministic terminal state. The audit round remains read-only, so it cannot silently expand scope.
+The first-stop/second-stop policy already gives a built-in confirmation pass. Removing the audit-only mode simplifies the orchestrator and keeps every round on one consistent execute path.
 Trade-offs:
-Total runtime may increase by one round, and `--max-rounds` now means the maximum number of code-changing execute rounds rather than the total number of round directories.
+Runs that still need another round at the configured limit now fail/incomplete directly instead of getting one extra implicit audit round for free.
 Enforcement:
-Orchestrator control flow auto-schedules one read-only audit round, updates the reported max-round count, and fails if that audit round requests more work, leaves the execute worktree dirty after artifact extraction, or moves the candidate branch HEAD. Audit-round enforcement uses HEAD immutability rather than file-diff emptiness alone so tree-identical commits (for example `--allow-empty`) cannot slip through delivery.
+Orchestrator round control has no audit-only branch. When another round is still required at `--max-rounds`, `pr` mode publishes an incomplete draft PR when deliverable changes exist and `yolo` mode fails with guidance to rerun using a higher limit.
 References:
 `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 
@@ -642,11 +642,11 @@ In PR mode, pre-delivery privacy handling uses a bounded remediation loop (maxim
 Context:
 Hard-failing delivery on first privacy scan miss caused repeated runs to complete review/execute work but fail at the final gate, creating avoidable delivery dead-ends.
 Rationale:
-Treating privacy as a bounded fix loop keeps privacy hygiene proactive while preserving delivery momentum, while requiring clean post-attempt scans and a clean remediation worktree prevents a single inaccurate `stop` or uncommitted local edit from bypassing the gate.
+Treating privacy as a bounded fix loop keeps privacy hygiene proactive while preserving delivery momentum, while requiring clean post-attempt scans and a clean remediation worktree after deepreview auto-commits simple residual edits prevents a single inaccurate `stop` from bypassing the gate without forcing Codex to manage every last `git commit` detail itself.
 Trade-offs:
 Residual privacy findings may still exist when bounded attempts are exhausted; this approach prioritizes bounded autonomy and delivery continuity over hard-stop guarantees at this gate.
 Enforcement:
-PR-mode delivery runs a Codex-guided privacy remediation attempt loop (`max=3`) in a candidate-branch worktree before push/PR actions; attempts may stop early only after post-attempt commit-message and changed-file scans pass and the remediation worktree is clean, and delivery proceeds by policy after bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
+PR-mode delivery runs one Codex branch-preparation pass and then a Codex-guided privacy remediation attempt loop (`max=3`) in candidate-branch worktrees before push/PR actions; attempts may stop early only after post-attempt commit-message and changed-file scans pass and the remediation worktree is clean after deepreview auto-commits simple residual edits, and delivery proceeds by policy after bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
 References:
 `internal/deepreview/orchestrator.go`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
 
@@ -939,17 +939,17 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/progress.go`, `internal/deepreview/progress_test.go`, `internal/deepreview/tui.go`
 
 Decision:
-Block delivery unless repository quality gates pass, and keep docs local-path remediation as a built-in step within PR-mode privacy remediation attempts.
+Let delivery rely on execute-stage verification plus Codex-led PR preparation/privacy remediation; do not run a separate detached delivery quality-gate stage.
 Context:
-Runs could reach delivery with failing repository pre-commit hooks, and privacy scans could fail late on machine-local absolute paths inside changed docs files even when remediation was straightforward.
+The detached delivery-gate stage duplicated work the execute prompt already tries to do, added more orchestration branches, and blocked delivery for checks that are better handled inside the main Codex verify/tidy workflow.
 Rationale:
-Hard-gating delivery on repo-local quality checks prevents deepreview from opening PRs that are already known-bad on mandatory local checks. Auto-remediating docs local-path violations keeps deterministic redaction built in while reducing unnecessary manual reruns.
+Keeping final delivery focused on Codex-led prep plus privacy remediation removes a dedicated worktree/check stage, reduces orchestration bloat, and still preserves explicit execute-stage verification and delivery-surface privacy checks.
 Trade-offs:
-Delivery can take longer when `setup_env.sh` exists, and some runs now fail earlier on quality-gate violations that were previously deferred to PR CI. Auto-remediation is intentionally narrow (docs text formats only) to avoid mutating code paths.
+Delivery no longer has an extra detached safety net for `pre-commit` or `setup_env.sh`; repositories that want those checks should have Codex run them during execute verification or PR preparation when appropriate.
 Enforcement:
-Delivery stage resolves the candidate branch HEAD and creates a detached `delivery/quality-worktree` snapshot from that commit, then runs `pre-commit run --all-files` when `.pre-commit-config.yaml` exists and `./setup_env.sh` when present inside that snapshot; non-zero exit blocks delivery. The quality worktree is removed after checks (success or failure). In PR mode, privacy remediation attempts include a built-in docs-only local-path redaction pass (`/path/to/project` placeholder) before optional Codex remediation within each bounded attempt.
+Delivery stage does not create a detached quality-gate worktree. In PR mode it runs Codex branch preparation, then bounded privacy remediation, then push/PR actions. Execute-stage verification and delivery-surface privacy checks remain the enforced gates.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
+`internal/deepreview/orchestrator.go`, `prompts/delivery/pr-prepare.md`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
 
 Decision:
 Introduce bounded inactivity watchdog and restart handling for all Codex workers (independent review, execute prompts, and post-delivery prompt).

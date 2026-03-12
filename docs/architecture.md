@@ -17,7 +17,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - default branch
 - mode (`pr` or `yolo`)
 - concurrency (default `4`)
-- max rounds (default `5`) for code-changing execute rounds, plus one automatic final audit round when the last allowed execute round changes the repository
+- max rounds (default `5`) for total execute rounds
 - UI mode (full-screen UI by default when terminal capabilities are valid; optional `--no-tui` force-off for structured text logs)
 - if source branch is inferred from local repo context, require local readiness:
   - no tracked local changes
@@ -53,14 +53,14 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - Codex writes the round status file inside the execute worktree sandbox, and the orchestrator persists the canonical copy at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - the orchestrator writes `~/deepreview/runs/<run-id>/round-<round>/round.json` after successful execute-stage completion; final completion reporting counts only rounds with that authoritative record
 - aggressively remove execute worktree and transient per-round artifacts
-- if execute produced changes, update candidate head to latest local committed state and continue
-- if the last allowed execute round produced changes, deepreview automatically schedules one final audit round using the same three execute prompts in audit-only mode; that round may not edit the repository and must end in a terminal `stop` decision for delivery to proceed
-- if execute produced no changes, stop the round loop early
+- if execute status is `continue`, reset the stop streak and continue
+- if execute status is the first consecutive `stop`, keep the candidate head and run one confirmation round
+- if execute status is the second consecutive `stop`, stop the round loop even if that round also changed the repository
+- if another round is still required at the configured max, fail and require rerun with a higher `--max-rounds`
 
 4. Final delivery (single push point):
-- require completed round execution and no blocking verification failures
-- run delivery quality gates (`pre-commit --all-files`, optional `./setup_env.sh`) in a detached worktree at candidate HEAD so gating matches deliverable branch content
-- `pr` mode (default): run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree; early stop is allowed only after clean post-attempt scans and a clean remediation worktree; then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; terminal outcomes are complete PR, incomplete draft PR, or failure
+- require completed round execution and no blocking execute-stage verification failures
+- `pr` mode (default): run one Codex PR-preparation pass in a candidate-branch worktree; then run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree; early stop is allowed only after clean post-attempt scans and a clean remediation worktree after deepreview auto-commits any simple residual edits; then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; terminal outcomes are complete PR, incomplete draft PR, or failure
 - `yolo` mode: push committed candidate state directly to source branch
 
 5. Finalization:
@@ -79,8 +79,8 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - default mode is `pr` and must not push source branch directly.
 - `yolo` mode is explicit opt-in.
 - no pushes occur during intermediate rounds.
-- verification quality gates block final delivery.
-- in PR mode, privacy remediation runs as a bounded pre-delivery Codex loop (up to 3 attempts) over delivery commit messages and changed files; early stop requires clean post-attempt scans and a clean remediation worktree, then delivery proceeds by policy if bounded attempts are exhausted.
+- in PR mode, a Codex PR-preparation pass can make optional final tidy/history changes before privacy remediation; if no prep changes are needed it should leave the branch untouched.
+- in PR mode, privacy remediation runs as a bounded pre-delivery Codex loop (up to 3 attempts) over delivery commit messages and changed files; early stop requires clean post-attempt scans and a clean remediation worktree after deepreview auto-commits any simple residual edits, then delivery proceeds by policy if bounded attempts are exhausted.
 - privacy guardrails remain enforced on delivery/public text surfaces (PR title/body and delivery summaries).
 - local terminal progress/error output is intentionally literal and unredacted for operator debugging.
 - verification execution is codex-led (tests, pre-commit checks, locally runnable CI-like checks when available) with explicit evidence in round/final summaries.

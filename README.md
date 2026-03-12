@@ -1,7 +1,7 @@
 # deepreview
 
 deepreview is a local CLI for deep branch reviews.
-It runs parallel Codex reviews, consolidates them, executes fixes, verifies outcomes, and keeps looping until the execute phase makes no code changes.
+It runs parallel Codex reviews, consolidates them, executes fixes, verifies outcomes, and keeps looping until Codex produces two consecutive `stop` decisions.
 
 <img width="1209" height="594" alt="image" src="https://github.com/user-attachments/assets/0fc6b1f5-28e2-4d4e-b061-cc24202e6515" />
 
@@ -20,16 +20,15 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 3. Each independent review worker must complete and write its review markdown report; deepreview monitors all Codex workers for activity and restarts stalled workers with bounded retries to avoid pipeline stalls.
 4. The execute stage runs three prompts in one Codex thread: consolidate and plan, execute and verify, cleanup/summary/commit.
 5. Canonical round artifacts, logs, temp directories, and caches are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside its isolated worktree sandbox first, and deepreview copies the canonical artifacts back into the run directory.
-6. If execute changed code, deepreview runs another review round.
-7. If the last allowed execute round changed code, deepreview automatically adds one final audit round with the same review bar and no repository edits.
-8. If execute made no code changes, deepreview stops the loop.
+6. If execute says `continue`, deepreview always runs another review round.
+7. If execute says `stop` once, deepreview still runs one confirmation round.
+8. If execute says `stop` for two consecutive rounds, deepreview stops the loop, even if the second stop round also changed code.
 9. In default mode, it opens one pull request back into your source branch; if the run made tangible repository changes but did not finish cleanly, it still opens a draft PR marked `[INCOMPLETE]`.
-10. In default mode, it then runs one post-delivery Codex pass to generate the final PR title and description for complete PR deliveries.
+10. In default mode, it first runs one Codex PR-preparation pass, then bounded privacy remediation, then one post-delivery Codex pass to generate the final PR title and description for complete PR deliveries.
 11. The final PR title/body are Codex-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 12. In yolo mode, it pushes directly to your source branch.
 13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
-14. Before delivery, deepreview resolves candidate branch HEAD and runs repository quality gates in a detached worktree snapshot of that candidate (`pre-commit run --all-files` when configured, plus `./setup_env.sh` when present).
-15. In PR mode, deepreview runs a bounded privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree immediately before push/PR delivery, and then proceeds with PR delivery by policy after the bounded attempts.
+14. In PR mode, deepreview runs a bounded privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree immediately before push/PR delivery, and then proceeds with PR delivery by policy after the bounded attempts.
 
 ## Requirements
 
