@@ -60,6 +60,71 @@ func TestResolveRepoIdentityLocalPathUsesOriginRemoteAsCloneSource(t *testing.T)
 	}
 }
 
+func TestResolveRepoIdentityLocalPathRejectsNonGitHubOriginRemote(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "init", repo)
+	runGitTest(t, td, "-C", repo, "remote", "add", "origin", "ssh://mirror.local/github.com/example-org/example-repo.git")
+
+	_, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, repo)
+	if err == nil {
+		t.Fatalf("expected non-GitHub origin remote to be rejected")
+	}
+	if !strings.Contains(err.Error(), "GitHub origin remote") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveRepoIdentityPreservesExplicitSSHGitHubURL(t *testing.T) {
+	repo := githubSSHCloneURL("example-org", "example-repo")
+	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, repo)
+	if err != nil {
+		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	}
+	if identity.CloneSource != repo {
+		t.Fatalf("expected clone source %q, got %q", repo, identity.CloneSource)
+	}
+}
+
+func TestParseOwnerRepoAcceptsGitHubLocatorForms(t *testing.T) {
+	cases := []struct {
+		input string
+		owner string
+		name  string
+	}{
+		{input: "example-org/example-repo", owner: "example-org", name: "example-repo"},
+		{input: "https://github.com/example-org/example-repo.git", owner: "example-org", name: "example-repo"},
+		{input: githubSSHCloneURL("example-org", "example-repo"), owner: "example-org", name: "example-repo"},
+		{input: githubSCPLikeCloneURL("example-org", "example-repo"), owner: "example-org", name: "example-repo"},
+	}
+
+	for _, tc := range cases {
+		owner, name, ok := parseOwnerRepo(tc.input)
+		if !ok {
+			t.Fatalf("expected parseOwnerRepo to accept %q", tc.input)
+		}
+		if owner != tc.owner || name != tc.name {
+			t.Fatalf("parseOwnerRepo(%q) = %s/%s, want %s/%s", tc.input, owner, name, tc.owner, tc.name)
+		}
+	}
+}
+
+func TestParseOwnerRepoRejectsSuffixOnlyNonGitHubRemotes(t *testing.T) {
+	cases := []string{
+		"ssh://mirror.local/github.com/example-org/example-repo.git",
+		"file:///tmp/github.com/example-org/example-repo.git",
+	}
+
+	for _, input := range cases {
+		if owner, name, ok := parseOwnerRepo(input); ok {
+			t.Fatalf("expected parseOwnerRepo to reject %q, got %s/%s", input, owner, name)
+		}
+	}
+}
+
 func TestPromptWatchdogPolicyClampsToSafeValues(t *testing.T) {
 	o := &Orchestrator{
 		config: ReviewConfig{
@@ -459,6 +524,38 @@ func TestNewOrchestratorIsolatesManagedRepoPathPerSourceBranch(t *testing.T) {
 	}
 }
 
+func TestPreflightUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	workspace := t.TempDir()
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	writeExecutable(t, filepath.Join(toolDir, "multicodex"), "#!/bin/sh\nexit 0\n")
+	ghPath := writeFakeTool(t, toolDir, "gh")
+	t.Setenv("PATH", toolDir)
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", filepath.Join(repoRoot(t), "prompts"))
+	t.Setenv("SHELL", "")
+
+	o, err := NewOrchestrator(ReviewConfig{
+		Repo:          repo,
+		SourceBranch:  "feature/test",
+		WorkspaceRoot: workspace,
+		RunID:         "run-1",
+		GitBin:        gitPath,
+		CodexBin:      "codex",
+		GhBin:         ghPath,
+		Mode:          ModePR,
+	}, &NullProgressReporter{})
+	if err != nil {
+		t.Fatalf("NewOrchestrator failed: %v", err)
+	}
+	if err := o.preflight(); err != nil {
+		t.Fatalf("expected preflight to succeed with multicodex-only PATH, got: %v", err)
+	}
+}
+
 func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {
 	td := t.TempDir()
 	roundDir := filepath.Join(td, "round-01")
@@ -616,7 +713,7 @@ func TestAutoCommitWorktreeChangesIfNeededCommitsDirtyWorktree(t *testing.T) {
 
 	runGitTest(t, td, "init", "-b", "main", repoPath)
 	runGitTest(t, td, "-C", repoPath, "config", "user.name", "deepreview-test")
-	runGitTest(t, td, "-C", repoPath, "config", "user.email", "deepreview-test@example.com")
+	runGitTest(t, td, "-C", repoPath, "config", "user.email", testPlaceholderEmail("deepreview-test"))
 	if err := os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -630,7 +727,7 @@ func TestAutoCommitWorktreeChangesIfNeededCommitsDirtyWorktree(t *testing.T) {
 		config: ReviewConfig{GitBin: "git"},
 		commitIdentity: CommitIdentity{
 			Name:  "deepreview-test",
-			Email: "deepreview-test@example.com",
+			Email: testPlaceholderEmail("deepreview-test"),
 		},
 	}
 	if err := o.autoCommitWorktreeChangesIfNeeded(repoPath, "deepreview: auto commit"); err != nil {

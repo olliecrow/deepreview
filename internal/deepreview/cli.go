@@ -226,9 +226,9 @@ Usage:
 Arguments:
   <repo>
     Repository locator. Supported forms:
-      - local git repo path (directory containing .git and origin remote)
+      - local git repo path (directory containing .git and a supported GitHub origin remote)
       - owner/repo
-      - github remote URL (https://... or git@...)
+      - GitHub remote URL (HTTPS, SSH, or SCP-style GitHub clone URL)
     Context:
       Local path mode reads remote.origin.url and clones/fetches in managed workspace.
       deepreview never runs review work directly in your local repo directory.
@@ -695,11 +695,7 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 	cfg := o.config
 	checks := make([]doctorCheck, 0, 10)
 
-	requiredTools := []string{cfg.GitBin, cfg.CodexBin}
-	if cfg.Mode == ModePR {
-		requiredTools = append(requiredTools, cfg.GhBin)
-	}
-	for _, tool := range requiredTools {
+	for _, tool := range requiredHostTools(cfg) {
 		path, err := exec.LookPath(tool)
 		if err != nil {
 			checks = append(checks, doctorCheck{
@@ -794,7 +790,7 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 			})
 		}
 	} else {
-		codexStatus, codexErr := RunCommand([]string{cfg.CodexBin, "login", "status"}, "", "", false, 20*time.Second)
+		codexStatus, codexErr := RunCommand([]string{launcher.Command, "login", "status"}, "", "", false, 20*time.Second)
 		if codexErr != nil {
 			checks = append(checks, doctorCheck{
 				Name:   "codex login status",

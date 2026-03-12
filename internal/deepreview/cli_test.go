@@ -546,6 +546,41 @@ func TestRunDoctorCommandFailsWhenMulticodexIsRequiredButUnavailable(t *testing.
 	})
 }
 
+func TestRunDoctorCommandUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	multicodexPath := filepath.Join(toolDir, "multicodex")
+	writeExecutable(t, multicodexPath, "#!/bin/sh\nif [ \"$1\" = \"status\" ]; then\n  echo logged-in profile\n  exit 0\nfi\nexit 0\n")
+	t.Setenv("PATH", toolDir)
+	t.Setenv("DEEPREVIEW_GIT_BIN", gitPath)
+	t.Setenv("DEEPREVIEW_GH_BIN", writeFakeTool(t, toolDir, "gh"))
+	t.Setenv("DEEPREVIEW_CODEX_BIN", "codex")
+	t.Setenv("SHELL", "")
+
+	withWorkingDir(t, repo, func() {
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDoctorCommand([]string{})
+		})
+		if code != 0 {
+			t.Fatalf("expected doctor to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "doctor result: PASS") {
+			t.Fatalf("expected doctor pass output, got:\n%s", stdout)
+		}
+		if strings.Contains(stdout, "tool available: codex") {
+			t.Fatalf("did not expect raw codex tool check in multicodex mode, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "multicodex status") {
+			t.Fatalf("expected multicodex auth check output, got:\n%s", stdout)
+		}
+	})
+}
+
 func TestIsInterruptError(t *testing.T) {
 	if !isInterruptError(context.Canceled) {
 		t.Fatalf("expected context.Canceled to be treated as interrupt")

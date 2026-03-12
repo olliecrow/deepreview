@@ -35,7 +35,7 @@ func TestCloneOrFetchReplacesStaleDirectory(t *testing.T) {
 
 	runGitCommand(t, td, "init", "--bare", remote)
 	runGitCommand(t, td, "clone", remote, seed)
-	runGitCommand(t, td, "-C", seed, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
 	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
 	runGitCommand(t, td, "-C", seed, "checkout", "-b", "main")
 	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
@@ -84,6 +84,69 @@ func TestDryRunPushRefspec(t *testing.T) {
 	if err := DryRunPushRefspec(repo, "git", "HEAD:main"); err != nil {
 		t.Fatalf("DryRunPushRefspec failed: %v", err)
 	}
+}
+
+func TestResolveDefaultBranchFallsBackToExactRemoteRef(t *testing.T) {
+	cases := []struct {
+		name   string
+		branch string
+		want   string
+	}{
+		{name: "main", branch: "main", want: "main"},
+		{name: "master", branch: "master", want: "master"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			repo := createRepoForDefaultBranchFallbackTest(t, tc.branch)
+			got, err := ResolveDefaultBranch(repo, "git")
+			if err != nil {
+				t.Fatalf("ResolveDefaultBranch failed: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("ResolveDefaultBranch = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestResolveDefaultBranchDoesNotMatchPrefixBranches(t *testing.T) {
+	for _, branch := range []string{"mainline", "master-old"} {
+		t.Run(branch, func(t *testing.T) {
+			repo := createRepoForDefaultBranchFallbackTest(t, branch)
+			_, err := ResolveDefaultBranch(repo, "git")
+			if err == nil {
+				t.Fatalf("expected ResolveDefaultBranch to reject %q without exact main/master ref", branch)
+			}
+			if !strings.Contains(err.Error(), "unable to resolve default branch") {
+				t.Fatalf("unexpected error: %v", err)
+			}
+		})
+	}
+}
+
+func createRepoForDefaultBranchFallbackTest(t *testing.T, branch string) string {
+	t.Helper()
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	repo := filepath.Join(td, "repo")
+
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, seed)
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", branch)
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "README.md")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "seed")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", branch)
+
+	runGitCommand(t, td, "clone", remote, repo)
+	_ = os.Remove(filepath.Join(repo, ".git", "refs", "remotes", "origin", "HEAD"))
+	return repo
 }
 
 func TestEnsureWorktreeOperationalExcludesResolvesRelativeGitPathAgainstRepo(t *testing.T) {

@@ -47,6 +47,25 @@ func TestInferRepoAndBranchFailsOutsideGitHubRepo(t *testing.T) {
 	})
 }
 
+func TestInferRepoAndBranchRejectsSuffixOnlyNonGitHubRemote(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", repo, "remote", "add", "origin", "ssh://mirror.local/github.com/example-org/example-repo.git")
+
+	withWorkingDir(t, repo, func() {
+		_, _, err := inferRepoAndBranch("git", "", "")
+		if err == nil {
+			t.Fatalf("expected suffix-only non-GitHub remote to be rejected")
+		}
+		if !strings.Contains(err.Error(), "current directory is not a valid GitHub repo") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestInferRepoAndBranchAllowsUntrackedFiles(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {
