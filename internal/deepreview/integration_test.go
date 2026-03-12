@@ -1015,7 +1015,7 @@ func TestEndToEndPRModeSetsSandboxSafeGoEnvForCodexRuns(t *testing.T) {
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
-		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD=1",
+		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_OUTSIDE_CWD=1",
 	)
 	output := runCmdExpectFailure(t, root, env,
 		bin,

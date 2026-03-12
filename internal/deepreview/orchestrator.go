@@ -2002,11 +2002,11 @@ func persistStatusArtifact(srcPath, dstPath string) error {
 
 func executePromptLabel(templateName string) string {
 	switch templateName {
-	case "01-consolidate-plan.md", "01-review-triage.md":
+	case "01-consolidate-plan.md":
 		return "consolidate and plan"
-	case "02-execute-verify.md", "03-execute-verify.md":
+	case "02-execute-verify.md":
 		return "execute and verify"
-	case "03-cleanup-summary-commit.md", "04-cleanup-summary-commit.md":
+	case "03-cleanup-summary-commit.md":
 		return "cleanup, summary, commit"
 	default:
 		return templateName
