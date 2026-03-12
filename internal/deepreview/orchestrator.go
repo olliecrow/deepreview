@@ -74,10 +74,6 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	if config.ReviewActivityPoll <= 0 && config.ReviewActivityPollS > 0 {
 		config.ReviewActivityPoll = time.Duration(config.ReviewActivityPollS) * time.Second
 	}
-	// Enforce globally pinned Codex settings regardless of caller-supplied config.
-	config.CodexModel = forcedCodexModel
-	config.CodexReasoning = forcedCodexReasoningEffort
-
 	return &Orchestrator{
 		config:          config,
 		toolRoot:        toolRoot,
@@ -87,10 +83,8 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 		repoIdentity:    repoIdentity,
 		managedRepoPath: managedRepoPath,
 		codexRunner: CodexRunner{
-			CodexBin:   config.CodexBin,
-			CodexModel: config.CodexModel,
-			Reasoning:  config.CodexReasoning,
-			Timeout:    config.CodexTimeout,
+			CodexBin: config.CodexBin,
+			Timeout:  config.CodexTimeout,
 		},
 		reporter: reporter,
 	}, nil
@@ -471,7 +465,7 @@ func (o *Orchestrator) Run() (retErr error) {
 }
 
 func (o *Orchestrator) preflight() error {
-	requiredBins := []string{o.config.GitBin, o.config.CodexBin}
+	requiredBins := []string{o.config.GitBin}
 	if o.config.Mode == ModePR {
 		requiredBins = append(requiredBins, o.config.GhBin)
 	}
@@ -1993,8 +1987,8 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 	}
 
 	statusArtifactPath := filepath.Join(attemptDir, "privacy-status.json")
-	// Codex can only write inside its worktree sandbox, so persist the worker-written
-	// status there first and copy it back into the run artifact directory after execution.
+	// Keep worker-written status inside the remediation worktree first, then copy it
+	// back into the run artifact directory after execution.
 	statusWorktreeRelPath := filepath.ToSlash(filepath.Join(".tmp", "deepreview", "privacy-fix", fmt.Sprintf("attempt-%02d", attempt), "privacy-status.json"))
 	statusWorktreePath := filepath.Join(worktreePath, filepath.FromSlash(statusWorktreeRelPath))
 	worktreeRelPath, relErr := filepath.Rel(o.runRoot, worktreePath)
@@ -3557,8 +3551,6 @@ func (o *Orchestrator) writeRunConfig() error {
 		"run_id":                o.config.RunID,
 		"git_bin":               sanitizePublicText(o.config.GitBin),
 		"codex_bin":             sanitizePublicText(o.config.CodexBin),
-		"codex_model":           o.config.CodexModel,
-		"codex_reasoning":       o.config.CodexReasoning,
 		"gh_bin":                sanitizePublicText(o.config.GhBin),
 		"codex_timeout_seconds": o.config.CodexTimeoutSeconds,
 	}
