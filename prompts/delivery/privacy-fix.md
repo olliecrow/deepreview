@@ -31,7 +31,7 @@ Process:
 - local machine absolute paths
 - disallowed email-like values
 3. Keep changes surgical and in scope.
-4. If you make fixes, create a local commit with a clear message (for example: `deepreview: privacy remediation attempt {{ATTEMPT_NUMBER}}`).
+4. If you make fixes, prefer creating a local commit with a clear message (for example: `deepreview: privacy remediation attempt {{ATTEMPT_NUMBER}}`). Deepreview may auto-commit simple residual uncommitted edits if needed.
 5. If no safe high-confidence fixes remain, do not force speculative edits.
 
 Decision policy:
