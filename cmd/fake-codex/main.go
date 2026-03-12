@@ -242,9 +242,15 @@ func handlePrompt(prompt string) (string, error) {
 			if decision == "" {
 				decision = "stop"
 			}
-			payload := map[string]any{"decision": decision, "reason": "ready"}
-			b, _ := json.MarshalIndent(payload, "", "  ")
-			if err := writeText(statusPath, string(b)+"\n"); err != nil {
+			statusText := ""
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_INVALID_ROUND_STATUS")) != "" {
+				statusText = "{invalid json}\n"
+			} else {
+				payload := map[string]any{"decision": decision, "reason": "ready"}
+				b, _ := json.MarshalIndent(payload, "", "  ")
+				statusText = string(b) + "\n"
+			}
+			if err := writeText(statusPath, statusText); err != nil {
 				return "", err
 			}
 		}
@@ -439,7 +445,9 @@ func requireSandboxGoEnvWithinCWD() error {
 
 func runGo(args ...string) error {
 	cmd := exec.Command("go", args...)
-	cmd.Stdout = os.Stdout
+	// Keep stdout reserved for Codex JSON events so inherited go-tool output
+	// cannot corrupt the event stream seen by the orchestrator.
+	cmd.Stdout = os.Stderr
 	cmd.Stderr = os.Stderr
 	cmd.Env = os.Environ()
 	return cmd.Run()
