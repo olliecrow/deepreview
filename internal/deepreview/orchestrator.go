@@ -1561,9 +1561,18 @@ func readRoundRecord(path string) (RoundRecord, error) {
 	if record.Round < 1 {
 		return RoundRecord{}, NewDeepReviewError("invalid round record %s: missing positive round number", path)
 	}
-	if strings.TrimSpace(record.Status.Decision) == "" {
-		return RoundRecord{}, NewDeepReviewError("invalid round record %s: missing round status decision", path)
+	if strings.TrimSpace(record.Summary) == "" {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: missing summary artifact path", path)
 	}
+	statusPayload, err := json.Marshal(record.Status)
+	if err != nil {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: %v", path, err)
+	}
+	status, err := readRoundStatusFromBytes(statusPayload)
+	if err != nil {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: %v", path, err)
+	}
+	record.Status = status
 	return record, nil
 }
 
@@ -2104,7 +2113,10 @@ func readRoundStatus(path string) (RoundStatus, error) {
 	if err != nil {
 		return RoundStatus{}, err
 	}
+	return readRoundStatusFromBytes(b)
+}
 
+func readRoundStatusFromBytes(b []byte) (RoundStatus, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(b, &raw); err != nil || raw == nil {
 		return RoundStatus{}, NewDeepReviewError("round status must be a JSON object")
