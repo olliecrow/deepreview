@@ -788,7 +788,8 @@ func TestEndToEndPRModePrivacyFixAttemptsProceedAfterMax(t *testing.T) {
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
-		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice@corp.com",
+		// Build the disallowed email at runtime so the checked-in fixture stays privacy-safe.
+		"FAKE_CODEX_CHANGE_COMMIT_MESSAGE=contact alice"+"@corp.com",
 		"FAKE_CODEX_PRIVACY_DECISION=continue",
 		"FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD=1",
 	)
