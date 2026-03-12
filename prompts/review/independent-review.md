@@ -33,6 +33,7 @@ Rules:
 20. Notes are scratch artifacts only; do not pad them for heartbeat or busywork.
 21. Use the normal inherited local environment. Do not rewrite temp/cache/network settings unless a specific check clearly requires it.
 22. If a verification path proves impractical locally, record the blocker and continue with the best reliable substitute instead of thrashing on setup.
+23. Always anchor your repo inspection and output writes to `{{WORKTREE_PATH}}`, `{{OUTPUT_REVIEW_PATH}}`, and `{{WORKER_NOTES_PATH}}`. If your starting `pwd` is elsewhere, switch to `{{WORKTREE_PATH}}` before doing repo analysis.
 
 {{REVIEW_MODE_NOTE}}
 

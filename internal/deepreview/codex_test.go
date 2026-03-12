@@ -39,6 +39,7 @@ func TestCodexRunnerBuildCommandResumeThread(t *testing.T) {
 }
 
 func TestCodexRunnerResolveLauncherPrefersPathMulticodex(t *testing.T) {
+	t.Setenv(envRequireMulticodex, "")
 	fakeBin := t.TempDir()
 	writeExecutable(t, filepath.Join(fakeBin, "multicodex"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", fakeBin)
@@ -57,6 +58,7 @@ func TestCodexRunnerResolveLauncherPrefersPathMulticodex(t *testing.T) {
 }
 
 func TestCodexRunnerResolveLauncherFallsBackToCodex(t *testing.T) {
+	t.Setenv(envRequireMulticodex, "")
 	fakeBin := t.TempDir()
 	writeExecutable(t, filepath.Join(fakeBin, "codex"), "#!/bin/sh\nexit 0\n")
 	t.Setenv("PATH", fakeBin)
@@ -91,6 +93,7 @@ func TestCodexRunnerResolveLauncherRequiresMulticodex(t *testing.T) {
 }
 
 func TestCodexRunnerResolveLauncherPrefersMulticodexOverExplicitCodexFallback(t *testing.T) {
+	t.Setenv(envRequireMulticodex, "")
 	fakeBin := t.TempDir()
 	codexPath := filepath.Join(fakeBin, "custom-codex")
 	writeExecutable(t, codexPath, "#!/bin/sh\nexit 0\n")
@@ -111,6 +114,7 @@ func TestCodexRunnerResolveLauncherPrefersMulticodexOverExplicitCodexFallback(t 
 }
 
 func TestCodexRunnerResolveLauncherUsesExplicitCodexFallbackWhenMulticodexMissing(t *testing.T) {
+	t.Setenv(envRequireMulticodex, "")
 	fakeBin := t.TempDir()
 	codexPath := filepath.Join(fakeBin, "custom-codex")
 	writeExecutable(t, codexPath, "#!/bin/sh\nexit 0\n")
