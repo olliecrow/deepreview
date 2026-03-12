@@ -1005,7 +1005,16 @@ func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "go.mod")
+	if err := os.MkdirAll(filepath.Join(seed, "hello"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "hello", "hello.go"), []byte("package hello\n\nfunc Value() int { return 1 }\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "hello", "hello_test.go"), []byte("package hello\n\nimport \"testing\"\n\nfunc TestValue(t *testing.T) {\n\tif Value() != 1 {\n\t\tt.Fatalf(\"unexpected value\")\n\t}\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "go.mod", "hello/hello.go", "hello/hello_test.go")
 	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
 	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
 
@@ -1015,8 +1024,9 @@ func TestEndToEndPRModeKeepsCodexSandboxPathsSafe(t *testing.T) {
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
-		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_OUTSIDE_CWD=1",
+		"FAKE_CODEX_REQUIRE_SANDBOX_GO_ENV_WITHIN_CWD=1",
 		"FAKE_CODEX_REQUIRE_PROMPT_OUTPUTS_WITHIN_CWD=1",
+		"FAKE_CODEX_RUN_GO_TEST_WITH_INHERITED_ENV=1",
 	)
 	output := runCmd(t, root, env,
 		bin,

@@ -70,12 +70,11 @@ func TestCodexRunnerBuildCommandForcesPinnedModelAndReasoning(t *testing.T) {
 	}
 }
 
-func TestCodexRunnerBuildEnvironmentUsesRunScopedSandboxPaths(t *testing.T) {
+func TestCodexRunnerBuildEnvironmentUsesWorktreeLocalSandboxPaths(t *testing.T) {
 	runner := CodexRunner{CodexBin: "codex"}
-	td := t.TempDir()
-	logPrefix := filepath.Join(td, "round-01", "execute", "prompt-01")
+	cwd := t.TempDir()
 
-	env, err := runner.buildEnvironment(logPrefix)
+	env, err := runner.buildEnvironment(cwd)
 	if err != nil {
 		t.Fatalf("buildEnvironment failed: %v", err)
 	}
@@ -90,12 +89,12 @@ func TestCodexRunnerBuildEnvironmentUsesRunScopedSandboxPaths(t *testing.T) {
 	}
 
 	want := map[string]string{
-		"GOCACHE":    filepath.Join(td, "round-01", "execute", "runtime", "go-build-cache"),
-		"GOMODCACHE": filepath.Join(td, "round-01", "execute", "runtime", "go-mod-cache"),
-		"GOTMPDIR":   filepath.Join(td, "round-01", "execute", "runtime", "go-tmp"),
-		"TMPDIR":     filepath.Join(td, "round-01", "execute", "runtime", "tmp"),
-		"TMP":        filepath.Join(td, "round-01", "execute", "runtime", "tmp"),
-		"TEMP":       filepath.Join(td, "round-01", "execute", "runtime", "tmp"),
+		"GOCACHE":    filepath.Join(cwd, ".deepreview", "runtime", "go-build-cache"),
+		"GOMODCACHE": filepath.Join(cwd, ".deepreview", "runtime", "go-mod-cache"),
+		"GOTMPDIR":   filepath.Join(cwd, ".deepreview", "runtime", "go-tmp"),
+		"TMPDIR":     filepath.Join(cwd, ".deepreview", "runtime", "tmp"),
+		"TMP":        filepath.Join(cwd, ".deepreview", "runtime", "tmp"),
+		"TEMP":       filepath.Join(cwd, ".deepreview", "runtime", "tmp"),
 	}
 	for key, expectedPath := range want {
 		if got := envMap[key]; got != expectedPath {

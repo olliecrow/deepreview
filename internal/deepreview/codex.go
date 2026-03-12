@@ -42,8 +42,8 @@ func (c *CodexRunner) buildCommand(threadID *string) []string {
 	return command
 }
 
-func (c *CodexRunner) buildEnvironment(logPrefixPath string) ([]string, error) {
-	sandboxRoot, err := filepath.Abs(filepath.Join(filepath.Dir(logPrefixPath), "runtime"))
+func (c *CodexRunner) buildEnvironment(cwd string) ([]string, error) {
+	sandboxRoot, err := filepath.Abs(filepath.Join(cwd, ".deepreview", "runtime"))
 	if err != nil {
 		return nil, err
 	}
@@ -108,7 +108,7 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 		return CodexRunResult{}, NewDeepReviewError("codex binary must be configured")
 	}
 	command := c.buildCommand(threadID)
-	commandEnv, err := c.buildEnvironment(logPrefixPath)
+	commandEnv, err := c.buildEnvironment(cwd)
 	if err != nil {
 		return CodexRunResult{}, err
 	}
