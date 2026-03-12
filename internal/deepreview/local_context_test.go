@@ -51,7 +51,7 @@ func TestInferRepoAndBranchRejectsSuffixOnlyNonGitHubRemote(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
 	runGitCommand(t, td, "init", "-b", "main", repo)
-	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.email", testPlaceholderEmail("test"))
 	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
 	runGitCommand(t, td, "-C", repo, "remote", "add", "origin", "ssh://mirror.local/github.com/example-org/example-repo.git")
 

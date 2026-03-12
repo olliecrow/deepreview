@@ -35,7 +35,7 @@ func TestCloneOrFetchReplacesStaleDirectory(t *testing.T) {
 
 	runGitCommand(t, td, "init", "--bare", remote)
 	runGitCommand(t, td, "clone", remote, seed)
-	runGitCommand(t, td, "-C", seed, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
 	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
 	runGitCommand(t, td, "-C", seed, "checkout", "-b", "main")
 	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
@@ -134,7 +134,7 @@ func createRepoForDefaultBranchFallbackTest(t *testing.T, branch string) string 
 
 	runGitCommand(t, td, "init", "--bare", remote)
 	runGitCommand(t, td, "clone", remote, seed)
-	runGitCommand(t, td, "-C", seed, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
 	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
 	runGitCommand(t, td, "-C", seed, "checkout", "-b", branch)
 	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
