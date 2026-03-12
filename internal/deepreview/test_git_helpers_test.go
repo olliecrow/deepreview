@@ -8,6 +8,11 @@ import (
 	"testing"
 )
 
+func TestMain(m *testing.M) {
+	_ = os.Unsetenv(deepreviewCallerCWDEnv)
+	os.Exit(m.Run())
+}
+
 func runGitCommand(t *testing.T, cwd string, args ...string) string {
 	t.Helper()
 	cmd := exec.Command("git", args...)

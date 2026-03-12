@@ -60,6 +60,9 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	if err != nil {
 		return nil, err
 	}
+	if err := validateDeliveryModeRepoIdentity(config.Mode, repoIdentity); err != nil {
+		return nil, err
+	}
 
 	if reporter == nil {
 		reporter = &NullProgressReporter{}
@@ -67,12 +70,10 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 
 	runRoot := filepath.Join(workspaceRoot, "runs", config.RunID)
 	managedRepoPath := filepath.Join(
-		workspaceRoot,
-		"repos",
-		repoIdentity.Owner,
-		repoIdentity.Name,
-		"branches",
-		FilesystemSafeKey(config.SourceBranch),
+		append(
+			[]string{workspaceRoot, "repos"},
+			append(repoIdentity.NamespaceSegments(), "branches", FilesystemSafeKey(config.SourceBranch))...,
+		)...,
 	)
 	if config.CodexTimeout <= 0 {
 		config.CodexTimeout = time.Duration(config.CodexTimeoutSeconds) * time.Second
@@ -168,18 +169,19 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 			if remote == "" {
 				return RepoIdentity{}, NewDeepReviewError("local repo input must have remote.origin.url configured: %s", repoPath)
 			}
+			if localCloneSource, ok := localCloneSource(remote, repoPath); ok {
+				return RepoIdentity{
+					SourceType:  RepoSourceFilesystem,
+					Name:        filesystemRepoDisplayName(localCloneSource),
+					CloneSource: localCloneSource,
+				}, nil
+			}
 			owner, name, ok := parseOwnerRepo(remote)
 			if ok {
-				return RepoIdentity{Owner: owner, Name: name, CloneSource: remote}, nil
-			}
-			if localCloneSource, ok := localCloneSource(remote); ok {
-				localName := SanitizeSegment(filepath.Base(repoPath))
-				if strings.TrimSpace(localName) == "" || localName == "." || localName == "value" {
-					localName = FilesystemSafeKey(localCloneSource)
-				}
 				return RepoIdentity{
-					Owner:       "local",
-					Name:        localName,
+					SourceType:  RepoSourceGitHub,
+					Owner:       owner,
+					Name:        name,
 					CloneSource: remote,
 				}, nil
 			}
@@ -192,13 +194,28 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 		if isOwnerRepoSlug(source) {
 			source = fmt.Sprintf("https://github.com/%s/%s.git", owner, name)
 		}
-		return RepoIdentity{Owner: owner, Name: name, CloneSource: source}, nil
+		return RepoIdentity{
+			SourceType:  RepoSourceGitHub,
+			Owner:       owner,
+			Name:        name,
+			CloneSource: source,
+		}, nil
 	}
 
 	return RepoIdentity{}, NewDeepReviewError("unable to resolve repo locator: %s", repo)
 }
 
-func localCloneSource(remote string) (string, bool) {
+func filesystemRepoDisplayName(cloneSource string) string {
+	base := strings.TrimSpace(filepath.Base(filepath.Clean(cloneSource)))
+	base = strings.TrimSuffix(base, ".git")
+	name := SanitizeSegment(base)
+	if name == "" || name == "." || name == "value" {
+		return FilesystemSafeKey(cloneSource)
+	}
+	return name
+}
+
+func localCloneSource(remote, repoPath string) (string, bool) {
 	trimmed := strings.TrimSpace(remote)
 	if trimmed == "" {
 		return "", false
@@ -208,18 +225,37 @@ func localCloneSource(remote string) (string, bool) {
 		if err != nil || parsed.Scheme != "file" || strings.TrimSpace(parsed.Path) == "" {
 			return "", false
 		}
-		return parsed.Path, true
+		if abs, err := filepath.Abs(filepath.Clean(parsed.Path)); err == nil {
+			return abs, true
+		}
+		return "", false
 	}
 	if filepath.IsAbs(trimmed) {
-		return trimmed, true
+		if abs, err := filepath.Abs(filepath.Clean(trimmed)); err == nil {
+			return abs, true
+		}
+		return "", false
 	}
-	if strings.HasPrefix(trimmed, "."+string(os.PathSeparator)) || trimmed == "." || strings.HasPrefix(trimmed, "..") {
-		return trimmed, true
-	}
-	if _, err := os.Stat(trimmed); err == nil {
-		return trimmed, true
+	candidate := filepath.Join(repoPath, trimmed)
+	if _, err := os.Stat(candidate); err == nil {
+		if abs, err := filepath.Abs(filepath.Clean(candidate)); err == nil {
+			return abs, true
+		}
+		return "", false
 	}
 	return "", false
+}
+
+func validateDeliveryModeRepoIdentity(mode string, repoIdentity RepoIdentity) error {
+	if strings.TrimSpace(mode) != ModePR {
+		return nil
+	}
+	if repoIdentity.SupportsPRDelivery() {
+		return nil
+	}
+	return NewDeepReviewError(
+		"--mode pr requires a GitHub-backed repo identity; local filesystem origin remotes are not supported for PR delivery",
+	)
 }
 
 var ownerRepoSlugRe = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`)
@@ -617,11 +653,10 @@ type runLockRecord struct {
 
 func (o *Orchestrator) runLockFilePath() string {
 	return filepath.Join(
-		o.workspaceRoot,
-		"locks",
-		o.repoIdentity.Owner,
-		o.repoIdentity.Name,
-		FilesystemSafeKey(o.config.SourceBranch)+".lock",
+		append(
+			[]string{o.workspaceRoot, "locks"},
+			append(o.repoIdentity.NamespaceSegments(), FilesystemSafeKey(o.config.SourceBranch)+".lock")...,
+		)...,
 	)
 }
 

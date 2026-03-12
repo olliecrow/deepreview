@@ -37,6 +37,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 - `codex`
 - `gh` for default pull request mode
 - authenticated local sessions for required tools
+- default pull request mode requires a GitHub-backed repo identity; local filesystem origin remotes are rejected in `pr` mode
 
 Optional launcher:
 
@@ -55,6 +56,7 @@ Optional launcher:
 - Managed repository state is isolated per repo and source branch, so different branches of the same repo can run concurrently without sharing a checkout.
 - deepreview blocks concurrent runs only when both the repo and source branch match.
 - Default mode works on a delivery branch and opens a pull request.
+- Default pull request mode requires a GitHub-backed repo identity.
 - Your current branch and working directory stay untouched in default mode.
 - yolo mode is available, and it is off by default.
 - Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
@@ -66,6 +68,7 @@ Optional launcher:
 
 - Windows is unsupported.
 - Requires local `git` and `codex`; default pull request mode also requires `gh`.
+- Local filesystem origin remotes are not supported in default `pr` mode.
 - Review quality depends on Codex outputs and repository test coverage.
 - Deep runs can take significant time on large repositories or high `--max-rounds`.
 - Execute prompt 1 receives compact review summaries plus file paths to the full on-disk reviews, so Codex can read more detail when it chooses without forcing all review text into the prompt.
@@ -189,7 +192,7 @@ Then run:
 dr review
 ```
 
-If your launcher changes directories before invoking deepreview (for example, wrapping `go run` in the deepreview source repo), pass the original caller directory so repo inference stays correct:
+If your launcher changes directories before invoking deepreview (for example, wrapping `go run` in the deepreview source repo), pass the original caller directory so repo inference stays correct. `DEEPREVIEW_CALLER_CWD` is an explicit override, so deepreview will honor it even if the wrapper launches from another repo or a non-repo directory:
 
 ```bash
 deepreview() {
