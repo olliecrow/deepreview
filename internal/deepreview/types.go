@@ -105,11 +105,18 @@ type RoundRecord struct {
 	Summary string      `json:"summary"`
 }
 
+type CodexContext struct {
+	ThreadID          string `json:"thread_id,omitempty"`
+	MulticodexProfile string `json:"multicodex_profile,omitempty"`
+}
+
 type CodexRunResult struct {
-	ThreadID      string
-	AgentMessages []string
-	Stdout        string
-	Stderr        string
+	ThreadID          string
+	MulticodexProfile string
+	UsedMulticodex    bool
+	AgentMessages     []string
+	Stdout            string
+	Stderr            string
 }
 
 type DeliveryResult struct {

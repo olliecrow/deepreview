@@ -12,6 +12,7 @@ import (
 )
 
 const envRequireMulticodex = "DEEPREVIEW_REQUIRE_MULTICODEX"
+const envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
 
 type CodexRunner struct {
 	CodexBin string
@@ -38,14 +39,14 @@ type CodexRunHooks struct {
 	OnStderrChunk func(chunk []byte)
 }
 
-func (c *CodexRunner) buildCommand(threadID *string) []string {
-	return c.buildCommandWithLauncher(codexLauncher{Command: c.CodexBin, Display: "codex"}, threadID)
+func (c *CodexRunner) buildCommand(ctx *CodexContext) []string {
+	return c.buildCommandWithLauncher(codexLauncher{Command: c.CodexBin, Display: "codex"}, ctx)
 }
 
-func (c *CodexRunner) buildCommandWithLauncher(launcher codexLauncher, threadID *string) []string {
+func (c *CodexRunner) buildCommandWithLauncher(launcher codexLauncher, ctx *CodexContext) []string {
 	command := launcher.withArgs("exec")
-	if threadID != nil && *threadID != "" {
-		command = append(command, "resume", *threadID)
+	if ctx != nil && strings.TrimSpace(ctx.ThreadID) != "" {
+		command = append(command, "resume", ctx.ThreadID)
 	}
 	command = append(command,
 		// deepreview may run codex from non-repo run directories during delivery.
@@ -74,6 +75,24 @@ func (c *CodexRunner) resolveLauncher() (codexLauncher, error) {
 	return codexLauncher{Command: codexPath, Display: "codex"}, nil
 }
 
+func (c *CodexRunner) resolveLauncherForContext(ctx *CodexContext) (codexLauncher, error) {
+	if ctx != nil && strings.TrimSpace(ctx.MulticodexProfile) != "" {
+		multicodexPath, err := exec.LookPath("multicodex")
+		if err != nil {
+			return codexLauncher{}, NewDeepReviewError(
+				"resume requires multicodex profile %q but multicodex is not available on PATH",
+				ctx.MulticodexProfile,
+			)
+		}
+		return codexLauncher{
+			Command: multicodexPath,
+			Args:    []string{"run", ctx.MulticodexProfile, "--", "codex"},
+			Display: "multicodex",
+		}, nil
+	}
+	return c.resolveLauncher()
+}
+
 func requireMulticodex() bool {
 	switch strings.ToLower(strings.TrimSpace(os.Getenv(envRequireMulticodex))) {
 	case "1", "true", "yes", "on":
@@ -83,11 +102,11 @@ func requireMulticodex() bool {
 	}
 }
 
-func (c *CodexRunner) RunPrompt(cwd, prompt string, threadID *string, logPrefixPath string) (CodexRunResult, error) {
-	return c.RunPromptWithHooks(cwd, prompt, threadID, logPrefixPath, nil)
+func (c *CodexRunner) RunPrompt(cwd, prompt string, ctx *CodexContext, logPrefixPath string) (CodexRunResult, error) {
+	return c.RunPromptWithHooks(cwd, prompt, ctx, logPrefixPath, nil)
 }
 
-func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, logPrefixPath string, hooks *CodexRunHooks) (CodexRunResult, error) {
+func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, logPrefixPath string, hooks *CodexRunHooks) (CodexRunResult, error) {
 	if strings.TrimSpace(c.CodexBin) == "" {
 		return CodexRunResult{}, NewDeepReviewError("codex binary must be configured")
 	}
@@ -95,14 +114,15 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 	if hooks != nil && hooks.Context != nil {
 		parentCtx = hooks.Context
 	}
-	launcher, err := c.resolveLauncher()
+	launcher, err := c.resolveLauncherForContext(ctx)
 	if err != nil {
 		return CodexRunResult{}, err
 	}
-	command := c.buildCommandWithLauncher(launcher, threadID)
+	command := c.buildCommandWithLauncher(launcher, ctx)
 
 	stdoutPath := logPrefixPath + ".stdout.jsonl"
 	stderrPath := logPrefixPath + ".stderr.log"
+	selectedProfilePath := logPrefixPath + ".multicodex-profile.json"
 	if err := os.MkdirAll(filepath.Dir(stdoutPath), 0o755); err != nil {
 		return CodexRunResult{}, err
 	}
@@ -149,7 +169,11 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 			}
 		},
 	}
-	completed, err := RunCommandContextWithEnvAndCallbacks(parentCtx, command, cwd, os.Environ(), prompt, true, c.Timeout, streamCallbacks)
+	commandEnv := withEnvOverride(os.Environ(), envMulticodexSelectedProfilePath, "")
+	if launcher.Display == "multicodex" && (ctx == nil || strings.TrimSpace(ctx.MulticodexProfile) == "") {
+		commandEnv = withEnvOverride(commandEnv, envMulticodexSelectedProfilePath, selectedProfilePath)
+	}
+	completed, err := RunCommandContextWithEnvAndCallbacks(parentCtx, command, cwd, commandEnv, prompt, true, c.Timeout, streamCallbacks)
 	if err != nil {
 		return CodexRunResult{}, err
 	}
@@ -161,10 +185,17 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 	}
 
 	discoveredThreadID := ""
-	if threadID != nil {
-		discoveredThreadID = *threadID
+	if ctx != nil {
+		discoveredThreadID = ctx.ThreadID
+	}
+	discoveredProfile := ""
+	if ctx != nil {
+		discoveredProfile = strings.TrimSpace(ctx.MulticodexProfile)
 	}
 	agentMessages := make([]string, 0)
+	if launcher.Display == "multicodex" && discoveredProfile == "" {
+		discoveredProfile = readSelectedMulticodexProfile(selectedProfilePath)
+	}
 
 	for _, raw := range strings.Split(completed.Stdout, "\n") {
 		line := strings.TrimSpace(raw)
@@ -202,9 +233,44 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, threadID *string, l
 	}
 
 	return CodexRunResult{
-		ThreadID:      discoveredThreadID,
-		AgentMessages: agentMessages,
-		Stdout:        completed.Stdout,
-		Stderr:        completed.Stderr,
+		ThreadID:          discoveredThreadID,
+		MulticodexProfile: discoveredProfile,
+		UsedMulticodex:    launcher.Display == "multicodex",
+		AgentMessages:     agentMessages,
+		Stdout:            completed.Stdout,
+		Stderr:            completed.Stderr,
 	}, nil
+}
+
+func withEnvOverride(base []string, key, value string) []string {
+	key = strings.TrimSpace(key)
+	if key == "" {
+		return append([]string{}, base...)
+	}
+	prefix := key + "="
+	env := make([]string, 0, len(base)+1)
+	for _, kv := range base {
+		if strings.HasPrefix(kv, prefix) {
+			continue
+		}
+		env = append(env, kv)
+	}
+	if value != "" {
+		env = append(env, prefix+value)
+	}
+	return env
+}
+
+func readSelectedMulticodexProfile(path string) string {
+	payload, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var metadata struct {
+		Profile string `json:"profile"`
+	}
+	if err := json.Unmarshal(payload, &metadata); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(metadata.Profile)
 }

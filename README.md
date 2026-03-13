@@ -43,6 +43,8 @@ Optional launcher:
 
 - `multicodex`
   - when available on `PATH`, deepreview always uses `multicodex exec` for Codex prompt runs
+  - when a multicodex-backed prompt creates a resumable Codex thread, deepreview records the selected multicodex profile and reuses that profile for later `resume` calls in the same logical context
+  - fresh prompt families still start with normal multicodex lowest-usage selection
   - when unavailable, deepreview falls back to `codex exec`
   - set `DEEPREVIEW_REQUIRE_MULTICODEX=1` to fail fast instead of falling back
   - `DEEPREVIEW_CODEX_BIN` only changes the codex fallback path; it does not override a working `multicodex`
@@ -52,7 +54,7 @@ Optional launcher:
 - Review and execute work happen under `~/deepreview`, not in your local checkout.
 - Run-scoped logs, canonical artifacts, temp directories, and caches live under `~/deepreview/runs/<run-id>/`.
 - Codex workers stage prompt-written artifacts under reserved worktree-local `.deepreview/` paths, which deepreview excludes from delivery and copies back into the run directory for canonical storage.
-- Codex prompt runs use your normal local Codex configuration by default; deepreview does not force a separate profile/model/runtime layer.
+- Codex prompt runs use your normal local Codex configuration by default; deepreview does not force a separate profile/model/runtime layer beyond pinning resumed multicodex-backed threads to the profile that created them.
 - Managed repository state is isolated per repo and source branch, so different branches of the same repo can run concurrently without sharing a checkout.
 - deepreview blocks concurrent runs only when both the repo and source branch match.
 - Default mode works on a delivery branch and opens a pull request.
