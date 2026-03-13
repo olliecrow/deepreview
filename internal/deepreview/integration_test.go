@@ -178,26 +178,30 @@ func buildFakeBinaries(t *testing.T, root string) (string, string) {
 	return fakeCodex, fakeGH
 }
 
-func buildExecuteStallCodexWrapper(t *testing.T, fakeCodex string) string {
-	t.Helper()
-	tmpDir := t.TempDir()
-	wrapperPath := filepath.Join(tmpDir, "stalling-codex")
-	script := `#!/bin/sh
+func buildStallCodexWrapperScript(fakeCodex, body string) string {
+	return fmt.Sprintf(`#!/bin/sh
 set -eu
 prompt_file="$(mktemp "${TMPDIR:-/tmp}/deepreview-stall-prompt.XXXXXX")"
 trap 'rm -f "$prompt_file"' EXIT
 cat > "$prompt_file"
 marker_path="${STALL_MARKER_PATH:?}"
-if grep -q "prompt 2 of 3" "$prompt_file" && [ ! -f "$marker_path" ]; then
+%s
+exec %q "$@" < "$prompt_file"
+`, body, fakeCodex)
+}
+
+func buildExecuteStallCodexWrapper(t *testing.T, fakeCodex string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	wrapperPath := filepath.Join(tmpDir, "stalling-codex")
+	script := buildStallCodexWrapperScript(fakeCodex, `if grep -q "prompt 2 of 3" "$prompt_file" && [ ! -f "$marker_path" ]; then
   mkdir -p "$(dirname "$marker_path")"
   : > "$marker_path"
   printf 'stale stalled attempt\n' > stale_execute_attempt.txt
   git add stale_execute_attempt.txt
   git commit -m "stale stalled attempt" >/dev/null 2>&1 || true
   sleep "${STALL_SECONDS:-15}"
-fi
-exec "` + fakeCodex + `" "$@" < "$prompt_file"
-`
+fi`)
 	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stalling codex wrapper: %v", err)
 	}
@@ -211,13 +215,7 @@ func buildExecuteArtifactStallCodexWrapper(t *testing.T, fakeCodex string) strin
 	t.Helper()
 	tmpDir := t.TempDir()
 	wrapperPath := filepath.Join(tmpDir, "artifact-stalling-codex")
-	script := `#!/bin/sh
-set -eu
-prompt_file="$(mktemp "${TMPDIR:-/tmp}/deepreview-stall-prompt.XXXXXX")"
-trap 'rm -f "$prompt_file"' EXIT
-cat > "$prompt_file"
-marker_path="${STALL_MARKER_PATH:?}"
-if grep -q "prompt 2 of 3" "$prompt_file" && [ ! -f "$marker_path" ]; then
+	script := buildStallCodexWrapperScript(fakeCodex, `if grep -q "prompt 2 of 3" "$prompt_file" && [ ! -f "$marker_path" ]; then
   mkdir -p "$(dirname "$marker_path")"
   : > "$marker_path"
   mkdir -p .deepreview/artifacts
@@ -240,9 +238,7 @@ if grep -q "prompt 3 of 3" "$prompt_file"; then
   printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"finalize complete"}}\n'
   printf '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
   exit 0
-fi
-exec "` + fakeCodex + `" "$@" < "$prompt_file"
-`
+fi`)
 	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write execute artifact stalling codex wrapper: %v", err)
 	}
@@ -256,22 +252,14 @@ func buildStageCommitStallCodexWrapper(t *testing.T, fakeCodex, promptNeedle, st
 	t.Helper()
 	tmpDir := t.TempDir()
 	wrapperPath := filepath.Join(tmpDir, "stage-stalling-codex")
-	script := fmt.Sprintf(`#!/bin/sh
-set -eu
-prompt_file="$(mktemp "${TMPDIR:-/tmp}/deepreview-stall-prompt.XXXXXX")"
-trap 'rm -f "$prompt_file"' EXIT
-cat > "$prompt_file"
-marker_path="${STALL_MARKER_PATH:?}"
-if grep -q %q "$prompt_file" && [ ! -f "$marker_path" ]; then
+	script := buildStallCodexWrapperScript(fakeCodex, fmt.Sprintf(`if grep -q %q "$prompt_file" && [ ! -f "$marker_path" ]; then
   mkdir -p "$(dirname "$marker_path")"
   : > "$marker_path"
   printf %q > %q
   git add %q
   git commit -m %q >/dev/null 2>&1 || true
   sleep "${STALL_SECONDS:-15}"
-fi
-exec %q "$@" < "$prompt_file"
-`, promptNeedle, "stale staged attempt\n", staleFile, staleFile, commitMessage, fakeCodex)
+fi`, promptNeedle, "stale staged attempt\n", staleFile, staleFile, commitMessage))
 	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
 		t.Fatalf("write stage stalling codex wrapper: %v", err)
 	}
