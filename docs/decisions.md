@@ -1102,3 +1102,120 @@ Enforcement:
 Orchestrator retry logic snapshots immutable delivery baselines before PR-prep/privacy-fix attempts, execute retries preserve only prior successful prompt outputs, and integration tests cover stale execute artifacts plus stale PR-prep/privacy-remediation commits.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Supersede the old `critical|high bug only` execution policy with a `high-confidence, material improvement only` policy.
+Context:
+Recent retained deepreview runs showed the highest-value accepted changes were often simplifications, deletions, refactors, scope reductions, or documentation fixes rather than only classic bug fixes. The prior severity-only gate was too narrow and pushed the system toward overfitting on bug labels instead of value.
+Rationale:
+The correct high bar is not "must be a bug." The correct high bar is "must be material, high-confidence, and no-regret." This keeps deepreview conservative while allowing improvements that clearly reduce complexity, fix mismatches, or materially improve maintainability and delivery quality.
+Trade-offs:
+Prompt wording and triage validation must work harder to reject cosmetic churn, speculative cleanup, and low-payoff refactors.
+Enforcement:
+Spec, architecture, alignment, and prompts define accepted work as high-confidence material improvements only; triage artifacts must mark accepts with `impact: material` and `confidence: high`; low-value polish and speculative hardening are explicitly out of scope.
+References:
+`docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `prompts/review/independent-review.md`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`
+
+Decision:
+Keep deepreview as a thin operational orchestrator and delegate most repo mutation work to Codex.
+Context:
+The current codebase accumulated programmatic delivery and post-processing logic that duplicates work Codex can already perform well. The retained runs showed deepreview adds the most value when it isolates work, gathers evidence, and enforces a few guardrails, not when it hardcodes every repo mutation step.
+Rationale:
+Thin orchestration reduces code bloat and keeps repo-specific reasoning in the prompt-driven system that already understands diffs, tests, commits, and PR workflows.
+Trade-offs:
+Prompt quality matters more, and the orchestrator still needs strong validation around artifacts and terminal outcomes.
+Enforcement:
+Architecture/spec define the hardcoded boundary as workspace/worktree lifecycle, locking, stage launching/resume, activity monitoring, context reset policy, artifact validation, and final run classification; execute and delivery prompts own implementation, commits, branch prep, and PR work where practical.
+References:
+`docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `internal/deepreview/orchestrator.go`
+
+Decision:
+Use fresh Codex contexts at stage and round boundaries, while preserving continuity only within tightly coupled prompt queues.
+Context:
+Run artifacts showed very large prompt contexts, repeated external skill loading, and expensive history drag when contexts were allowed to accumulate too much prior conversation.
+Rationale:
+Fresh contexts for independent reviewers, each execute stage, each delivery stage, and retries/restarts keep context bloat down and reduce stale assumptions. Shared context still pays for tightly coupled execute prompts within one round.
+Trade-offs:
+Prompts must be explicit about artifact handoff and local file paths because they cannot rely on earlier chat history.
+Enforcement:
+Spec and architecture require fresh contexts per independent reviewer, per execute stage, per delivery stage, per new round, and per inactivity retry; execute retains continuity only within its ordered prompt queue.
+References:
+`docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `internal/deepreview/orchestrator.go`
+
+Decision:
+Simplify execute from three prompts to a two-prompt queue: triage/plan, then implement/verify/finalize/commit.
+Context:
+The old execute flow split cleanup, summary, docs, status, and commit work into a third prompt even though that work is tightly coupled to implementation and verification output. This added more orchestration surface and more context carry without enough value.
+Rationale:
+Two prompts preserve the useful boundary between "decide what to do" and "do it completely" while removing an extra stage and clarifying responsibility.
+Trade-offs:
+Prompt 2 becomes denser and must handle docs/status/commit responsibilities reliably.
+Enforcement:
+Prompt queue, prompt docs, spec, and architecture now define a two-prompt execute queue. Prompt 2 owns verification evidence, doc updates, round summary/status writes, and local commit creation.
+References:
+`docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `prompts/execute/queue.txt`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`
+
+Decision:
+Replace the multi-stage PR-prep/privacy/post-description delivery stack with one Codex-owned delivery stage.
+Context:
+The previous delivery flow spread branch hygiene, privacy remediation, PR creation, and PR metadata writing across several orchestrator-managed stages. This created a lot of code and tests for workflow plumbing rather than review quality.
+Rationale:
+One delivery stage in a fresh context is simpler: Codex can inspect the branch, run final checks, push, create or update the PR, wait on remote checks, fix high-confidence blockers if needed, and keep the PR title/body current.
+Trade-offs:
+Delivery prompts become more important, and the orchestrator must still validate that the delivery result is real and safe before declaring success.
+Enforcement:
+Spec, architecture, and alignment define one shared delivery prompt. The delivery contract requires Codex to pursue merge readiness, including waiting on remote checks and updating PR metadata, while the orchestrator remains responsible only for lifecycle, validation, and incomplete-draft recovery.
+References:
+`docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `prompts/delivery/01-deliver.md`, `internal/deepreview/orchestrator.go`
+
+Decision:
+Prefer review artifact paths plus a compact manifest over large injected review-summary blocks in execute prompt 1.
+Context:
+Retained run artifacts showed prompt-token bloat from large injected summaries while execute still reopened full review files directly from disk.
+Rationale:
+Passing file paths and a small manifest keeps context light and lets Codex read the exact underlying review evidence when useful.
+Trade-offs:
+Prompt 1 loses some up-front convenience and depends more on Codex opening files directly.
+Enforcement:
+Spec, architecture, prompt docs, and execute prompt 1 require review file paths plus a compact manifest rather than large injected summary sections.
+References:
+`docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `prompts/README.md`, `prompts/execute/01-triage-plan.md`, `internal/deepreview/orchestrator.go`
+
+Decision:
+Require every prompt to tell Codex to inspect available local skills and use relevant ones, without assuming any specific skill pack exists.
+Context:
+Deepreview should benefit from richer local Codex environments when available, but it also needs to remain portable and open-source-friendly when those skills are absent.
+Rationale:
+Skill discovery guidance improves execution quality on richer setups without coupling deepreview to any one private skill inventory.
+Trade-offs:
+Prompts become slightly longer, and Codex may spend some time checking for skills that are not present.
+Enforcement:
+Prompt templates and prompt docs include explicit skill-discovery guidance in every stage. No prompt hardcodes a private skill name as required infrastructure.
+References:
+`prompts/README.md`, `prompts/review/independent-review.md`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`, `prompts/delivery/01-deliver.md`, `docs/spec.md`
+
+Decision:
+Allow the delivery stage to push more than once when that is required to converge on a merge-ready result.
+Context:
+The simplified delivery model gives one fresh Codex stage responsibility for final branch/PR readiness, including waiting on remote checks. A strict "exactly one final push" invariant conflicts with that responsibility because a failed remote check may require one more high-confidence fix and another push.
+Rationale:
+The important invariant is still "no pushes during rounds." Once delivery begins, bounded additional pushes are acceptable if they are part of the same Codex-owned merge-readiness loop and are backed by clear evidence.
+Trade-offs:
+Delivery history can now include more than one remote update, so summaries and validations must key off the final pushed refspec and mergeability state rather than a fixed push count.
+Enforcement:
+Spec, architecture, workflows, and alignment now forbid pushes during rounds but allow delivery-stage fix-and-retry pushes. Final summary validation requires a non-empty pushed refspec for non-skipped deliveries rather than an exact push count.
+References:
+`docs/spec.md`, `docs/architecture.md`, `docs/workflows.md`, `docs/alignment.md`, `internal/deepreview/orchestrator.go`
+
+Decision:
+Treat the old PR-prep, privacy-fix, and post-description prompt stack as superseded historical design, not active behavior.
+Context:
+The decision log still contains earlier entries that described the previous delivery stack. Those entries remain useful as historical rationale, but they no longer describe the active system and should not be used as current guidance.
+Rationale:
+Marking the old stack as superseded avoids accidental re-expansion of the orchestrator and clarifies that current implementation now relies on one Codex-owned delivery stage plus thin validation.
+Trade-offs:
+The decision log keeps some historical noise because the older entries are retained rather than rewritten in place.
+Enforcement:
+Current docs, prompts, and code define only `prompts/delivery/01-deliver.md` as the active delivery prompt, and the old prompt files have been removed from the prompt tree.
+References:
+`prompts/delivery/01-deliver.md`, `prompts/README.md`, `docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`
