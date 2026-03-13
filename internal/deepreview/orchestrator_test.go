@@ -502,6 +502,33 @@ func TestExecutePromptLabel(t *testing.T) {
 	}
 }
 
+func TestPreparePromptRetryRequestClearsContextOnlyWhenConfigured(t *testing.T) {
+	originalContext := &CodexContext{
+		ThreadID:          "thread-123",
+		MulticodexProfile: "beta",
+	}
+
+	unchanged := preparePromptRetryRequest(monitoredPromptRequest{
+		label:        "execute / triage and plan",
+		codexContext: originalContext,
+	})
+	if unchanged.codexContext != originalContext {
+		t.Fatalf("expected codex context to be preserved when resetContextOnRetry is false")
+	}
+
+	reset := preparePromptRetryRequest(monitoredPromptRequest{
+		label:               "execute / implement, verify, finalize",
+		codexContext:        originalContext,
+		resetContextOnRetry: true,
+	})
+	if reset.codexContext != nil {
+		t.Fatalf("expected codex context to be cleared on retry when resetContextOnRetry is true")
+	}
+	if originalContext.ThreadID != "thread-123" || originalContext.MulticodexProfile != "beta" {
+		t.Fatalf("expected original codex context to remain unchanged, got %+v", originalContext)
+	}
+}
+
 func TestTriagePolicyViolationsAcceptRequiresMaterialImpactAndHighConfidence(t *testing.T) {
 	markdown := `# Round Triage
 

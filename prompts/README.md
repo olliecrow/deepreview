@@ -27,6 +27,6 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 ## Rendering notes
 - Templates are rendered with run- and round-specific template variables (for example `{{ROUND_NUMBER}}`).
 - If any template variable is unresolved at render time, fail fast.
-- Execute prompts run sequentially in the same Codex chat context for that execute worktree.
+- Execute prompts run sequentially in the same Codex chat context for that execute worktree on the normal path; inactivity retries restart fresh and rely on the written round artifacts.
 - Execute prompt 1 receives review artifact paths plus a compact manifest.
 - Legacy empty prompt directories (`fanout`, `synthesis`) are intentionally removed.

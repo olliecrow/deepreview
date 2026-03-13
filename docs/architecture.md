@@ -49,6 +49,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - run ordered execute prompt queue in one Codex chat context:
   - prompt 1: triage and plan (reviews are inputs, not gospel; accept only high-confidence material items and produce the round plan)
   - prompt 2: implement, verify, finalize, update docs/decisions, write round artifacts, and create any needed local commit
+- normal execute queue continuity is limited to a healthy prompt chain; if an execute prompt is retried after inactivity, the retry restarts fresh and relies on the preserved round artifacts instead of the stalled thread history
 - when a mutable execute or delivery worktree is retried after inactivity, reset it to the immutable last clean candidate-branch SHA captured before that attempt before rerunning so abandoned edits/commits from the stalled attempt do not survive into later history
 - execute retries preserve only artifacts from earlier successful prompts in the same queue; final round status/summary artifacts must be rewritten by the successful prompt-2 attempt
 - execute prompts stage their output files inside reserved worktree-local `.deepreview/artifacts/` paths; after prompt queue completion, the orchestrator validates those staged files, persists canonical copies into the run directory, and then writes the authoritative `round.json` completion record for that round
@@ -85,6 +86,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 ## Fresh-context model
 - Independent reviewers never share chat history with one another.
 - Each round execute stage starts from a fresh context and keeps continuity only within that stage's prompt queue.
+- If an execute prompt in that queue is restarted after inactivity, the retry breaks that continuity and restarts fresh.
 - Delivery starts from a fresh context and never inherits execute chat history.
 - A new round always means a new execute context.
 - Any retry after inactivity on a mutable stage resets both:

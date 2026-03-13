@@ -1151,7 +1151,7 @@ Fresh contexts for independent reviewers, each execute stage, each delivery stag
 Trade-offs:
 Prompts must be explicit about artifact handoff and local file paths because they cannot rely on earlier chat history.
 Enforcement:
-Spec and architecture require fresh contexts per independent reviewer, per execute stage, per delivery stage, per new round, and per inactivity retry; execute retains continuity only within its ordered prompt queue.
+Spec and architecture require fresh contexts per independent reviewer, per execute stage, per delivery stage, per new round, and per inactivity retry; execute retains continuity only within a healthy ordered prompt queue, and stalled execute prompt retries restart fresh from preserved round artifacts instead of resuming the old thread.
 References:
 `docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `internal/deepreview/orchestrator.go`
 
