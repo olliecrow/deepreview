@@ -14,7 +14,7 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - Treat independent reviews as strong inputs, not gospel, and require independent consolidation.
 - Keep execution no-regret and high-conviction: defer low-confidence items and reject low-value churn.
 - Require end-to-end plan and execute behavior, including local verification and docs/decision upkeep.
-- In PR mode, let one fresh delivery prompt own merge-readiness, remote-check waiting, and final PR metadata upkeep.
+- In PR mode, let one fresh delivery prompt own final local merge-readiness and branch preparation, while deepreview owns publication, PR creation, and bounded post-create mergeability checks.
 - Prefer Codex reading on-disk review artifacts directly instead of receiving large injected summary blocks.
 
 ## Layout

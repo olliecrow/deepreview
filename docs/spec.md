@@ -75,6 +75,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - prepare or refine final local branch state for publication
   - optionally move work onto the delivery branch locally
   - report whether local delivery preparation is complete or incomplete
+  - write only local-readiness result fields needed by the orchestrator (for example mode, optional prepared delivery branch, and incomplete status/reason), not push refspecs or PR metadata
 - after the delivery prompt finishes, deepreview must validate the exact ref that will be published before any push or PR creation occurs.
 - post-prompt delivery validation must inspect the actual prepared ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
 - after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.
