@@ -1175,7 +1175,7 @@ The previous delivery flow spread branch hygiene, privacy remediation, PR creati
 Rationale:
 One delivery prompt in a fresh context is simpler: Codex can inspect the branch and run final local checks while the orchestrator handles the narrow remote publication path and bounded mergeability validation.
 Trade-offs:
-The orchestrator now owns more of the remote delivery mechanics and final PR wording, while the prompt stays focused on repo-specific local preparation.
+The orchestrator now owns more of the remote delivery mechanics and final PR wording, while the prompt stays focused on repo-specific local preparation. The prompt-owned delivery result stays intentionally small: it reports local readiness state, not push refspecs or PR metadata that only the orchestrator can know reliably.
 Enforcement:
 Spec, architecture, and alignment define one shared delivery prompt for local preparation. The delivery contract keeps Codex focused on local branch readiness while the orchestrator owns publication, bounded post-create mergeability checks, and incomplete-draft recovery.
 References:

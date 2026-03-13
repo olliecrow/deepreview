@@ -999,6 +999,27 @@ func TestEnsureTerminalFinalSummaryBackfillsMissingRootSummary(t *testing.T) {
 	}
 }
 
+func TestReadPromptDeliveryResultDoesNotRequirePushMetadata(t *testing.T) {
+	resultPath := filepath.Join(t.TempDir(), "delivery-result.json")
+	if err := os.WriteFile(resultPath, []byte("{\n  \"mode\": \"pr\",\n  \"incomplete\": false\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := readPromptDeliveryResult(resultPath, "pr")
+	if err != nil {
+		t.Fatalf("readPromptDeliveryResult failed: %v", err)
+	}
+	if result.Mode != "pr" {
+		t.Fatalf("unexpected mode: %q", result.Mode)
+	}
+	if result.DeliveryBranch != "" {
+		t.Fatalf("expected empty delivery branch, got %q", result.DeliveryBranch)
+	}
+	if result.Incomplete {
+		t.Fatal("expected complete delivery result")
+	}
+}
+
 func TestBasePRTitleFromChangesUsesTopAreaAndFileCount(t *testing.T) {
 	title := basePRTitleFromChanges([]string{"cmd/a.go", "cmd/b.go", "internal/x.go"})
 	if title != "deepreview: cmd updates (3 files)" {
