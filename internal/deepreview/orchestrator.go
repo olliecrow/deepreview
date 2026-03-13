@@ -1467,14 +1467,6 @@ func (o *Orchestrator) runExecuteStage(
 	}
 
 	var threadID *string
-	executeRetryPreservePaths := []string{
-		reviewInputsDir,
-		roundTriageWorktreePath,
-		roundPlanWorktreePath,
-		roundVerificationWorktreePath,
-		roundStatusWorktreePath,
-		roundSummaryWorktreePath,
-	}
 	executeBaselineRef := candidateHead
 	for idx, templateName := range queue {
 		label := executePromptLabel(templateName)
@@ -1495,10 +1487,13 @@ func (o *Orchestrator) runExecuteStage(
 			return RoundStatus{}, "", err
 		}
 		logPrefix := filepath.Join(executeDir, fmt.Sprintf("prompt-%02d", idx+1))
-		preservePaths := []string{reviewInputsDir}
-		if idx > 0 {
-			preservePaths = executeRetryPreservePaths
-		}
+		preservePaths := executeRetryPreservePathsForPrompt(
+			idx,
+			reviewInputsDir,
+			roundTriageWorktreePath,
+			roundPlanWorktreePath,
+			roundVerificationWorktreePath,
+		)
 		baselineRef := executeBaselineRef
 		result, err := o.runPromptWithHeartbeat(
 			executeWorktree,
@@ -2144,6 +2139,11 @@ func summarizePrivacyRemediationIssues(commitScanErr, fileScanErr, worktreeErr e
 }
 
 func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string, attempt, maxAttempts int, commitScanErr, fileScanErr error) (bool, string, error) {
+	attemptBaselineRef, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return false, "", err
+	}
+
 	templatePath := filepath.Join(o.promptsRoot, "delivery", "privacy-fix.md")
 	templateText, err := ReadTemplate(templatePath)
 	if err != nil {
@@ -2233,7 +2233,7 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 				o.reporter.StageProgress("delivery", message, nil)
 			},
 			onBeforeRetry: func(_ int, _ int, _ *promptInactivityError) error {
-				return resetMutablePromptWorktree(worktreePath, o.config.GitBin, candidateBranch, nil)
+				return resetMutablePromptWorktree(worktreePath, o.config.GitBin, attemptBaselineRef, nil)
 			},
 			onRestart: func(nextAttempt, maxWorkerAttempts int, inactivityErr *promptInactivityError) {
 				o.reporter.StageProgress(
@@ -2430,6 +2430,19 @@ func resetMutablePromptWorktree(worktreePath, gitBin, baselineRef string, preser
 		return err
 	}
 	return restoreSnapshot(worktreePath, snapshotDir)
+}
+
+func executeRetryPreservePathsForPrompt(promptIdx int, reviewInputsDir, roundTriagePath, roundPlanPath, roundVerificationPath string) []string {
+	// Preserve only artifacts from earlier successful prompts. Final round
+	// status and summary must be rewritten by the successful prompt 3 attempt.
+	paths := []string{reviewInputsDir}
+	if promptIdx >= 1 {
+		paths = append(paths, roundTriagePath, roundPlanPath)
+	}
+	if promptIdx >= 2 {
+		paths = append(paths, roundVerificationPath)
+	}
+	return paths
 }
 
 func executePromptLabel(templateName string) string {
@@ -2899,7 +2912,7 @@ func (o *Orchestrator) runPRPreparation(candidateBranch string, changedFiles []s
 				o.reporter.StageProgress("delivery", message, nil)
 			},
 			onBeforeRetry: func(_ int, _ int, _ *promptInactivityError) error {
-				return resetMutablePromptWorktree(prepWorktreePath, o.config.GitBin, candidateBranch, nil)
+				return resetMutablePromptWorktree(prepWorktreePath, o.config.GitBin, candidateHead, nil)
 			},
 			onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
 				o.reporter.StageProgress(

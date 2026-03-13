@@ -1076,3 +1076,16 @@ Enforcement:
 `NewOrchestrator` rejects `--mode pr` when repo identity resolution produces a non-GitHub/local synthetic repo identity; help text and spec call out the restriction explicitly.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/cli.go`, `README.md`, `docs/spec.md`
+
+Decision:
+Reset stalled execute/delivery retries to immutable attempt baselines and preserve only prompt outputs that were completed successfully before the stall.
+Context:
+Mutable execute and delivery worktrees can be restarted after inactivity. A retry that resets to a moving branch name or that preserves final round-status/summary files from a killed prompt can silently reuse stale commits or stale round-control artifacts.
+Rationale:
+Capturing the baseline SHA before each mutable attempt makes the retry reset deterministic, and limiting preserved execute artifacts to earlier successful prompts ensures a later prompt cannot satisfy completion with files written by a killed predecessor.
+Trade-offs:
+Execute retries must regenerate final status/summary files even when an earlier attempt had already written them, and delivery retries need a little more bookkeeping to capture immutable baselines per attempt.
+Enforcement:
+Orchestrator retry logic snapshots immutable delivery baselines before PR-prep/privacy-fix attempts, execute retries preserve only prior successful prompt outputs, and integration tests cover stale execute artifacts plus stale PR-prep/privacy-remediation commits.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
