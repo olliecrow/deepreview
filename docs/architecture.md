@@ -66,16 +66,14 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 4. Final delivery (single delivery stage):
 - require completed round execution and no blocking execute-stage verification failures
 - create a fresh delivery worktree and a fresh Codex context
-- run one Codex delivery prompt that owns final repo mutation work:
+- run one Codex delivery prompt that owns final local repo mutation work:
   - inspect candidate diff/history and prior verification evidence
   - run any remaining local merge-readiness checks
-  - prepare concise PR title/body text
-  - push the delivery branch
-  - create or update the PR
-  - wait for required remote checks and mergeability
-  - if mergeability is blocked by high-confidence fixable issues, make fixes, push again, update PR text, and continue until mergeable or blocked by an explicit non-autonomous issue
-- in `yolo` mode, the same delivery stage pushes directly to the source branch instead of creating/updating a PR
-- the orchestrator stays out of repo-specific delivery logic except for worktree lifecycle, prompt launching/resume, artifact validation, and terminal classification
+  - optionally move work onto the delivery branch locally
+  - report whether local delivery preparation is complete or incomplete
+- the orchestrator validates the prepared ref, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
+- in `yolo` mode, the orchestrator pushes the prepared source-branch ref instead of creating a PR
+- the orchestrator still stays out of repo-specific local mutation logic except for worktree lifecycle, prompt launching/resume, artifact validation, remote publication, and terminal classification
 
 5. Finalization:
 - if TUI mode was active, exit TUI immediately on completion and clear terminal screen before summary output
@@ -120,9 +118,9 @@ deepreview
 ├── 4. delivery
 │   ├── create fresh delivery worktree
 │   ├── start fresh delivery context
-│   ├── Codex gets branch/PR into merge-ready state
-│   ├── Codex pushes and creates/updates PR
-│   ├── Codex waits on remote checks and fixes if needed
+│   ├── Codex finalizes local branch state for publication
+│   ├── deepreview pushes and creates PR (or yolo push)
+│   ├── deepreview waits briefly for mergeability to settle
 │   ├── validate delivery outcome
 │   └── delete delivery worktree
 └── 5. finalize
@@ -143,7 +141,7 @@ deepreview
 - default mode is `pr` and must not push source branch directly.
 - `yolo` mode is explicit opt-in.
 - no pushes occur during intermediate rounds.
-- delivery may push more than once if Codex needs a bounded high-confidence fix-and-retry loop to reach a merge-ready result.
+- PR mode performs bounded post-create mergeability validation before it reports terminal delivery success.
 - public delivery surfaces remain privacy-guarded (PR title/body and delivery summaries).
 - local terminal progress/error output is intentionally literal and unredacted for operator debugging.
 - verification execution is Codex-led (tests, pre-commit checks, locally runnable CI-like checks when available) with explicit evidence in round/final summaries.

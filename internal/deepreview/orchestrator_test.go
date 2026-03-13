@@ -863,6 +863,20 @@ func TestCapPRBodyForGitHubKeepsNormalBody(t *testing.T) {
 	}
 }
 
+func TestBuildCompactPRBodyUsesNeutralDeliveryStatusCopy(t *testing.T) {
+	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
+	body := o.buildCompactPRBody(nil, []string{"internal/deepreview/orchestrator.go"}, prDeliveryOptions{})
+	if strings.Contains(body, "after final delivery validation passed") {
+		t.Fatalf("compact pr body should not claim validation already passed, got:\n%s", body)
+	}
+	if strings.Contains(body, "ready for review and merge") {
+		t.Fatalf("compact pr body should not claim merge readiness before terminal delivery result, got:\n%s", body)
+	}
+	if !strings.Contains(body, "published by deepreview; check the terminal run summary for final delivery status.") {
+		t.Fatalf("expected neutral final-status guidance, got:\n%s", body)
+	}
+}
+
 func TestNormalizePRTitleAddsPrefixAndNormalizesWhitespace(t *testing.T) {
 	out := normalizePRTitle("  improve logging clarity \n and test coverage  ", "deepreview: review updates")
 	if out != "deepreview: improve logging clarity and test coverage" {
