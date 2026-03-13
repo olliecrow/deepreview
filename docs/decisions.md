@@ -148,11 +148,11 @@ Repeated deepreview runs can drift toward additive fixes because prompts emphasi
 Rationale:
 Explicitly naming deletion and simplification as preferred outcomes when they cleanly solve accepted issues counterbalances additive bias without broadening scope into speculative refactoring.
 Trade-offs:
-Prompt guidance still requires high confidence, so some worthwhile cleanup will remain out of scope when it is not tightly tied to accepted critical/high work.
+Prompt guidance still requires high confidence, so some worthwhile cleanup will remain out of scope when it is not tightly tied to accepted material improvements.
 Enforcement:
-Independent review, execute planning, execute/verify, and PR-preparation prompts tell Codex not to bias toward additive fixes and to treat high-confidence removals or simplifications as first-class options.
+Independent review, execute triage/plan, execute implement/verify/finalize, and delivery prompts tell Codex not to bias toward additive fixes and to treat high-confidence removals or simplifications as first-class options.
 References:
-`prompts/review/independent-review.md`, `prompts/execute/01-consolidate-plan.md`, `prompts/execute/02-execute-verify.md`, `prompts/delivery/pr-prepare.md`, `docs/architecture.md`
+`prompts/review/independent-review.md`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`, `prompts/delivery/01-deliver.md`, `docs/architecture.md`
 
 Decision:
 Keep durable contracts in `docs/spec.md` and `docs/architecture.md`; keep unresolved implementation questions in `plan/current/` scratch artifacts.
@@ -256,7 +256,7 @@ The injected summaries are lossy compared with raw review text, so the prompt mu
 Enforcement:
 The orchestrator builds structured review summaries for prompt injection, and prompt 1 tells Codex to use those summaries for orientation and read the on-disk reports directly when useful.
 References:
-`internal/deepreview/orchestrator.go`, `prompts/execute/01-consolidate-plan.md`, `docs/spec.md`
+`internal/deepreview/orchestrator.go`, `prompts/execute/01-triage-plan.md`, `docs/spec.md`
 
 Decision:
 Push exactly once at final delivery, regardless of mode; never push intermediate-round commits, and only deliver after round execution and delivery gates pass.
@@ -386,33 +386,33 @@ Adds upfront consolidation effort per round and may defer some plausible-but-unc
 Enforcement:
 Prompt templates require per-item accept/reject/defer with evidence, commonality tracking across reviewers, and explicit deferral of low-confidence items.
 References:
-`prompts/execute/01-consolidate-plan.md`, `docs/spec.md`, `docs/architecture.md`
+`prompts/execute/01-triage-plan.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Independent review and execute consolidation are strict: only high-confidence `critical|high` merge-relevant issues are in scope; low/medium severity or optional improvements are out of scope for this workflow.
+Independent review and execute consolidation are strict: only high-confidence, material issues or opportunities are in scope; non-material or low-confidence work is out of scope for this workflow.
 Context:
-Long runs can accrue non-blocking cleanup/perf suggestions that still produce file changes and force additional review rounds without materially improving merge safety.
+Long runs can accrue low-payoff cleanup/perf suggestions that still produce file changes and force additional review rounds without materially improving correctness, maintainability, or delivery quality.
 Rationale:
-Keeping scope strictly on critical/high, high-confidence items preserves review rigor, limits churn, and reduces unnecessary rounds while maintaining strong isolation and verification standards.
+Keeping scope strictly on material, high-confidence work preserves review rigor, limits churn, and reduces unnecessary rounds while still allowing substantial simplifications, cleanups, and docs fixes when they clearly pay off.
 Trade-offs:
-Some useful but non-critical cleanups/perf improvements are deferred to separate scoped runs.
+Some plausible but non-material cleanups/perf improvements are deferred to separate scoped runs.
 Enforcement:
-Independent-review template excludes optional/non-blocking sections; execute triage accepts only `critical|high` items with high confidence and rejects/defers low/medium severity work.
+Independent-review template excludes non-material suggestions; execute triage accepts only items tagged `impact: material` and `confidence: high` and rejects/defers minor or uncertain work.
 References:
-`prompts/review/independent-review.md`, `prompts/execute/01-consolidate-plan.md`, `docs/spec.md`, `prompts/README.md`
+`prompts/review/independent-review.md`, `prompts/execute/01-triage-plan.md`, `docs/spec.md`, `prompts/README.md`
 
 Decision:
-Validate execute triage artifacts in orchestrator: any `accept` disposition must carry severity `critical|high` and confidence `high`, or the round fails before commit/delivery.
+Validate execute triage artifacts in orchestrator: any `accept` disposition must carry `impact: material` and `confidence: high`, or the round fails before commit/delivery.
 Context:
-Prompt contracts can drift in output shape/quality; without runtime guards, low/medium or low-confidence accepts can still pass through and create unnecessary churn.
+Prompt contracts can drift in output shape/quality; without runtime guards, non-material or low-confidence accepts can still pass through and create unnecessary churn.
 Rationale:
-A lightweight validator preserves Codex discretion on what to accept while enforcing the policy boundary that accepted work must be critical/high and high-confidence.
+A lightweight validator preserves Codex discretion on what to accept while enforcing the policy boundary that accepted work must be material and high-confidence.
 Trade-offs:
 If triage output is malformed or omits tags, runs fail fast and require prompt/output correction.
 Enforcement:
 Execute stage validates canonical `round-triage.md` before round commit/status handling and fails with explicit diagnostics on violations.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `prompts/execute/01-consolidate-plan.md`
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `prompts/execute/01-triage-plan.md`
 
 Decision:
 Prompt templates for machine-validated artifacts should include explicit output schemas and concrete examples.
@@ -425,7 +425,7 @@ Slightly longer prompt templates and tighter formatting expectations.
 Enforcement:
 Execute and review prompts include explicit markdown/json shape examples for triage, verification, and summary artifacts.
 References:
-`prompts/execute/01-consolidate-plan.md`, `prompts/execute/02-execute-verify.md`, `prompts/execute/03-cleanup-summary-commit.md`, `prompts/review/independent-review.md`, `prompts/README.md`
+`prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`, `prompts/review/independent-review.md`, `prompts/README.md`
 
 Decision:
 Encourage local commits throughout execution; require changed work to be committed locally before round completion, with no empty commits.
@@ -594,9 +594,9 @@ Sequential prompts in one context preserve reasoning continuity and still enforc
 Trade-offs:
 Longer single-session context may become large on very big changesets.
 Enforcement:
-Spec/architecture define same-context ordered execute queue; queue and stage templates are committed in `prompts/execute/`.
+Spec/architecture define the same-context ordered two-prompt execute queue; queue and active stage templates are committed in `prompts/execute/`.
 References:
-`docs/spec.md`, `docs/architecture.md`, `prompts/execute/queue.txt`, `prompts/execute/01-consolidate-plan.md`, `prompts/execute/02-execute-verify.md`, `prompts/execute/03-cleanup-summary-commit.md`
+`docs/spec.md`, `docs/architecture.md`, `prompts/execute/queue.txt`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`
 
 Decision:
 Use Go as the primary implementation language for the deepreview runtime and TUI.
@@ -817,7 +817,7 @@ Temporary duplication of variable keys until legacy templates are fully retired.
 Enforcement:
 Execute prompt templates use `REVIEW_REPORT_*` placeholders and orchestrator injects both new and legacy keys.
 References:
-`prompts/execute/01-consolidate-plan.md`, `internal/deepreview/orchestrator.go`
+`prompts/execute/01-triage-plan.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
 Codex prompt workers should stage review and execute artifacts inside their current worktree, while deepreview persists canonical copies under the run directory and records round completion with one authoritative `round.json` per successful round.
@@ -843,7 +843,7 @@ Adds worktree-local git exclude management plus execute-stage cleanup logic to s
 Enforcement:
 Execute stage installs deepreview-managed untracked excludes for operational directories that are untracked in the candidate repository, removes round-local operational directories before final commit checks when the repository does not already own those paths, auto-commits remaining repository changes when needed, validates no internal `.deepreview/` artifact paths exist in candidate commit range, and blocks delivery only for newly introduced operational-artifact paths that were absent from the source branch.
 References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/gitops.go`, `prompts/execute/03-cleanup-summary-commit.md`, `internal/deepreview/integration_test.go`
+`internal/deepreview/orchestrator.go`, `internal/deepreview/gitops.go`, `prompts/execute/02-implement-verify-finalize.md`, `internal/deepreview/integration_test.go`
 
 Decision:
 After run completion, CLI must print an explicit terminal summary with delivery outcome and clickable URL where applicable.
@@ -1004,20 +1004,20 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/progress.go`, `internal/deepreview/progress_test.go`, `internal/deepreview/tui.go`
 
 Decision:
-Let delivery rely on execute-stage verification plus Codex-led PR preparation/privacy remediation; do not run a separate detached delivery quality-gate stage.
+Let delivery rely on execute-stage verification plus one Codex delivery prompt for final local preparation; do not run a separate detached delivery quality-gate stage.
 Context:
-The detached delivery-gate stage duplicated work the execute prompt already tries to do, added more orchestration branches, and blocked delivery for checks that are better handled inside the main Codex verify/tidy workflow.
+The detached delivery-gate stage duplicated work the execute prompt already tries to do, added more orchestration branches, and blocked delivery for checks that are better handled inside the main Codex verify/tidy workflow or the single fresh delivery prompt.
 Rationale:
-Keeping final delivery focused on Codex-led prep plus privacy remediation removes a dedicated worktree/check stage, reduces orchestration bloat, and still preserves explicit execute-stage verification and delivery-surface privacy checks.
+Keeping final delivery focused on one Codex-owned local-preparation pass removes a dedicated worktree/check stage, reduces orchestration bloat, and still preserves explicit execute-stage verification and delivery-surface privacy checks.
 Trade-offs:
-Delivery no longer has an extra detached safety net for `pre-commit` or `setup_env.sh`; repositories that want those checks should have Codex run them during execute verification or PR preparation when appropriate.
+Delivery no longer has an extra detached safety net for `pre-commit` or `setup_env.sh`; repositories that want those checks should have Codex run them during execute verification or delivery preparation when appropriate.
 Enforcement:
-Delivery stage does not create a detached quality-gate worktree. In PR mode it runs Codex branch preparation, then bounded privacy remediation, then push/PR actions. Execute-stage verification and delivery-surface privacy checks remain the enforced gates.
+Delivery stage does not create a detached quality-gate worktree. In PR mode it runs one fresh Codex delivery prompt for local preparation, then orchestrator-owned push/PR actions and bounded mergeability validation. Execute-stage verification and delivery-surface privacy checks remain the enforced gates.
 References:
-`internal/deepreview/orchestrator.go`, `prompts/delivery/pr-prepare.md`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
+`internal/deepreview/orchestrator.go`, `prompts/delivery/01-deliver.md`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `README.md`
 
 Decision:
-Introduce bounded inactivity watchdog and restart handling for all Codex workers (independent review, execute prompts, and post-delivery prompt).
+Introduce bounded inactivity watchdog and restart handling for all Codex workers (independent review, execute prompts, and delivery prompt).
 Context:
 Operators observed runs where one worker could stall indefinitely and block the entire deepreview pipeline.
 Rationale:
@@ -1062,7 +1062,7 @@ Deepreview no longer forces extra isolation for prompt subprocesses beyond workt
 Enforcement:
 Codex runner invokes the resolved launcher with the minimal deepreview orchestration flags only, preserves the inherited local environment, and documentation/prompt guidance treat network/module access as environment-dependent rather than assuming a deepreview-managed offline environment.
 References:
-`internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `prompts/review/independent-review.md`, `prompts/execute/02-execute-verify.md`, `docs/spec.md`
+`internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `prompts/review/independent-review.md`, `prompts/execute/02-implement-verify-finalize.md`, `docs/spec.md`
 
 Decision:
 Pin resumed multicodex-backed deepreview contexts to the profile that created the thread, while leaving fresh contexts on normal multicodex selection.
@@ -1112,7 +1112,7 @@ Capturing the baseline SHA before each mutable attempt makes the retry reset det
 Trade-offs:
 Execute retries must regenerate final status/summary files even when an earlier attempt had already written them, and delivery retries need a little more bookkeeping to capture immutable baselines per attempt.
 Enforcement:
-Orchestrator retry logic snapshots immutable delivery baselines before PR-prep/privacy-fix attempts, execute retries preserve only prior successful prompt outputs, and integration tests cover stale execute artifacts plus stale PR-prep/privacy-remediation commits.
+Orchestrator retry logic snapshots immutable delivery baselines before delivery-prompt attempts, execute retries preserve only prior successful prompt outputs, and integration tests cover stale execute artifacts plus stale delivery-attempt commits.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
 
