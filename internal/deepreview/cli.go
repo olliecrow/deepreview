@@ -943,6 +943,10 @@ func runDryRunCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
+	if err := checkPromptTemplates(orchestrator.promptsRoot); err != nil {
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
+		return 1
+	}
 	printDryRunPlan(os.Stdout, orchestrator)
 	return 0
 }

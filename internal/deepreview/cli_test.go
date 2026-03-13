@@ -640,6 +640,27 @@ func TestRunDoctorCommandFailsWhenDeliveryTemplateMissingInYoloMode(t *testing.T
 	})
 }
 
+func TestRunDryRunCommandFailsWhenDeliveryTemplateMissingInYoloMode(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", writePromptsRootWithoutDeliveryTemplate(t))
+
+	withWorkingDir(t, repo, func() {
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDryRunCommand([]string{repo, "--source-branch", "feature/test", "--mode", "yolo"})
+		})
+		if code != 1 {
+			t.Fatalf("expected dry-run to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "delivery prompt template missing") {
+			t.Fatalf("expected delivery template failure in stderr, got:\n%s", stderr)
+		}
+		if strings.Contains(stdout, "deepreview dry-run") {
+			t.Fatalf("did not expect dry-run plan output on prompt validation failure, got:\n%s", stdout)
+		}
+	})
+}
+
 func TestRunDoctorCommandFailsWhenMulticodexIsRequiredButUnavailable(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
