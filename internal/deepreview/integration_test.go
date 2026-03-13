@@ -212,6 +212,26 @@ fi`)
 	return wrapperPath
 }
 
+func buildExecuteStallCodexWrapperWithInvocationLog(t *testing.T, fakeCodex string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	wrapperPath := filepath.Join(tmpDir, "logging-stalling-codex")
+	script := buildStallCodexWrapperScript(fakeCodex, `capture_path="${INVOCATIONS_LOG_PATH:?}"
+printf 'ARGS:%s\n' "$*" >> "$capture_path"
+if grep -q "prompt 2 of 2" "$prompt_file" && [ ! -f "$marker_path" ]; then
+  mkdir -p "$(dirname "$marker_path")"
+  : > "$marker_path"
+  sleep "${STALL_SECONDS:-15}"
+fi`)
+	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write logging stalling codex wrapper: %v", err)
+	}
+	if err := os.Symlink(wrapperPath, filepath.Join(tmpDir, "multicodex")); err != nil {
+		t.Fatalf("symlink logging stalling multicodex: %v", err)
+	}
+	return wrapperPath
+}
+
 func buildExecuteArtifactStallCodexWrapper(t *testing.T, fakeCodex string) string {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -1948,6 +1968,82 @@ func TestEndToEndPRModeResetsExecuteWorktreeBeforeRetryAfterStall(t *testing.T) 
 	logOut := runCmd(t, td, nil, "git", "-C", userClone, "log", "--format=%s", deliveryRef)
 	if strings.Contains(logOut, "stale stalled attempt") {
 		t.Fatalf("stalled execute attempt commit leaked into delivery history for %s:\n%s", deliveryRef, logOut)
+	}
+}
+
+func TestEndToEndPRModeRetriesExecutePromptWithFreshContextAfterStall(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+	stallingCodex := buildExecuteStallCodexWrapperWithInvocationLog(t, fakeCodex)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	stallMarkerPath := filepath.Join(td, "stall-once.marker")
+	invocationsLogPath := filepath.Join(td, "invocations.log")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		"FAKE_CODEX_DECISION=continue",
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
+		"STALL_MARKER_PATH="+stallMarkerPath,
+		"STALL_SECONDS=15",
+		"INVOCATIONS_LOG_PATH="+invocationsLogPath,
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "requires another review round") {
+		t.Fatalf("expected max-round failure output, got: %s", output)
+	}
+
+	logBytes, err := os.ReadFile(invocationsLogPath)
+	if err != nil {
+		t.Fatalf("read invocation log: %v", err)
+	}
+	lines := strings.FieldsFunc(strings.TrimSpace(string(logBytes)), func(r rune) bool { return r == '\n' || r == '\r' })
+	if len(lines) != 4 {
+		t.Fatalf("expected 4 prompt invocations, got %d:\n%s", len(lines), string(logBytes))
+	}
+	if lines[0] != "ARGS:exec --skip-git-repo-check --json -" {
+		t.Fatalf("expected review worker to start fresh, got %q", lines[0])
+	}
+	if lines[1] != "ARGS:exec --skip-git-repo-check --json -" {
+		t.Fatalf("expected execute prompt 1 to start fresh, got %q", lines[1])
+	}
+	if !strings.Contains(lines[2], "ARGS:run fake-profile -- codex exec resume ") {
+		t.Fatalf("expected first execute prompt 2 attempt to resume the prompt 1 thread, got %q", lines[2])
+	}
+	if lines[3] != "ARGS:exec --skip-git-repo-check --json -" {
+		t.Fatalf("expected retried execute prompt 2 attempt to restart fresh, got %q", lines[3])
 	}
 }
 

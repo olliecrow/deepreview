@@ -893,6 +893,7 @@ type monitoredPromptRequest struct {
 	cwd            string
 	prompt         string
 	codexContext   *CodexContext
+	resetContextOnRetry bool
 	logPrefix      string
 	useGitStatus   bool
 	monitoredPaths []string
@@ -912,8 +913,9 @@ func (o *Orchestrator) runPromptWithWatchdog(
 	policy := o.promptWatchdogPolicy()
 	maxAttempts := policy.maxRestarts + 1
 	restarts := 0
+	currentRequest := request
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		result, err := o.runPromptAttemptWithWatchdog(parent, request, policy, callbacks.onHeartbeat)
+		result, err := o.runPromptAttemptWithWatchdog(parent, currentRequest, policy, callbacks.onHeartbeat)
 		if err == nil {
 			return result, restarts, nil
 		}
@@ -924,7 +926,7 @@ func (o *Orchestrator) runPromptWithWatchdog(
 		if attempt >= maxAttempts {
 			return CodexRunResult{}, restarts, NewDeepReviewError(
 				"%s stalled after %d attempt(s): %s",
-				request.label,
+				currentRequest.label,
 				maxAttempts,
 				inactivityErr.Error(),
 			)
@@ -938,8 +940,17 @@ func (o *Orchestrator) runPromptWithWatchdog(
 		if callbacks.onRestart != nil {
 			callbacks.onRestart(attempt+1, maxAttempts, inactivityErr)
 		}
+		currentRequest = preparePromptRetryRequest(currentRequest)
 	}
-	return CodexRunResult{}, restarts, NewDeepReviewError("%s failed unexpectedly", request.label)
+	return CodexRunResult{}, restarts, NewDeepReviewError("%s failed unexpectedly", currentRequest.label)
+}
+
+func preparePromptRetryRequest(request monitoredPromptRequest) monitoredPromptRequest {
+	retryRequest := request
+	if retryRequest.resetContextOnRetry {
+		retryRequest.codexContext = nil
+	}
+	return retryRequest
 }
 
 func (o *Orchestrator) runPromptAttemptWithWatchdog(
@@ -1502,6 +1513,7 @@ func (o *Orchestrator) runExecuteStage(
 			executeWorktree,
 			prompt,
 			codexContext,
+			true,
 			logPrefix,
 			[]string{
 				roundTriageWorktreePath,
@@ -1645,6 +1657,7 @@ func stageHeartbeatMessage(base string, start time.Time) string {
 func (o *Orchestrator) runPromptWithHeartbeat(
 	cwd, prompt string,
 	codexContext *CodexContext,
+	resetContextOnRetry bool,
 	logPrefix string,
 	monitoredPaths []string,
 	round int,
@@ -1660,6 +1673,7 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 			cwd:            cwd,
 			prompt:         prompt,
 			codexContext:   codexContext,
+			resetContextOnRetry: resetContextOnRetry,
 			logPrefix:      logPrefix,
 			useGitStatus:   true,
 			monitoredPaths: append(append([]string{}, monitoredPaths...), logPrefix+".stdout.jsonl", logPrefix+".stderr.log"),
@@ -2704,6 +2718,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 			deliveryWorktree,
 			prompt,
 			nil,
+			true,
 			logPrefix,
 			[]string{resultWorktreePath},
 			0,

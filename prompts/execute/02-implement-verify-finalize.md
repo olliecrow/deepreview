@@ -1,6 +1,6 @@
 You are in deepreview execute stage for round `{{ROUND_NUMBER}}`.
 
-This is prompt 2 of 2, in the same Codex chat context as prompt 1.
+This is prompt 2 of 2. On the normal path it follows prompt 1 in the same Codex chat context. If deepreview restarts this prompt after an inactivity retry, the retry may run in a fresh context and must rely on the approved triage/plan artifacts rather than prior chat history.
 
 ## Inputs
 - Approved triage: `{{ROUND_TRIAGE_PATH}}`
