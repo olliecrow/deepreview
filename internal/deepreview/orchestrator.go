@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -129,22 +130,9 @@ func findPromptsRoot() (string, string, error) {
 		return "", "", NewDeepReviewError("prompts root not found: %s", prompts)
 	}
 
-	candidates := []string{}
-	if exe, err := os.Executable(); err == nil {
-		exeDir := filepath.Dir(exe)
-		candidates = append(candidates,
-			filepath.Join(exeDir, "prompts"),
-			filepath.Join(exeDir, "..", "prompts"),
-			filepath.Join(exeDir, "..", "..", "prompts"),
-		)
-	}
 	_, thisFile, _, ok := runtime.Caller(0)
 	if ok {
 		candidate := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", "prompts"))
-		candidates = append(candidates, candidate)
-	}
-
-	for _, candidate := range candidates {
 		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
 			abs, err := filepath.Abs(candidate)
 			if err != nil {
@@ -902,8 +890,9 @@ type monitoredPromptRequest struct {
 }
 
 type monitoredPromptCallbacks struct {
-	onHeartbeat func(elapsed, silence time.Duration)
-	onRestart   func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError)
+	onHeartbeat   func(elapsed, silence time.Duration)
+	onBeforeRetry func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) error
+	onRestart     func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError)
 }
 
 func (o *Orchestrator) runPromptWithWatchdog(
@@ -932,6 +921,11 @@ func (o *Orchestrator) runPromptWithWatchdog(
 			)
 		}
 		restarts++
+		if callbacks.onBeforeRetry != nil {
+			if retryErr := callbacks.onBeforeRetry(attempt+1, maxAttempts, inactivityErr); retryErr != nil {
+				return CodexRunResult{}, restarts, retryErr
+			}
+		}
 		if callbacks.onRestart != nil {
 			callbacks.onRestart(attempt+1, maxAttempts, inactivityErr)
 		}
@@ -1473,6 +1467,15 @@ func (o *Orchestrator) runExecuteStage(
 	}
 
 	var threadID *string
+	executeRetryPreservePaths := []string{
+		reviewInputsDir,
+		roundTriageWorktreePath,
+		roundPlanWorktreePath,
+		roundVerificationWorktreePath,
+		roundStatusWorktreePath,
+		roundSummaryWorktreePath,
+	}
+	executeBaselineRef := candidateHead
 	for idx, templateName := range queue {
 		label := executePromptLabel(templateName)
 		stageName := "execute / " + label
@@ -1492,6 +1495,11 @@ func (o *Orchestrator) runExecuteStage(
 			return RoundStatus{}, "", err
 		}
 		logPrefix := filepath.Join(executeDir, fmt.Sprintf("prompt-%02d", idx+1))
+		preservePaths := []string{reviewInputsDir}
+		if idx > 0 {
+			preservePaths = executeRetryPreservePaths
+		}
+		baselineRef := executeBaselineRef
 		result, err := o.runPromptWithHeartbeat(
 			executeWorktree,
 			prompt,
@@ -1509,6 +1517,9 @@ func (o *Orchestrator) runExecuteStage(
 			fmt.Sprintf("running execute step %d of %d", idx+1, len(queue)),
 			"execute stage",
 			fmt.Sprintf("running execute workflow (step %d/%d: %s)", idx+1, len(queue), label),
+			func(_ int, _ int, _ *promptInactivityError) error {
+				return resetMutablePromptWorktree(executeWorktree, o.config.GitBin, baselineRef, preservePaths)
+			},
 		)
 		if err != nil {
 			o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
@@ -1516,6 +1527,32 @@ func (o *Orchestrator) runExecuteStage(
 			return RoundStatus{}, "", err
 		}
 		threadID = &result.ThreadID
+		if idx+1 < len(queue) {
+			changed, err := HasUncommittedChanges(executeWorktree, o.config.GitBin)
+			if err != nil {
+				o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
+				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+				return RoundStatus{}, "", err
+			}
+			if changed {
+				if err := CommitAllChanges(
+					executeWorktree,
+					o.config.GitBin,
+					fmt.Sprintf("deepreview: round %02d checkpoint after %s", round, label),
+					o.commitIdentity,
+				); err != nil {
+					o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
+					o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+					return RoundStatus{}, "", err
+				}
+			}
+			executeBaselineRef, err = RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+			if err != nil {
+				o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
+				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+				return RoundStatus{}, "", err
+			}
+		}
 		o.reporter.StageFinished(stageName, roundPtr(round), true, "completed")
 	}
 
@@ -1638,6 +1675,7 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 	round int,
 	stageName, stageBaseMessage string,
 	parentStageName, parentStageBaseMessage string,
+	onBeforeRetry func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) error,
 ) (CodexRunResult, error) {
 	policy := o.promptWatchdogPolicy()
 	result, _, err := o.runPromptWithWatchdog(
@@ -1674,6 +1712,7 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 					o.reporter.StageProgress(parentStageName, parentMessage, roundPtr(round))
 				}
 			},
+			onBeforeRetry: onBeforeRetry,
 			onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
 				msg := fmt.Sprintf(
 					"%s inactive for %s; restarting attempt %d/%d",
@@ -2193,6 +2232,9 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 				}
 				o.reporter.StageProgress("delivery", message, nil)
 			},
+			onBeforeRetry: func(_ int, _ int, _ *promptInactivityError) error {
+				return resetMutablePromptWorktree(worktreePath, o.config.GitBin, candidateBranch, nil)
+			},
 			onRestart: func(nextAttempt, maxWorkerAttempts int, inactivityErr *promptInactivityError) {
 				o.reporter.StageProgress(
 					"delivery",
@@ -2244,6 +2286,150 @@ func persistStatusArtifact(srcPath, dstPath string) error {
 		return err
 	}
 	return os.WriteFile(dstPath, payload, 0o644)
+}
+
+func snapshotPaths(basePath string, preservePaths []string) (string, error) {
+	if len(preservePaths) == 0 {
+		return "", nil
+	}
+	snapshotDir, err := os.MkdirTemp("", "deepreview-worktree-reset-*")
+	if err != nil {
+		return "", err
+	}
+	for _, preservePath := range preservePaths {
+		trimmed := strings.TrimSpace(preservePath)
+		if trimmed == "" {
+			continue
+		}
+		if err := snapshotOnePath(basePath, snapshotDir, trimmed); err != nil {
+			_ = os.RemoveAll(snapshotDir)
+			return "", err
+		}
+	}
+	return snapshotDir, nil
+}
+
+func snapshotOnePath(basePath, snapshotDir, preservePath string) error {
+	info, err := os.Lstat(preservePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	relPath, err := filepath.Rel(basePath, preservePath)
+	if err != nil {
+		return err
+	}
+	if relPath == "." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) || relPath == ".." {
+		return NewDeepReviewError("preserved path must stay within worktree: %s", preservePath)
+	}
+	dstPath := filepath.Join(snapshotDir, relPath)
+	if info.IsDir() {
+		return copyDirectory(preservePath, dstPath)
+	}
+	return copyFileWithMode(preservePath, dstPath, info.Mode())
+}
+
+func restoreSnapshot(basePath, snapshotDir string) error {
+	if strings.TrimSpace(snapshotDir) == "" {
+		return nil
+	}
+	defer func() {
+		_ = os.RemoveAll(snapshotDir)
+	}()
+	return filepath.Walk(snapshotDir, func(current string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if current == snapshotDir {
+			return nil
+		}
+		relPath, err := filepath.Rel(snapshotDir, current)
+		if err != nil {
+			return err
+		}
+		dstPath := filepath.Join(basePath, relPath)
+		if info.IsDir() {
+			return os.MkdirAll(dstPath, info.Mode().Perm())
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			target, err := os.Readlink(current)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+				return err
+			}
+			_ = os.Remove(dstPath)
+			return os.Symlink(target, dstPath)
+		}
+		return copyFileWithMode(current, dstPath, info.Mode())
+	})
+}
+
+func copyDirectory(srcPath, dstPath string) error {
+	return filepath.Walk(srcPath, func(current string, info os.FileInfo, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relPath, err := filepath.Rel(srcPath, current)
+		if err != nil {
+			return err
+		}
+		targetPath := dstPath
+		if relPath != "." {
+			targetPath = filepath.Join(dstPath, relPath)
+		}
+		if info.IsDir() {
+			return os.MkdirAll(targetPath, info.Mode().Perm())
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err := os.Readlink(current)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+				return err
+			}
+			return os.Symlink(linkTarget, targetPath)
+		}
+		return copyFileWithMode(current, targetPath, info.Mode())
+	})
+}
+
+func copyFileWithMode(srcPath, dstPath string, mode os.FileMode) error {
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
+		return err
+	}
+	src, err := os.Open(srcPath)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
+	if err != nil {
+		return err
+	}
+	defer dst.Close()
+	if _, err := io.Copy(dst, src); err != nil {
+		return err
+	}
+	return nil
+}
+
+func resetMutablePromptWorktree(worktreePath, gitBin, baselineRef string, preservePaths []string) error {
+	snapshotDir, err := snapshotPaths(worktreePath, preservePaths)
+	if err != nil {
+		return err
+	}
+	if err := ResetWorktreeToRef(worktreePath, gitBin, baselineRef); err != nil {
+		if snapshotDir != "" {
+			_ = os.RemoveAll(snapshotDir)
+		}
+		return err
+	}
+	return restoreSnapshot(worktreePath, snapshotDir)
 }
 
 func executePromptLabel(templateName string) string {
@@ -2711,6 +2897,9 @@ func (o *Orchestrator) runPRPreparation(candidateBranch string, changedFiles []s
 					message = fmt.Sprintf("%s | inactivity timeout in %s", message, remaining.Round(time.Second))
 				}
 				o.reporter.StageProgress("delivery", message, nil)
+			},
+			onBeforeRetry: func(_ int, _ int, _ *promptInactivityError) error {
+				return resetMutablePromptWorktree(prepWorktreePath, o.config.GitBin, candidateBranch, nil)
 			},
 			onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
 				o.reporter.StageProgress(

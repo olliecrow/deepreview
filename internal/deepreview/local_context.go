@@ -12,6 +12,8 @@ import (
 type LocalGitHubRepoState struct {
 	Path          string
 	RemoteURL     string
+	SourceType    RepoSourceType
+	CloneSource   string
 	Owner         string
 	Name          string
 	CurrentBranch string
@@ -69,7 +71,7 @@ func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *L
 	if callerCWD == "" {
 		return nil
 	}
-	state, err := detectGitHubRepoState(gitBin, callerCWD)
+	state, err := detectLocalRepoState(gitBin, callerCWD)
 	if err != nil || state == nil {
 		return nil
 	}
@@ -88,7 +90,7 @@ func resolveOldPWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *Loca
 	if oldpwd == "" {
 		return nil
 	}
-	state, err := detectGitHubRepoState(gitBin, oldpwd)
+	state, err := detectLocalRepoState(gitBin, oldpwd)
 	if err != nil || state == nil {
 		return nil
 	}
@@ -98,7 +100,7 @@ func resolveOldPWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *Loca
 	return state
 }
 
-func detectGitHubRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
+func detectLocalRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
 	completed, err := RunCommand([]string{gitBin, "-C", path, "rev-parse", "--show-toplevel"}, "", "", false, 0)
 	if err != nil {
 		return nil, err
@@ -120,9 +122,22 @@ func detectGitHubRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
 	if err != nil {
 		return nil, err
 	}
-	owner, name, ok := parseOwnerRepo(remoteURL)
-	if !ok {
-		return nil, nil
+	state := &LocalGitHubRepoState{
+		Path:      topLevel,
+		RemoteURL: remoteURL,
+	}
+	if cloneSource, ok := localCloneSource(remoteURL, topLevel); ok {
+		state.SourceType = RepoSourceFilesystem
+		state.CloneSource = cloneSource
+		state.Name = filesystemRepoDisplayName(cloneSource)
+	} else {
+		owner, name, ok := parseOwnerRepo(remoteURL)
+		if !ok {
+			return nil, nil
+		}
+		state.SourceType = RepoSourceGitHub
+		state.Owner = owner
+		state.Name = name
 	}
 
 	branchResult, err := RunCommand([]string{gitBin, "-C", topLevel, "symbolic-ref", "--quiet", "--short", "HEAD"}, "", "", false, 0)
@@ -134,13 +149,19 @@ func detectGitHubRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
 		currentBranch = strings.TrimSpace(branchResult.Stdout)
 	}
 
-	return &LocalGitHubRepoState{
-		Path:          topLevel,
-		RemoteURL:     remoteURL,
-		Owner:         owner,
-		Name:          name,
-		CurrentBranch: currentBranch,
-	}, nil
+	state.CurrentBranch = currentBranch
+	return state, nil
+}
+
+func detectGitHubRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
+	state, err := detectLocalRepoState(gitBin, path)
+	if err != nil || state == nil {
+		return state, err
+	}
+	if state.SourceType != RepoSourceGitHub {
+		return nil, nil
+	}
+	return state, nil
 }
 
 func repoLocatorMatchesState(repo string, state *LocalGitHubRepoState) bool {
@@ -159,7 +180,7 @@ func repoLocatorMatchesState(repo string, state *LocalGitHubRepoState) bool {
 	if !ok {
 		return false
 	}
-	return owner == state.Owner && name == state.Name
+	return state.SourceType == RepoSourceGitHub && owner == state.Owner && name == state.Name
 }
 
 func inferSourceBranchFromState(state *LocalGitHubRepoState) (string, error) {
@@ -182,7 +203,7 @@ func ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, explic
 	if cwdState != nil && repoLocatorMatchesState(resolvedRepo, cwdState) {
 		stateForBranch = cwdState
 	} else {
-		state, err := detectGitHubRepoState(gitBin, resolvedRepo)
+		state, err := detectLocalRepoState(gitBin, resolvedRepo)
 		if err != nil {
 			return err
 		}
@@ -201,7 +222,7 @@ func ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, explic
 }
 
 func validateLocalBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch string) error {
-	cwdState, err := detectGitHubRepoState(gitBin, ".")
+	cwdState, err := detectLocalRepoState(gitBin, ".")
 	if err != nil {
 		return err
 	}
@@ -332,11 +353,14 @@ func branchDivergenceAgainstCommit(gitBin, repoPath, commit string) (behind int,
 }
 
 func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string, resolvedBranch string, err error) {
-	cwdState, err := detectGitHubRepoState(gitBin, ".")
+	cwdState, err := detectLocalRepoState(gitBin, ".")
 	if err != nil {
 		return "", "", err
 	}
 	cwdState = resolveImplicitRepoState(gitBin, cwdState)
+	if cwdState != nil && cwdState.SourceType != RepoSourceGitHub {
+		cwdState = nil
+	}
 
 	if strings.TrimSpace(repo) == "" {
 		if cwdState == nil {

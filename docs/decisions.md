@@ -553,9 +553,9 @@ deepreview is routinely launched from inside the target repository being reviewe
 Rationale:
 Restricting default prompt discovery to explicit override or deepreview-owned locations preserves prompt editability for operators while keeping the prompt control plane out of the reviewed repository.
 Trade-offs:
-Ad hoc local prompt experimentation from arbitrary working directories now requires setting `DEEPREVIEW_PROMPTS_ROOT` explicitly.
+Ad hoc local prompt experimentation from arbitrary working directories or executable-adjacent prompt trees now requires setting `DEEPREVIEW_PROMPTS_ROOT` explicitly.
 Enforcement:
-Default prompt discovery ignores caller-CWD `./prompts` and resolves only `DEEPREVIEW_PROMPTS_ROOT` or deepreview-owned executable/source-relative prompt directories; regression tests cover the caller-CWD hijack case.
+Default prompt discovery ignores caller-CWD and executable-adjacent `prompts/` directories and resolves only `DEEPREVIEW_PROMPTS_ROOT` or the deepreview source-relative prompt root; regression tests cover both hijack cases.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
 
@@ -1018,11 +1018,25 @@ Enforcement:
   - `DEEPREVIEW_REVIEW_MAX_RESTARTS=1`
 - Worker activity evidence includes stdout/stderr output and filesystem/git-change signals.
 - On inactivity timeout, deepreview cancels and restarts the worker up to configured max restarts.
+- Before retrying a mutable execute or delivery git worktree, deepreview resets it to the last clean candidate-branch baseline and clears staged/untracked leftovers so abandoned attempt state cannot contaminate later commits or delivery.
 - Independent review stage requires full worker coverage; stage fails if any worker cannot complete within bounded restart policy.
 - Run config snapshot records effective review policy settings.
 - Integration and unit tests assert inactivity restart behavior and policy clamping behavior; restart-path integration assertions should prefer deterministic log evidence over strict wall-time thresholds to reduce flake risk.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Apply current-branch readiness checks to supported filesystem-origin repos when review targets that local branch explicitly.
+Context:
+Deepreview already models filesystem-origin repositories as supported review inputs, but current-branch readiness validation only inspected GitHub-backed local context. That let dirty or ahead local filesystem-origin repos bypass the same safety gate.
+Rationale:
+The readiness rule is about reviewing stale local state, not about GitHub specifically. Matching explicit branch runs against supported filesystem-origin repos should fail fast on tracked local changes or ahead-of-remote state just like GitHub-backed repos.
+Trade-offs:
+Adds stricter preflight behavior for explicit local-path runs against filesystem-origin repos. Repo/branch inference remains GitHub-only unless the user passes explicit local repo context.
+Enforcement:
+Local repo-state detection now recognizes supported filesystem-origin remotes for readiness validation and commit-identity lookup; tests cover dirty, ahead-of-remote, and explicit non-current-branch bypass cases.
+References:
+`internal/deepreview/local_context.go`, `internal/deepreview/git_identity.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`
 
 Decision:
 Run Codex prompts with the operator's normal local Codex configuration and inherited local environment.

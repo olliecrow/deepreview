@@ -242,6 +242,51 @@ func TestInferRepoAndBranchExplicitDifferentBranchSkipsCurrentBranchReadinessChe
 	})
 }
 
+func TestValidateLocalBranchReadyForRemoteReviewRejectsTrackedChangesForFilesystemOriginRepo(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	td := t.TempDir()
+	withWorkingDir(t, td, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateLocalBranchReadyForRemoteReview("git", repo, "feature/test"); err == nil {
+			t.Fatalf("expected tracked-change error for filesystem-origin repo")
+		} else if !strings.Contains(err.Error(), "local tracked changes are present") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestValidateLocalBranchReadyForRemoteReviewRejectsAheadOfRemoteForFilesystemOriginRepo(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	td := t.TempDir()
+	withWorkingDir(t, td, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("next\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitCommand(t, repo, "add", "README.md")
+		runGitCommand(t, repo, "commit", "-m", "ahead")
+		if err := validateLocalBranchReadyForRemoteReview("git", repo, "feature/test"); err == nil {
+			t.Fatalf("expected ahead-of-remote error for filesystem-origin repo")
+		} else if !strings.Contains(err.Error(), "not synchronized") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestValidateLocalBranchReadyForRemoteReviewSkipsExplicitDifferentBranchForFilesystemOriginRepo(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	td := t.TempDir()
+	withWorkingDir(t, td, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := validateLocalBranchReadyForRemoteReview("git", repo, "feature/other"); err != nil {
+			t.Fatalf("expected explicit non-current branch to bypass readiness validation, got: %v", err)
+		}
+	})
+}
+
 func TestInferRepoAndBranchFromProvidedLocalRepoPath(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	td := t.TempDir()

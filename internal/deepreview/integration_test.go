@@ -177,6 +177,35 @@ func buildFakeBinaries(t *testing.T, root string) (string, string) {
 	return fakeCodex, fakeGH
 }
 
+func buildExecuteStallCodexWrapper(t *testing.T, fakeCodex string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	wrapperPath := filepath.Join(tmpDir, "stalling-codex")
+	script := `#!/bin/sh
+set -eu
+prompt_file="$(mktemp "${TMPDIR:-/tmp}/deepreview-stall-prompt.XXXXXX")"
+trap 'rm -f "$prompt_file"' EXIT
+cat > "$prompt_file"
+marker_path="${STALL_MARKER_PATH:?}"
+if grep -q "prompt 2 of 3" "$prompt_file" && [ ! -f "$marker_path" ]; then
+  mkdir -p "$(dirname "$marker_path")"
+  : > "$marker_path"
+  printf 'stale stalled attempt\n' > stale_execute_attempt.txt
+  git add stale_execute_attempt.txt
+  git commit -m "stale stalled attempt" >/dev/null 2>&1 || true
+  sleep "${STALL_SECONDS:-15}"
+fi
+exec "` + fakeCodex + `" "$@" < "$prompt_file"
+`
+	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write stalling codex wrapper: %v", err)
+	}
+	if err := os.Symlink(wrapperPath, filepath.Join(tmpDir, "multicodex")); err != nil {
+		t.Fatalf("symlink stalling multicodex: %v", err)
+	}
+	return wrapperPath
+}
+
 func cloneUserRepoWithGitHubOrigin(t *testing.T, td, remote, userClone string) string {
 	t.Helper()
 	githubURL := githubSCPLikeCloneURL("example-org", "example-repo")
@@ -1634,6 +1663,82 @@ func TestEndToEndPRModeFailsWhenNoChangesButCodexStillRequestsAnotherRound(t *te
 	runDir := runsGlob[0]
 	if _, err := os.Stat(filepath.Join(runDir, "final-summary.md")); !os.IsNotExist(err) {
 		t.Fatalf("did not expect final-summary.md after max-round failure")
+	}
+}
+
+func TestEndToEndPRModeResetsExecuteWorktreeBeforeRetryAfterStall(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+	stallingCodex := buildExecuteStallCodexWrapper(t, fakeCodex)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	stallMarkerPath := filepath.Join(td, "stall-once.marker")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env = append(env,
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
+		"STALL_MARKER_PATH="+stallMarkerPath,
+		"STALL_SECONDS=15",
+	)
+	output, logs := runCmdCapture(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected PR delivery output, got: %s", output)
+	}
+	if !strings.Contains(logs, "execute / execute and verify inactive for") {
+		t.Fatalf("expected execute-stage inactivity restart evidence in logs, got:\n%s", logs)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	var deliveryRef string
+	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
+		ref = strings.TrimSpace(ref)
+		if strings.Contains(ref, "origin/deepreview/main/") {
+			deliveryRef = ref
+			break
+		}
+	}
+	if deliveryRef == "" {
+		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
+	}
+	tree := runCmd(t, td, nil, "git", "-C", userClone, "ls-tree", "-r", "--name-only", deliveryRef)
+	if strings.Contains(tree, "stale_execute_attempt.txt") {
+		t.Fatalf("stalled execute attempt file leaked into delivery ref %s:\n%s", deliveryRef, tree)
+	}
+	logOut := runCmd(t, td, nil, "git", "-C", userClone, "log", "--format=%s", deliveryRef)
+	if strings.Contains(logOut, "stale stalled attempt") {
+		t.Fatalf("stalled execute attempt commit leaked into delivery history for %s:\n%s", deliveryRef, logOut)
 	}
 }
 

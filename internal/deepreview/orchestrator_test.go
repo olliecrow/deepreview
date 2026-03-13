@@ -395,6 +395,33 @@ func TestFindPromptsRootIgnoresCallerWorkingDirectoryPrompts(t *testing.T) {
 	})
 }
 
+func TestFindPromptsRootIgnoresExecutableAdjacentPromptsByDefault(t *testing.T) {
+	exePath, err := os.Executable()
+	if err != nil {
+		t.Fatalf("resolve executable: %v", err)
+	}
+	exePrompts := filepath.Join(filepath.Dir(exePath), "prompts")
+	if err := os.MkdirAll(exePrompts, 0o755); err != nil {
+		t.Fatalf("create executable-adjacent prompts: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.RemoveAll(exePrompts)
+	})
+
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", "")
+	promptsRoot, _, err := findPromptsRoot()
+	if err != nil {
+		t.Fatalf("findPromptsRoot failed: %v", err)
+	}
+	if canonicalPath(t, promptsRoot) == canonicalPath(t, exePrompts) {
+		t.Fatalf("expected executable-adjacent prompts to be ignored, got %s", promptsRoot)
+	}
+	want := canonicalPath(t, filepath.Join(repoRoot(t), "prompts"))
+	if canonicalPath(t, promptsRoot) != want {
+		t.Fatalf("expected prompts root %s, got %s", want, promptsRoot)
+	}
+}
+
 func TestFindPromptsRootHonorsOverride(t *testing.T) {
 	td := t.TempDir()
 	override := filepath.Join(td, "override-prompts")
