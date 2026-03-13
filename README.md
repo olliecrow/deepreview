@@ -64,7 +64,7 @@ Optional launcher:
 - Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
 - Public delivery surfaces are privacy-guarded (PR title/body and delivery summaries are redacted/guarded before final delivery is accepted).
 - Local terminal output is intentionally unredacted so operators can see literal paths and command errors while running deepreview.
-- You can cancel at any time with `Ctrl+C`; deepreview performs lock/worktree cleanup before exit.
+- You can cancel at any time with `Ctrl+C`; deepreview prints an interrupt failure summary, cleans up locks/worktrees, and then exits.
 
 ## Known limitations
 

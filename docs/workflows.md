@@ -30,6 +30,7 @@ This document defines how work is tracked so progress compounds without context 
 - Encourage local commits throughout rounds, but never push during intermediate rounds. Delivery publishes only after local preparation and final pre-publication validation are complete.
 - In PR mode, let the delivery prompt own final local branch preparation, then let deepreview push, create the PR, and perform bounded post-create mergeability checks.
 - Aggressively clean stale worktrees/transient artifacts after each round.
+- On user interrupt (`Ctrl+C`), treat the run as a self-serve failure: stop active commands immediately, print the interrupt failure summary, scrub transient run-root worktrees, and exit with cancel status.
 
 ## Parallel and subagent workflows
 - Use isolated worktrees or dedicated working directories when streams are independent.
