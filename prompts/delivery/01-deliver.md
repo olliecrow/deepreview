@@ -37,11 +37,14 @@ Get local branch state and delivery intent into a state where deepreview can pub
    - if you create or switch to `{{DELIVERY_BRANCH}}`, leave it committed and clean
    - set `delivery_branch` in the result when the prepared local ref to publish is not `{{CANDIDATE_BRANCH}}`
    - use `incomplete` / `incomplete_reason` when local delivery preparation is materially blocked and deepreview should preserve the branch as an incomplete draft PR
+   - if the local tip looks ready but delivery is still blocked by PR-range or branch-history state outside the current tip (for example, a required check failing on an earlier commit in the publish range), report that precisely in `incomplete_reason`
+   - do not rewrite history, rebuild branch ancestry, or attempt manual recovery/surgery inside this stage; report the blocker clearly and stop
 7. In `yolo` mode:
    - do not push; only leave the local branch clean and ready for deepreview to publish after validation
 8. Never stage or commit `.deepreview` operational artifacts.
 9. Leave the worktree clean before finishing.
 10. Do not expose secrets, tokens, personal information, or private local paths in the result artifact.
+11. When reporting an incomplete result, be specific about whether the current tip is clean, whether the blocker is historical/range-scoped, and what manual operator follow-up would be needed.
 
 ## Output
 Write `{{OUTPUT_RESULT_PATH}}` JSON with this schema:

@@ -942,6 +942,63 @@ func TestBuildIncompletePRBodyMentionsIncompleteStatus(t *testing.T) {
 	}
 }
 
+func TestEnsureTerminalFinalSummaryBackfillsMissingRootSummary(t *testing.T) {
+	runRoot := t.TempDir()
+	roundDir := filepath.Join(runRoot, "round-01")
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-summary.md"), []byte("summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-status.json"), []byte(`{"decision":"stop","reason":"ready","confidence":0.95}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := RoundRecord{
+		Round:   1,
+		Summary: "round-summary.md",
+		Status: RoundStatus{
+			Decision: "stop",
+			Reason:   "ready",
+		},
+	}
+	recordBytes, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round.json"), append(recordBytes, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{
+		config:  ReviewConfig{RunID: "run-1"},
+		runRoot: runRoot,
+		lastDelivery: &DeliveryResult{
+			Mode:             ModePR,
+			PushedRefspec:    "candidate:deepreview/feature/test/run-1",
+			PRURL:            "https://example.com/olliecrow/test/pull/123",
+			Incomplete:       true,
+			IncompleteReason: "required check still fails on an earlier commit in the PR range",
+		},
+	}
+
+	if err := o.ensureTerminalFinalSummary("main", "candidate", nil); err != nil {
+		t.Fatalf("ensureTerminalFinalSummary failed: %v", err)
+	}
+
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runRoot, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing backfilled final summary: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "- delivery: `incomplete-draft`") {
+		t.Fatalf("expected incomplete delivery marker, got:\n%s", finalSummary)
+	}
+	if !strings.Contains(finalSummary, "required check still fails on an earlier commit in the PR range") {
+		t.Fatalf("expected incomplete reason in final summary, got:\n%s", finalSummary)
+	}
+}
+
 func TestBasePRTitleFromChangesUsesTopAreaAndFileCount(t *testing.T) {
 	title := basePRTitleFromChanges([]string{"cmd/a.go", "cmd/b.go", "internal/x.go"})
 	if title != "deepreview: cmd updates (3 files)" {

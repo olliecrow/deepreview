@@ -404,6 +404,11 @@ func (o *Orchestrator) Run() (retErr error) {
 				retErr = nil
 			}
 		}
+		if retErr == nil {
+			if err := o.ensureTerminalFinalSummary(defaultBranch, candidateBranch, roundSummaries); err != nil {
+				retErr = err
+			}
+		}
 		if retErr != nil {
 			o.reporter.RunFinished(false, retErr.Error())
 			return
@@ -568,6 +573,29 @@ func (o *Orchestrator) Run() (retErr error) {
 	o.reporter.StageFinished(deliveryStage, nil, true, fmt.Sprintf("delivery completed in `%s` mode", delivery.Mode))
 	successMessage = "run completed successfully"
 	return nil
+}
+
+func (o *Orchestrator) ensureTerminalFinalSummary(defaultBranch, candidateBranch string, summaries []string) error {
+	if o.lastDelivery == nil {
+		return nil
+	}
+	summaryPath := filepath.Join(o.runRoot, "final-summary.md")
+	if _, err := os.Stat(summaryPath); err == nil {
+		return nil
+	} else if !os.IsNotExist(err) {
+		return err
+	}
+	if len(summaries) == 0 {
+		discovered, err := o.discoverCompletedRoundSummaries()
+		if err != nil {
+			return err
+		}
+		summaries = discovered
+	}
+	if len(summaries) == 0 {
+		return NewDeepReviewError("cannot write final summary: no completed round records are available")
+	}
+	return o.writeFinalSummary(defaultBranch, candidateBranch, *o.lastDelivery, summaries)
 }
 
 func (o *Orchestrator) preflight() error {

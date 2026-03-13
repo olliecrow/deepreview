@@ -81,6 +81,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
 - incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
 - incomplete draft PR bodies must explicitly state that the PR is incomplete, why delivery did not finish cleanly, and what remains to be done before merge.
+- incomplete delivery/reporting should distinguish current-tip blockers from PR-range/history-only blockers; when the blocker is historical or range-scoped, deepreview should report that precisely and stop rather than attempt history surgery.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
@@ -157,6 +158,7 @@ Each run must produce:
 - delivery outcome metadata
 - per-round local commits for changed work (one or more commits allowed; no empty commits)
 - final PR title/body artifacts when PR delivery runs
+- successful terminal runs must always leave a root `final-summary.md`, including incomplete-draft outcomes
 
 Cleanup policy:
 - aggressively remove review/execute/delivery worktrees and transient round artifacts once they are no longer needed.

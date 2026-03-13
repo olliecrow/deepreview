@@ -978,6 +978,19 @@ References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
 
 Decision:
+When delivery ends incomplete because a remote check is blocked by PR-range/history state rather than the current tip, report that precisely and stop; do not add automatic history-rewrite recovery.
+Context:
+A retained self-run produced a clean current tip but still failed GitHub `security-policy` because the PR commit range contained an earlier fixture commit with a secret-shaped literal. The correct operator action was clear manual follow-up, not autonomous branch-history surgery.
+Rationale:
+This failure mode is important to surface accurately, but automatic ancestry rebuilding or history rewriting would add a lot of complexity and risk for limited benefit. deepreview should fail clearly here, not recover cleverly.
+Trade-offs:
+Operators may sometimes need to create a clean replacement branch manually, but the core system remains simpler and more predictable.
+Enforcement:
+Delivery prompt guidance requires precise incomplete reporting for current-tip-vs-history blockers and explicitly forbids history surgery inside the delivery stage. Successful terminal runs also backfill the root `final-summary.md` if it was somehow not written earlier so incomplete outcomes remain easy to inspect.
+References:
+`prompts/delivery/01-deliver.md`, `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
 Emit periodic stage heartbeat progress updates while long-running worker/prompt execution is in flight.
 Context:
 Some independent-review and execute steps can run for extended periods with no stdout updates, which looks stalled in the TUI even when progress is healthy.
