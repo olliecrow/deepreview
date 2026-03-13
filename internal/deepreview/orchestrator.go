@@ -895,7 +895,7 @@ type monitoredPromptRequest struct {
 	label          string
 	cwd            string
 	prompt         string
-	threadID       *string
+	codexContext   *CodexContext
 	logPrefix      string
 	useGitStatus   bool
 	monitoredPaths []string
@@ -970,7 +970,7 @@ func (o *Orchestrator) runPromptAttemptWithWatchdog(
 		result, err := o.codexRunner.RunPromptWithHooks(
 			request.cwd,
 			request.prompt,
-			request.threadID,
+			request.codexContext,
 			request.logPrefix,
 			&CodexRunHooks{
 				Context: attemptCtx,
@@ -1262,7 +1262,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 					label:        fmt.Sprintf("worker-%02d", workerID),
 					cwd:          worktreePath,
 					prompt:       prompt,
-					threadID:     nil,
+					codexContext: nil,
 					logPrefix:    logPrefix,
 					useGitStatus: true,
 					monitoredPaths: []string{
@@ -1472,7 +1472,7 @@ func (o *Orchestrator) runExecuteStage(
 		"ROUND_SUMMARY_PATH":      filepath.ToSlash(roundSummaryWorktreePath),
 	}
 
-	var threadID *string
+	var codexContext *CodexContext
 	for idx, templateName := range queue {
 		label := executePromptLabel(templateName)
 		stageName := "execute / " + label
@@ -1492,13 +1492,13 @@ func (o *Orchestrator) runExecuteStage(
 			return RoundStatus{}, "", err
 		}
 		logPrefix := filepath.Join(executeDir, fmt.Sprintf("prompt-%02d", idx+1))
-		result, err := o.runPromptWithHeartbeat(
-			executeWorktree,
-			prompt,
-			threadID,
-			logPrefix,
-			[]string{
-				roundTriageWorktreePath,
+			result, err := o.runPromptWithHeartbeat(
+				executeWorktree,
+				prompt,
+				codexContext,
+				logPrefix,
+				[]string{
+					roundTriageWorktreePath,
 				roundPlanWorktreePath,
 				roundVerificationWorktreePath,
 				roundStatusWorktreePath,
@@ -1515,7 +1515,21 @@ func (o *Orchestrator) runExecuteStage(
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
 		}
-		threadID = &result.ThreadID
+		nextContext := &CodexContext{
+			ThreadID:          result.ThreadID,
+			MulticodexProfile: strings.TrimSpace(result.MulticodexProfile),
+		}
+		if result.UsedMulticodex && idx+1 < len(queue) && nextContext.MulticodexProfile == "" {
+			err := NewDeepReviewError(
+				"multicodex did not report the selected profile for execute step %d; cannot safely resume thread %q. upgrade multicodex to a version that supports selected-profile metadata handoff",
+				idx+1,
+				result.ThreadID,
+			)
+			o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
+			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+			return RoundStatus{}, "", err
+		}
+		codexContext = nextContext
 		o.reporter.StageFinished(stageName, roundPtr(round), true, "completed")
 	}
 
@@ -1632,7 +1646,7 @@ func stageHeartbeatMessage(base string, start time.Time) string {
 
 func (o *Orchestrator) runPromptWithHeartbeat(
 	cwd, prompt string,
-	threadID *string,
+	codexContext *CodexContext,
 	logPrefix string,
 	monitoredPaths []string,
 	round int,
@@ -1646,7 +1660,7 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 			label:          stageName,
 			cwd:            cwd,
 			prompt:         prompt,
-			threadID:       threadID,
+			codexContext:   codexContext,
 			logPrefix:      logPrefix,
 			useGitStatus:   true,
 			monitoredPaths: append(append([]string{}, monitoredPaths...), logPrefix+".stdout.jsonl", logPrefix+".stderr.log"),
@@ -2166,7 +2180,7 @@ func (o *Orchestrator) runPrivacyFixAttempt(worktreePath, candidateBranch string
 			label:        fmt.Sprintf("delivery/privacy-fix-attempt-%02d", attempt),
 			cwd:          worktreePath,
 			prompt:       prompt,
-			threadID:     nil,
+			codexContext: nil,
 			logPrefix:    logPrefix,
 			useGitStatus: true,
 			monitoredPaths: []string{
@@ -2691,7 +2705,7 @@ func (o *Orchestrator) runPRPreparation(candidateBranch string, changedFiles []s
 			label:        "delivery/pr-prepare",
 			cwd:          prepWorktreePath,
 			prompt:       prompt,
-			threadID:     nil,
+			codexContext: nil,
 			logPrefix:    logPrefix,
 			useGitStatus: true,
 			monitoredPaths: []string{
@@ -2945,7 +2959,7 @@ func (o *Orchestrator) enhancePRDescription(defaultBranch, candidateBranch, deli
 			label:        "delivery/pr-description",
 			cwd:          o.runRoot,
 			prompt:       prompt,
-			threadID:     nil,
+			codexContext: nil,
 			logPrefix:    logPrefix,
 			useGitStatus: false,
 			monitoredPaths: []string{

@@ -20,6 +20,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - max rounds (default `5`) for total execute rounds
 - UI mode (full-screen UI by default when terminal capabilities are valid; optional `--no-tui` force-off for structured text logs)
 - resolve Codex launcher: use `multicodex` whenever it is available on `PATH`, otherwise use `codex`; if `DEEPREVIEW_REQUIRE_MULTICODEX=1`, fail instead of falling back
+- multicodex routing is dynamic only for fresh prompt contexts; once deepreview needs to resume a multicodex-backed Codex thread, it reuses the profile that created that thread
 - if source branch is inferred from local repo context, require local readiness:
   - no tracked local changes
   - local branch exactly synchronized with upstream remote branch after refreshing the tracked upstream ref
@@ -95,5 +96,5 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 ## Authentication model
 - Git auth uses local `git`/`gh` session.
 - Codex auth uses the local launcher-selected Codex CLI session/subscription.
-- When routed through `multicodex`, deepreview first validates `multicodex exec` itself and then relies on `multicodex status` to confirm that at least one logged-in profile is available.
+- When routed through `multicodex`, deepreview first validates `multicodex exec` itself and then relies on `multicodex status` to confirm that at least one logged-in profile is available. Fresh prompt contexts use normal multicodex selection; resumed contexts pin the creating profile.
 - core workflows must not require repository-stored API keys.

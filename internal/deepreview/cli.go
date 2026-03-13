@@ -627,6 +627,7 @@ func runReviewCommand(args []string) int {
 		return 1
 	}
 	if interruptCount.Load() > 0 {
+		printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
 		fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 		return 130
 	}
