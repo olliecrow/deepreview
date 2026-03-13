@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+const envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
+
 func randomID() string {
 	buf := make([]byte, 16)
 	if _, err := rand.Read(buf); err != nil {
@@ -45,6 +47,76 @@ func emitThread(threadID, message string) error {
 		}
 	}
 	return nil
+}
+
+func maybeWriteSelectedProfile(profile string) error {
+	path := strings.TrimSpace(os.Getenv(envMulticodexSelectedProfilePath))
+	if path == "" {
+		return nil
+	}
+	payload := map[string]string{"profile": strings.TrimSpace(profile)}
+	data, err := json.Marshal(payload)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(path, append(data, '\n'), 0o600)
+}
+
+func normalizeFakeLauncherInvocation(args []string) ([]string, error) {
+	if !shouldNormalizeFakeLauncherInvocation(args) {
+		return args, nil
+	}
+	if len(args) == 0 {
+		return args, nil
+	}
+	switch args[0] {
+	case "status":
+		fmt.Println("logged-in profile")
+		os.Exit(0)
+		return nil, nil
+	case "exec":
+		profile := strings.TrimSpace(os.Getenv("FAKE_MULTICODEX_SELECTED_PROFILE"))
+		if profile == "" {
+			profile = "fake-profile"
+		}
+		if err := maybeWriteSelectedProfile(profile); err != nil {
+			return nil, err
+		}
+		if err := os.Setenv("MULTICODEX_ACTIVE_PROFILE", profile); err != nil {
+			return nil, err
+		}
+		return args[1:], nil
+	case "run":
+		if len(args) < 5 || args[2] != "--" || args[3] != "codex" {
+			return nil, fmt.Errorf("unsupported fake multicodex run invocation: %s", strings.Join(args, " "))
+		}
+		profile := strings.TrimSpace(args[1])
+		if profile == "" {
+			return nil, fmt.Errorf("fake multicodex run missing profile")
+		}
+		if err := maybeWriteSelectedProfile(profile); err != nil {
+			return nil, err
+		}
+		if err := os.Setenv("MULTICODEX_ACTIVE_PROFILE", profile); err != nil {
+			return nil, err
+		}
+		return args[4:], nil
+	default:
+		return nil, fmt.Errorf("unsupported fake multicodex command: %s", strings.Join(args, " "))
+	}
+}
+
+func shouldNormalizeFakeLauncherInvocation(args []string) bool {
+	if filepath.Base(os.Args[0]) == "multicodex" {
+		return true
+	}
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "exec" && strings.TrimSpace(os.Getenv(envMulticodexSelectedProfilePath)) != "" {
+		return true
+	}
+	return args[0] == "run" && len(args) >= 5 && args[2] == "--" && args[3] == "codex"
 }
 
 func requirePathWithinCWD(path, label string) error {
@@ -590,6 +662,11 @@ func main() {
 
 	threadID := randomID()
 	args := os.Args[1:]
+	args, err = normalizeFakeLauncherInvocation(args)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
 	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_SKIP_GIT_REPO_CHECK")) != "" && !hasArg(args, "--skip-git-repo-check") {
 		fmt.Fprintln(os.Stderr, "missing required --skip-git-repo-check")
 		os.Exit(1)

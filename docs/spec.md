@@ -51,7 +51,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute retries may preserve only artifacts from earlier successful prompts in the queue: review inputs for all retries, triage/plan only after prompt 1, verification only after prompt 2, and never a prior attempt's `round-status.json` or `round-summary.md`.
 - Codex prompt workers must write prompt outputs inside their current worktree; deepreview then persists canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) under `~/deepreview/runs/<run-id>/round-<round>/`.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` and `.tmp/deepreview/` remain reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
-- all Codex prompt executions use the operator's normal local Codex configuration and inherited local environment by default; deepreview does not force a separate model, reasoning profile, temp/cache override layer, or other execution wrapper beyond the resolved launcher itself.
+- all Codex prompt executions use the operator's normal local Codex configuration and inherited local environment by default; deepreview does not force a separate model, reasoning profile, temp/cache override layer, or other execution wrapper beyond the resolved launcher itself, except that resumed multicodex-backed contexts stay on the profile that created the thread.
 - round progression is determined by validated execute-stage round status plus repository change detection.
 - if an execute round ends with status `continue`, deepreview must run another review round regardless of repository changes.
 - if an execute round ends with the first consecutive status `stop`, deepreview must run one additional confirmation round regardless of repository changes.
@@ -76,7 +76,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - managed repo checkout paths are branch-scoped under the workspace so fresh-clone setup for one source branch cannot race another source branch of the same repo.
 - Codex auth should rely on local Codex CLI session/subscription, not repository-stored API keys.
 - `DEEPREVIEW_REQUIRE_MULTICODEX=1` requires `multicodex exec` to be available on `PATH`; when unset, deepreview falls back to `codex exec` only if `multicodex` is unavailable.
-- all Codex prompt executions (new and resumed threads, including post-delivery prompts) must use the operator's normal local Codex configuration unless an explicit deepreview override is added in code for a documented reason.
+- all Codex prompt executions (new and resumed threads, including post-delivery prompts) must use the operator's normal local Codex configuration unless an explicit deepreview override is added in code for a documented reason. Resumed multicodex-backed contexts are one such documented override boundary: they may pin the creating multicodex profile to preserve thread continuity.
 
 ## Runtime contract
 - command entrypoint: `deepreview`
