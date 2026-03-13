@@ -70,6 +70,35 @@ func createSyncedGitHubLikeRepo(t *testing.T, branch string) string {
 	return repo
 }
 
+func createSyncedFilesystemRepo(t *testing.T, branch string) string {
+	t.Helper()
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(filepath.Dir(remote), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, seed)
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", branch)
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "README.md")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "seed")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", branch)
+
+	runGitCommand(t, td, "clone", remote, repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", repo, "checkout", branch)
+	return repo
+}
+
 func githubSCPLikeCloneURL(owner, name string) string {
 	return fmt.Sprintf("git%s%s:%s/%s.git", "@", "github.com", owner, name)
 }

@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 	"strings"
 	"time"
 )
+
+const envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
 
 func randomID() string {
 	buf := make([]byte, 16)
@@ -59,10 +62,8 @@ func maybeWriteSelectedProfile(profile string) error {
 	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
-const envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
-
 func normalizeFakeLauncherInvocation(args []string) ([]string, error) {
-	if filepath.Base(os.Args[0]) != "multicodex" {
+	if !shouldNormalizeFakeLauncherInvocation(args) {
 		return args, nil
 	}
 	if len(args) == 0 {
@@ -105,6 +106,18 @@ func normalizeFakeLauncherInvocation(args []string) ([]string, error) {
 	}
 }
 
+func shouldNormalizeFakeLauncherInvocation(args []string) bool {
+	if filepath.Base(os.Args[0]) == "multicodex" {
+		return true
+	}
+	if len(args) == 0 {
+		return false
+	}
+	if args[0] == "exec" && strings.TrimSpace(os.Getenv(envMulticodexSelectedProfilePath)) != "" {
+		return true
+	}
+	return args[0] == "run" && len(args) >= 5 && args[2] == "--" && args[3] == "codex"
+}
 func requirePathWithinCWD(path, label string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
@@ -549,6 +562,20 @@ func maybeSleepOnceByMarker(markerPath, sleepRaw string) bool {
 	return sleepFromEnv(sleepRaw)
 }
 
+func stableMarkerPath(name string) string {
+	root := strings.TrimSpace(os.Getenv("FAKE_CODEX_MARKER_ROOT"))
+	if root == "" {
+		cwd, err := os.Getwd()
+		if err != nil {
+			root = filepath.Join(os.TempDir(), "fake-codex-markers", "unknown")
+		} else {
+			sum := sha256.Sum256([]byte(cwd))
+			root = filepath.Join(os.TempDir(), "fake-codex-markers", hex.EncodeToString(sum[:8]))
+		}
+	}
+	return filepath.Join(root, name)
+}
+
 func sleepFromEnvValueEnabled(raw string) bool {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
@@ -564,7 +591,7 @@ func sleepForPrompt(prompt string) {
 		if matchSleepRaw == "" {
 			matchSleepRaw = os.Getenv("FAKE_CODEX_STALL_ONCE_MS")
 		}
-		if maybeSleepOnceByMarker(filepath.Join(".deepreview", "fake-codex-stall-once-match.marker"), matchSleepRaw) {
+		if maybeSleepOnceByMarker(stableMarkerPath("fake-codex-stall-once-match.marker"), matchSleepRaw) {
 			return
 		}
 	}
@@ -572,7 +599,7 @@ func sleepForPrompt(prompt string) {
 	workerID := workerIDFromPrompt(prompt)
 	if workerID > 0 {
 		stallKey := fmt.Sprintf("FAKE_CODEX_STALL_ONCE_MS_WORKER_%d", workerID)
-		stallMarker := filepath.Join(".deepreview", fmt.Sprintf("fake-codex-stall-once-worker-%02d.marker", workerID))
+		stallMarker := stableMarkerPath(fmt.Sprintf("fake-codex-stall-once-worker-%02d.marker", workerID))
 		if maybeSleepOnceByMarker(stallMarker, os.Getenv(stallKey)) {
 			return
 		}
@@ -581,7 +608,7 @@ func sleepForPrompt(prompt string) {
 			return
 		}
 	}
-	if maybeSleepOnceByMarker(filepath.Join(".deepreview", "fake-codex-stall-once-global.marker"), os.Getenv("FAKE_CODEX_STALL_ONCE_MS")) {
+	if maybeSleepOnceByMarker(stableMarkerPath("fake-codex-stall-once-global.marker"), os.Getenv("FAKE_CODEX_STALL_ONCE_MS")) {
 		return
 	}
 	if sleepFromEnv(os.Getenv("FAKE_CODEX_SLEEP_MS")) {

@@ -501,6 +501,50 @@ func TestRunReviewCommandKeepsReadinessValidation(t *testing.T) {
 	})
 }
 
+func TestRunReviewCommandRejectsTrackedChangesForFilesystemOriginRepo(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+
+	withWorkingDir(t, t.TempDir(), func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runReviewCommand([]string{repo, "--source-branch", "feature/test", "--no-tui"})
+		})
+		if code != 1 {
+			t.Fatalf("expected review to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "local tracked changes are present") {
+			t.Fatalf("expected readiness failure in stderr, got:\n%s", stderr)
+		}
+	})
+}
+
+func TestRunReviewCommandRejectsAheadOfRemoteForFilesystemOriginRepo(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+
+	withWorkingDir(t, t.TempDir(), func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("ahead\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitCommand(t, repo, "add", "README.md")
+		runGitCommand(t, repo, "commit", "-m", "ahead")
+
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runReviewCommand([]string{repo, "--source-branch", "feature/test", "--no-tui"})
+		})
+		if code != 1 {
+			t.Fatalf("expected review to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stderr, "not synchronized") {
+			t.Fatalf("expected readiness failure in stderr, got:\n%s", stderr)
+		}
+	})
+}
+
 func TestRunDoctorCommandBypassesReviewReadinessValidation(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())

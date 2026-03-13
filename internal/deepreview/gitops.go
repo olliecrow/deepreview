@@ -157,6 +157,20 @@ func AddBranchWorktree(repoPath, gitBin, worktreePath, branch, ref string) error
 	return err
 }
 
+func ResetWorktreeToRef(worktreePath, gitBin, ref string) error {
+	trimmedRef := strings.TrimSpace(ref)
+	if trimmedRef == "" {
+		return NewDeepReviewError("reset worktree target ref is required")
+	}
+	if _, err := RunCommand([]string{gitBin, "-C", worktreePath, "reset", "--hard", trimmedRef}, "", "", true, 0); err != nil {
+		return err
+	}
+	if _, err := RunCommand([]string{gitBin, "-C", worktreePath, "clean", "-fdx"}, "", "", true, 0); err != nil {
+		return err
+	}
+	return EnsureWorktreeOperationalExcludes(worktreePath, gitBin)
+}
+
 func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 	if _, err := os.Stat(worktreePath); err != nil {
 		if os.IsNotExist(err) {
