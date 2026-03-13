@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1132,6 +1133,93 @@ func TestEndToEndPRModeReportsExistingPRAfterMergeabilityFailure(t *testing.T) {
 	}
 	if strings.Contains(output, "run exited before delivery; no push or PR was created.") {
 		t.Fatalf("expected delivery-aware failure summary, got:\n%s", output)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	bodyBytes, err := os.ReadFile(filepath.Join(runsGlob[0], "pr-body.md"))
+	if err != nil {
+		t.Fatalf("missing pr-body.md after published PR failure: %v", err)
+	}
+	body := string(bodyBytes)
+	if strings.Contains(body, "after final delivery validation passed") {
+		t.Fatalf("pr body should not claim validation already passed before mergeability failure, got:\n%s", body)
+	}
+	if strings.Contains(body, "ready for review and merge") {
+		t.Fatalf("pr body should not advertise merge readiness on failure path, got:\n%s", body)
+	}
+}
+
+func TestEndToEndPRModeWaitsForTransientMergeabilityState(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	sequenceStatePath := filepath.Join(td, "gh-pr-view-sequence-state.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_GH_PR_VIEW_SEQUENCE_STATE_PATH="+sequenceStatePath,
+		"FAKE_GH_PR_VIEW_MERGEABLE_SEQUENCE=UNKNOWN,MERGEABLE",
+		"FAKE_GH_PR_VIEW_MERGE_STATE_STATUS_SEQUENCE=UNKNOWN,CLEAN",
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected successful pr delivery output, got: %s", output)
+	}
+
+	sequenceBytes, err := os.ReadFile(sequenceStatePath)
+	if err != nil {
+		t.Fatalf("missing mergeability poll sequence state: %v", err)
+	}
+	polls, err := strconv.Atoi(strings.TrimSpace(string(sequenceBytes)))
+	if err != nil {
+		t.Fatalf("invalid mergeability poll count %q: %v", string(sequenceBytes), err)
+	}
+	if polls < 2 {
+		t.Fatalf("expected mergeability validation to poll more than once, got %d", polls)
 	}
 }
 

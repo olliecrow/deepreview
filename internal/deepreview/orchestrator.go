@@ -54,7 +54,19 @@ type promptDeliveryResult struct {
 	IncompleteReason string `json:"incomplete_reason,omitempty"`
 }
 
-const stageHeartbeatInterval = 15 * time.Second
+const (
+	stageHeartbeatInterval       = 15 * time.Second
+	mergeReadyPRPollInterval     = 1 * time.Second
+	mergeReadyPRValidationWindow = 30 * time.Second
+)
+
+type pullRequestMergeState struct {
+	URL              string `json:"url"`
+	State            string `json:"state"`
+	IsDraft          bool   `json:"isDraft"`
+	Mergeable        string `json:"mergeable"`
+	MergeStateStatus string `json:"mergeStateStatus"`
+}
 
 func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestrator, error) {
 	workspaceRoot, err := filepath.Abs(config.WorkspaceRoot)
@@ -2506,6 +2518,58 @@ func (o *Orchestrator) resolvePreparedDeliveryRef(result promptDeliveryResult, c
 }
 
 func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
+	deadline := time.Now().Add(mergeReadyPRValidationWindow)
+	reportedPending := false
+	for {
+		state, err := o.readPullRequestMergeState(prURL)
+		if err != nil {
+			return err
+		}
+		if strings.TrimSpace(state.URL) == "" {
+			return NewDeepReviewError("gh pr view returned empty url for %s", prURL)
+		}
+		if normalizeMergeReadyStateValue(state.State) != "OPEN" {
+			return NewDeepReviewError("pull request is not open: %s", prURL)
+		}
+		if state.IsDraft {
+			return NewDeepReviewError("pull request is still draft: %s", prURL)
+		}
+		if mergeReadyPRStateIsSuccess(state) {
+			return nil
+		}
+		if mergeReadyPRStateIsPending(state) {
+			if time.Now().After(deadline) {
+				return NewDeepReviewError(
+					"pull request mergeability did not settle within %s (mergeable=%s, mergeStateStatus=%s): %s",
+					mergeReadyPRValidationWindow,
+					displayMergeReadyStateValue(state.Mergeable),
+					displayMergeReadyStateValue(state.MergeStateStatus),
+					prURL,
+				)
+			}
+			if !reportedPending {
+				o.reporter.StageProgress(
+					"delivery",
+					fmt.Sprintf(
+						"waiting for pull request mergeability to settle (mergeable=%s, mergeStateStatus=%s)",
+						displayMergeReadyStateValue(state.Mergeable),
+						displayMergeReadyStateValue(state.MergeStateStatus),
+					),
+					nil,
+				)
+				reportedPending = true
+			}
+			time.Sleep(mergeReadyPRPollInterval)
+			continue
+		}
+		if normalizeMergeReadyStateValue(state.Mergeable) != "MERGEABLE" {
+			return NewDeepReviewError("pull request is not mergeable yet (%s): %s", displayMergeReadyStateValue(state.Mergeable), prURL)
+		}
+		return NewDeepReviewError("pull request merge state is not clean (%s): %s", displayMergeReadyStateValue(state.MergeStateStatus), prURL)
+	}
+}
+
+func (o *Orchestrator) readPullRequestMergeState(prURL string) (pullRequestMergeState, error) {
 	completed, err := RunCommand(
 		[]string{
 			o.config.GhBin,
@@ -2519,35 +2583,42 @@ func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
 		0,
 	)
 	if err != nil {
-		return err
+		return pullRequestMergeState{}, err
 	}
-	var state struct {
-		URL              string `json:"url"`
-		State            string `json:"state"`
-		IsDraft          bool   `json:"isDraft"`
-		Mergeable        string `json:"mergeable"`
-		MergeStateStatus string `json:"mergeStateStatus"`
-	}
+	var state pullRequestMergeState
 	if err := json.Unmarshal([]byte(completed.Stdout), &state); err != nil {
-		return NewDeepReviewError("invalid gh pr view output for %s: %v", prURL, err)
+		return pullRequestMergeState{}, NewDeepReviewError("invalid gh pr view output for %s: %v", prURL, err)
 	}
-	if strings.TrimSpace(state.URL) == "" {
-		return NewDeepReviewError("gh pr view returned empty url for %s", prURL)
+	return state, nil
+}
+
+func normalizeMergeReadyStateValue(value string) string {
+	return strings.ToUpper(strings.TrimSpace(value))
+}
+
+func displayMergeReadyStateValue(value string) string {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return "<empty>"
 	}
-	if strings.ToUpper(strings.TrimSpace(state.State)) != "OPEN" {
-		return NewDeepReviewError("pull request is not open: %s", prURL)
+	return trimmed
+}
+
+func mergeReadyPRStateIsSuccess(state pullRequestMergeState) bool {
+	mergeState := normalizeMergeReadyStateValue(state.MergeStateStatus)
+	return normalizeMergeReadyStateValue(state.Mergeable) == "MERGEABLE" && (mergeState == "CLEAN" || mergeState == "HAS_HOOKS")
+}
+
+func mergeReadyPRStateIsPending(state pullRequestMergeState) bool {
+	if normalizeMergeReadyStateValue(state.Mergeable) == "UNKNOWN" {
+		return true
 	}
-	if state.IsDraft {
-		return NewDeepReviewError("pull request is still draft: %s", prURL)
+	switch normalizeMergeReadyStateValue(state.MergeStateStatus) {
+	case "UNKNOWN", "UNSTABLE":
+		return true
+	default:
+		return false
 	}
-	if strings.ToUpper(strings.TrimSpace(state.Mergeable)) != "MERGEABLE" {
-		return NewDeepReviewError("pull request is not mergeable yet (%s): %s", strings.TrimSpace(state.Mergeable), prURL)
-	}
-	mergeState := strings.ToUpper(strings.TrimSpace(state.MergeStateStatus))
-	if mergeState != "CLEAN" && mergeState != "HAS_HOOKS" {
-		return NewDeepReviewError("pull request merge state is not clean (%s): %s", strings.TrimSpace(state.MergeStateStatus), prURL)
-	}
-	return nil
 }
 
 func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, summaries, changedFiles []string) (DeliveryResult, error) {
@@ -2896,7 +2967,7 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string, opts
 
 	lines := []string{
 		"## summary",
-		"- deepreview generated this compact body to stay within GitHub PR body limits after final delivery validation passed.",
+		"- deepreview generated this compact body to stay within GitHub PR body limits.",
 		fmt.Sprintf("- run id: `%s`", o.config.RunID),
 		fmt.Sprintf("- rounds executed: `%d`", len(summaries)),
 	}
@@ -2923,19 +2994,19 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string, opts
 	lines = append(lines,
 		"",
 		"## verification",
-		"- deepreview ran its execute-stage verification before delivery and revalidated the final published ref before pushing.",
+		"- deepreview ran execute-stage verification before delivery.",
 	)
 
 	lines = append(lines,
 		"",
 		"## risks and follow-ups",
-		"- no additional delivery blockers were detected after final validation.",
+		"- deepreview performs a separate post-create mergeability check before reporting successful delivery.",
 	)
 
 	lines = append(lines,
 		"",
 		"## final status",
-		"- ready for review and merge.",
+		"- published by deepreview; check the terminal run summary for final delivery status.",
 	)
 
 	return sanitizePublicText(strings.Join(lines, "\n") + "\n")
