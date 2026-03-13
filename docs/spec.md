@@ -9,7 +9,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - **default branch**: repository default branch (for example `main` or `master`).
 - **independent review**: one independent Codex review run in one isolated worktree.
 - **execute stage**: the per-round Codex stage that triages review findings, applies selected changes, verifies them, and records round artifacts in a fresh execute worktree.
-- **delivery stage**: the final Codex stage that prepares the branch/PR for merge, performs push/PR actions, waits on required remote checks, and updates PR metadata in a fresh delivery context.
+- **delivery stage**: the final Codex stage that prepares local branch state for publication in a fresh delivery context before deepreview performs remote delivery actions.
 - **round**: one independent review stage plus one execute stage, ending in local commit/no-push unless it is final delivery.
 - **material improvement**: a high-confidence change that clearly improves correctness, security, maintainability, simplicity, documentation accuracy, or delivery readiness in a meaningful way.
 
@@ -66,17 +66,18 @@ This document defines the canonical runtime and product contract for `deepreview
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds.
 - final delivery pushes are allowed only after round execution completes and no blocking verification failures are reported.
-- in a Codex-owned delivery loop, multiple delivery-stage pushes are allowed when they are required to resolve mergeability or remote-check failures with high-confidence follow-up fixes.
 - PR mode has exactly four terminal outcomes: success with complete PR, success with incomplete draft PR, success with no deliverable repository changes (no push/PR), or failure.
 - default delivery mode is `pr` and must not push source branch directly.
-- in delivery, Codex owns repo mutation steps beyond workspace management: final local hygiene, branch updates, PR creation/editing, merge-readiness checks, PR text upkeep, and mergeability follow-through.
+- in delivery, Codex owns final local delivery preparation inside the worktree, while deepreview owns final pre-publication validation, remote push / PR creation, and bounded post-create mergeability validation.
 - in `pr` mode, run one fresh Codex delivery prompt in a candidate-branch worktree. That prompt must:
   - inspect the candidate diff and prior round artifacts
   - run any final local merge-readiness checks still needed
-  - prepare or refine branch state and PR metadata
-  - push the delivery branch and create or update the PR
-  - wait for required remote CI/checks
-  - if mergeability is blocked by high-confidence fixable issues, make fixes, push again, update PR text, and continue until the PR is mergeable or an explicit blocker prevents autonomous completion
+  - prepare or refine final local branch state for publication
+  - optionally move work onto the delivery branch locally
+  - report whether local delivery preparation is complete or incomplete
+- after the delivery prompt finishes, deepreview must validate the exact ref that will be published before any push or PR creation occurs.
+- post-prompt delivery validation must inspect the actual prepared ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
+- after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
 - incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
 - incomplete draft PR bodies must explicitly state that the PR is incomplete, why delivery did not finish cleanly, and what remains to be done before merge.
@@ -180,7 +181,7 @@ Cleanup policy:
 - verification strategy is codex-led: Codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)
-PR bodies should include these sections in the final Codex-generated output:
+PR bodies should include these sections in the final generated output:
 - `## summary`
 - `## what changed and why`
 - `## round outcomes`
@@ -193,7 +194,7 @@ PR bodies should include these sections in the final Codex-generated output:
 - if generated PR text exceeds GitHub PR body limits, deepreview must fall back to a compact body automatically
 
 ## PR title contract (default PR mode)
-- final PR title is Codex-generated in delivery stage and then applied via `gh pr edit` or `gh pr create`.
+- final PR title is generated during delivery and applied when deepreview creates the PR.
 - final PR title must remain prefixed with `deepreview:`.
 - final PR title must be concise, concrete, and human-readable (not generic boilerplate).
 - incomplete draft PR titles must be prefixed with `[INCOMPLETE] ` ahead of the normal `deepreview:` prefix.
