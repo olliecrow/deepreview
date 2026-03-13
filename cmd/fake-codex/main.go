@@ -118,7 +118,6 @@ func shouldNormalizeFakeLauncherInvocation(args []string) bool {
 	}
 	return args[0] == "run" && len(args) >= 5 && args[2] == "--" && args[3] == "codex"
 }
-
 func requirePathWithinCWD(path, label string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
