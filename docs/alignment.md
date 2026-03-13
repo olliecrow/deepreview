@@ -76,6 +76,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-63 | Clean review runs with no deliverable repository changes must complete successfully with final summary artifacts but without push or PR delivery. | `docs/spec.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go` |
 | R-64 | Deepreview should prefer canonical markdown/json artifacts by default and treat large raw worker logs as optional/debug-oriented retention. | `docs/spec.md`, `docs/decisions.md`, `internal/deepreview/orchestrator.go` |
 | R-65 | Deepreview should instruct Codex to inspect available local skills and use relevant ones when useful, without assuming a fixed skill inventory. | `prompts/review/independent-review.md`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`, `prompts/delivery/01-deliver.md`, `docs/spec.md`, `prompts/README.md` |
+| R-66 | The delivery prompt result contract should stay local-only: it reports local readiness state (mode, optional prepared delivery branch, incomplete status/reason), while deepreview computes push refspecs, creates the PR, and owns remote publication metadata. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md`, `prompts/delivery/01-deliver.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go` |
 
 ## Alignment gate
 For each requirement touched by a change, evidence must be captured for:
