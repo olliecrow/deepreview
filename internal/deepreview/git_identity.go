@@ -35,7 +35,7 @@ func resolveCommitIdentityRepoPath(gitBin, repo string) (string, error) {
 		return repo, nil
 	}
 
-	cwdState, err := detectGitHubRepoState(gitBin, ".")
+	cwdState, err := detectLocalRepoState(gitBin, ".")
 	if err != nil {
 		return "", err
 	}
