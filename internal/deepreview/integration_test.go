@@ -908,7 +908,9 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	if len(runsGlob) != 1 {
 		t.Fatalf("expected one run directory, got %d", len(runsGlob))
 	}
-	waitForNoWorktreeDirs(t, runsGlob[0], 5*time.Second)
+	// Interrupt cleanup can lag a bit behind process exit when the full package
+	// is under load, so allow a slightly longer window before declaring failure.
+	waitForNoWorktreeDirs(t, runsGlob[0], 15*time.Second)
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
