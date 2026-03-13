@@ -553,9 +553,9 @@ deepreview is routinely launched from inside the target repository being reviewe
 Rationale:
 Restricting default prompt discovery to explicit override or deepreview-owned locations preserves prompt editability for operators while keeping the prompt control plane out of the reviewed repository.
 Trade-offs:
-Ad hoc local prompt experimentation from arbitrary working directories now requires setting `DEEPREVIEW_PROMPTS_ROOT` explicitly.
+Ad hoc local prompt experimentation from arbitrary working directories or executable-adjacent prompt trees now requires setting `DEEPREVIEW_PROMPTS_ROOT` explicitly.
 Enforcement:
-Default prompt discovery ignores caller-CWD `./prompts` and resolves only `DEEPREVIEW_PROMPTS_ROOT` or deepreview-owned executable/source-relative prompt directories; regression tests cover the caller-CWD hijack case.
+Default prompt discovery ignores caller-CWD and executable-adjacent `prompts/` directories and resolves only `DEEPREVIEW_PROMPTS_ROOT` or the deepreview source-relative prompt root; regression tests cover both hijack cases.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
 
@@ -1018,11 +1018,25 @@ Enforcement:
   - `DEEPREVIEW_REVIEW_MAX_RESTARTS=1`
 - Worker activity evidence includes stdout/stderr output and filesystem/git-change signals.
 - On inactivity timeout, deepreview cancels and restarts the worker up to configured max restarts.
+- Before retrying a mutable execute or delivery git worktree, deepreview resets it to the last clean candidate-branch baseline and clears staged/untracked leftovers so abandoned attempt state cannot contaminate later commits or delivery.
 - Independent review stage requires full worker coverage; stage fails if any worker cannot complete within bounded restart policy.
 - Run config snapshot records effective review policy settings.
 - Integration and unit tests assert inactivity restart behavior and policy clamping behavior; restart-path integration assertions should prefer deterministic log evidence over strict wall-time thresholds to reduce flake risk.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Apply current-branch readiness checks to supported filesystem-origin repos when review targets that local branch explicitly.
+Context:
+Deepreview already models filesystem-origin repositories as supported review inputs, but current-branch readiness validation only inspected GitHub-backed local context. That let dirty or ahead local filesystem-origin repos bypass the same safety gate.
+Rationale:
+The readiness rule is about reviewing stale local state, not about GitHub specifically. Matching explicit branch runs against supported filesystem-origin repos should fail fast on tracked local changes or ahead-of-remote state just like GitHub-backed repos.
+Trade-offs:
+Adds stricter preflight behavior for explicit local-path runs against filesystem-origin repos. Repo/branch inference remains GitHub-only unless the user passes explicit local repo context.
+Enforcement:
+Local repo-state detection now recognizes supported filesystem-origin remotes for readiness validation and commit-identity lookup; tests cover dirty, ahead-of-remote, and explicit non-current-branch bypass cases.
+References:
+`internal/deepreview/local_context.go`, `internal/deepreview/git_identity.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`
 
 Decision:
 Run Codex prompts with the operator's normal local Codex configuration and inherited local environment.
@@ -1036,6 +1050,19 @@ Enforcement:
 Codex runner invokes the resolved launcher with the minimal deepreview orchestration flags only, preserves the inherited local environment, and documentation/prompt guidance treat network/module access as environment-dependent rather than assuming a deepreview-managed offline environment.
 References:
 `internal/deepreview/codex.go`, `internal/deepreview/process.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/process_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `prompts/review/independent-review.md`, `prompts/execute/02-execute-verify.md`, `docs/spec.md`
+
+Decision:
+Pin resumed multicodex-backed deepreview contexts to the profile that created the thread, while leaving fresh contexts on normal multicodex selection.
+Context:
+Deepreview runs many separate Codex prompt contexts during a run. Fresh multicodex invocations are intended to balance usage dynamically, but execute-stage prompt chains resume a prior Codex thread. If usage ranking changes mid-run, a later `multicodex exec resume <thread>` can otherwise land on a different multicodex profile than the one that created the thread.
+Rationale:
+Per-context pinning keeps the desired balancing behavior for new work while protecting thread continuity for resumed work. Pinning the entire run would reduce balancing more than necessary, and inferring the owning profile indirectly would be brittle.
+Trade-offs:
+Resumed contexts can no longer migrate to a lower-usage profile mid-thread, so balancing is slightly less flexible once a thread has started. Deepreview depends on multicodex exposing the selected profile in machine-readable form for fresh thread creation.
+Enforcement:
+Fresh multicodex-backed prompts request selected-profile metadata, deepreview stores the creating profile alongside resumable thread state, later resumes run through `multicodex run <profile> -- codex exec ...`, and execute-stage orchestration fails fast if a resumable multicodex thread is created without selected-profile metadata.
+References:
+`internal/deepreview/codex.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `README.md`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Treat `source branch == default branch` runs as current-state repository audits rather than zero-diff branch reviews.
@@ -1062,6 +1089,19 @@ Enforcement:
 `NewOrchestrator` rejects `--mode pr` when repo identity resolution produces a non-GitHub/local synthetic repo identity; help text and spec call out the restriction explicitly.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/cli.go`, `README.md`, `docs/spec.md`
+
+Decision:
+Reset stalled execute/delivery retries to immutable attempt baselines and preserve only prompt outputs that were completed successfully before the stall.
+Context:
+Mutable execute and delivery worktrees can be restarted after inactivity. A retry that resets to a moving branch name or that preserves final round-status/summary files from a killed prompt can silently reuse stale commits or stale round-control artifacts.
+Rationale:
+Capturing the baseline SHA before each mutable attempt makes the retry reset deterministic, and limiting preserved execute artifacts to earlier successful prompts ensures a later prompt cannot satisfy completion with files written by a killed predecessor.
+Trade-offs:
+Execute retries must regenerate final status/summary files even when an earlier attempt had already written them, and delivery retries need a little more bookkeeping to capture immutable baselines per attempt.
+Enforcement:
+Orchestrator retry logic snapshots immutable delivery baselines before PR-prep/privacy-fix attempts, execute retries preserve only prior successful prompt outputs, and integration tests cover stale execute artifacts plus stale PR-prep/privacy-remediation commits.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Pin resumed multicodex-backed deepreview contexts to the profile that created the thread, while leaving fresh contexts on normal multicodex selection.

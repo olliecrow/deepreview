@@ -25,7 +25,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - when launched via wrappers that `cd` before execution, `DEEPREVIEW_CALLER_CWD` is an explicit caller-context override for repo/branch inference; the implicit `OLDPWD` fallback applies only when the current directory is the deepreview source repo so wrappers do not silently target the tool repo.
 - resolved repo identity must model GitHub-backed and filesystem-local sources explicitly; GitHub repos keep their stable `owner/repo` slug while filesystem-local repos use a deterministic filesystem identity derived from the canonicalized clone source.
 - in `pr` mode, the resolved repo identity must be GitHub-backed; local filesystem origin remotes are rejected before round execution.
-- source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching current local branch): no tracked local changes and exact local/upstream synchronization after refreshing the tracked upstream ref.
+- source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching the current branch in a supported local repo context): no tracked local changes and exact local/upstream synchronization after refreshing the tracked upstream ref.
 - deepreview keeps orchestration simple with bounded self-healing only: inactivity-based worker restarts are allowed with explicit per-worker restart caps.
 - deepreview resolves the Codex prompt launcher by name instead of by hardcoded local repo path: use `multicodex` whenever it is available on `PATH`; otherwise fall back to `codex` unless `DEEPREVIEW_REQUIRE_MULTICODEX` is set.
 - fresh multicodex-backed prompt contexts use normal `multicodex exec` profile selection, but once a prompt creates a resumable Codex thread, later deepreview resumes for that logical context must stay on the same selected multicodex profile.
@@ -39,6 +39,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - independent-review reports are strictly severity-first and include only high-confidence `critical|high` merge-relevant issues.
 - independent-review and execute/delivery Codex workers are monitored for activity signals (stdout/stderr output plus filesystem/git-change evidence).
 - if a worker is inactive for the configured timeout, deepreview cancels and restarts that worker up to the configured restart cap.
+- before retrying a mutable git worktree after inactivity (execute prompt retries and mutable delivery worktrees), deepreview resets that worktree to the immutable last clean candidate-branch SHA captured before the attempt and clears staged/untracked leftovers so abandoned attempt state cannot leak forward.
 - each execute pass runs in a fresh worktree.
 - independent-review workers use one shared independent-review prompt template.
 - when the source branch equals the default branch, independent review treats branch diff as orientation only and continues as a current-state repository audit.
@@ -48,9 +49,10 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute stage validates `round-triage.md` and fails the round if any `accept` item is missing severity/confidence tags or does not satisfy `severity in {critical, high}` and `confidence=high`.
 - execute prompt-2 (execute/verify) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), with evidence output.
 - execute prompt-3 (cleanup/summary/commit) must include docs/notes/decision upkeep, write complete round artifacts, and ensure changed work is committed locally.
+- execute retries may preserve only artifacts from earlier successful prompts in the queue: review inputs for all retries, triage/plan only after prompt 1, verification only after prompt 2, and never a prior attempt's `round-status.json` or `round-summary.md`.
 - Codex prompt workers must write prompt outputs inside their current worktree; deepreview then persists canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) under `~/deepreview/runs/<run-id>/round-<round>/`.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` and `.tmp/deepreview/` remain reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
-- all Codex prompt executions use the operator's normal local Codex configuration and inherited local environment by default; deepreview does not force a separate model, reasoning profile, temp/cache override layer, or other execution wrapper beyond the resolved launcher itself, except that resumed multicodex-backed deepreview contexts stay on the profile that created the thread.
+- all Codex prompt executions use the operator's normal local Codex configuration and inherited local environment by default; deepreview does not force a separate model, reasoning profile, temp/cache override layer, or other execution wrapper beyond the resolved launcher itself, except that resumed multicodex-backed contexts stay on the profile that created the thread.
 - round progression is determined by validated execute-stage round status plus repository change detection.
 - if an execute round ends with status `continue`, deepreview must run another review round regardless of repository changes.
 - if an execute round ends with the first consecutive status `stop`, deepreview must run one additional confirmation round regardless of repository changes.
@@ -191,7 +193,7 @@ PR bodies should include these sections in the final Codex-generated output:
 ## Prompt-template contract
 - Prompt templates are file-based and unversioned.
 - Prompt root directory is `prompts/`.
-- Default prompt discovery trusts only `DEEPREVIEW_PROMPTS_ROOT` or deepreview-owned executable/source-relative prompt directories; a target repository's own `./prompts` directory is never auto-trusted.
+- Default prompt discovery trusts only `DEEPREVIEW_PROMPTS_ROOT` or the deepreview source-relative `prompts/` tree; executable-adjacent or target-repo `./prompts` directories are never auto-trusted.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
 - PR mode uses one pre-delivery preparation template: `prompts/delivery/pr-prepare.md`.
