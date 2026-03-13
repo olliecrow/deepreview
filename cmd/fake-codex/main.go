@@ -16,7 +16,10 @@ import (
 	"time"
 )
 
-const envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
+const (
+	envMulticodexActiveProfile       = "MULTICODEX_ACTIVE_PROFILE"
+	envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
+)
 
 func randomID() string {
 	buf := make([]byte, 16)
@@ -62,6 +65,14 @@ func maybeWriteSelectedProfile(profile string) error {
 	return os.WriteFile(path, append(data, '\n'), 0o600)
 }
 
+// Keep fake multicodex profile handoff identical for exec and run wrappers.
+func activateFakeMulticodexProfile(profile string) error {
+	if err := maybeWriteSelectedProfile(profile); err != nil {
+		return err
+	}
+	return os.Setenv(envMulticodexActiveProfile, profile)
+}
+
 func normalizeFakeLauncherInvocation(args []string) ([]string, error) {
 	if !shouldNormalizeFakeLauncherInvocation(args) {
 		return args, nil
@@ -79,10 +90,7 @@ func normalizeFakeLauncherInvocation(args []string) ([]string, error) {
 		if profile == "" {
 			profile = "fake-profile"
 		}
-		if err := maybeWriteSelectedProfile(profile); err != nil {
-			return nil, err
-		}
-		if err := os.Setenv("MULTICODEX_ACTIVE_PROFILE", profile); err != nil {
+		if err := activateFakeMulticodexProfile(profile); err != nil {
 			return nil, err
 		}
 		return args[1:], nil
@@ -94,10 +102,7 @@ func normalizeFakeLauncherInvocation(args []string) ([]string, error) {
 		if profile == "" {
 			return nil, fmt.Errorf("fake multicodex run missing profile")
 		}
-		if err := maybeWriteSelectedProfile(profile); err != nil {
-			return nil, err
-		}
-		if err := os.Setenv("MULTICODEX_ACTIVE_PROFILE", profile); err != nil {
+		if err := activateFakeMulticodexProfile(profile); err != nil {
 			return nil, err
 		}
 		return args[4:], nil
@@ -118,6 +123,7 @@ func shouldNormalizeFakeLauncherInvocation(args []string) bool {
 	}
 	return args[0] == "run" && len(args) >= 5 && args[2] == "--" && args[3] == "codex"
 }
+
 func requirePathWithinCWD(path, label string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
