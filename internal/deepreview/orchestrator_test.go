@@ -857,6 +857,41 @@ func TestPreflightUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) {
 	}
 }
 
+func TestPreflightRequiresDeliveryTemplateInYoloMode(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	workspace := t.TempDir()
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	writeExecutable(t, filepath.Join(toolDir, "multicodex"), "#!/bin/sh\nexit 0\n")
+	t.Setenv("PATH", toolDir)
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", writePromptsRootWithoutDeliveryTemplate(t))
+	t.Setenv("SHELL", "")
+
+	o, err := NewOrchestrator(ReviewConfig{
+		Repo:          repo,
+		SourceBranch:  "feature/test",
+		WorkspaceRoot: workspace,
+		RunID:         "run-1",
+		GitBin:        gitPath,
+		CodexBin:      "codex",
+		GhBin:         "gh",
+		Mode:          ModeYolo,
+	}, &NullProgressReporter{})
+	if err != nil {
+		t.Fatalf("NewOrchestrator failed: %v", err)
+	}
+	err = o.preflight()
+	if err == nil {
+		t.Fatalf("expected preflight to fail when delivery template is missing")
+	}
+	if !strings.Contains(err.Error(), "delivery prompt template missing") {
+		t.Fatalf("expected delivery template failure, got: %v", err)
+	}
+}
+
 func TestCapPRBodyForGitHubFallsBackToCompactBody(t *testing.T) {
 	td := t.TempDir()
 	roundDir := filepath.Join(td, "round-01")
