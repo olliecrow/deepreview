@@ -267,6 +267,10 @@ func ghBin() string {
 	return "gh"
 }
 
+func fakeAWSAccessKey() string {
+	return "AKIA" + strings.Repeat("A", 8) + strings.Repeat("B", 8)
+}
+
 func handlePrompt(prompt string) (string, error) {
 	if strings.Contains(prompt, "independent deepreview reviewer in the independent review stage") {
 		outPath := regexGet("Output report path: `([^`]+)`", prompt)
@@ -388,11 +392,11 @@ func handlePrompt(prompt string) (string, error) {
 				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE")) != "" {
-				changeContent = "key " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n"
+				changeContent = "key " + fakeAWSAccessKey() + "\n"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_BINARY_SECRET_PATTERN_CHANGE")) != "" {
 				changePath = filepath.Join(".", "secret.bin")
-				changeContent = "prefix\x00" + "AKIA" + "ABCDEFGHIJKLMNOP" + "\x00suffix"
+				changeContent = "prefix\x00" + fakeAWSAccessKey() + "\x00suffix"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
 				changePath = filepath.Join(".", "docs", "generated.md")
@@ -501,7 +505,7 @@ func handlePrompt(prompt string) (string, error) {
 				}
 				preparedBranch = deliveryBranch
 			}
-			if err := writeText(filepath.Join(".", "delivery_branch_secret.txt"), "key AKIAABCDEFGHIJKLMNOP\n"); err != nil {
+			if err := writeText(filepath.Join(".", "delivery_branch_secret.txt"), "key "+fakeAWSAccessKey()+"\n"); err != nil {
 				return "", err
 			}
 		}
