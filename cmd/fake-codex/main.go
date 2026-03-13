@@ -464,7 +464,6 @@ func handlePrompt(prompt string) (string, error) {
 
 	if strings.Contains(prompt, "deepreview final delivery stage") {
 		mode := regexGet("Mode: `([^`]+)`", prompt)
-		sourceBranch := regexGet("Source branch: `([^`]+)`", prompt)
 		deliveryBranch := regexGet("Delivery branch: `([^`]+)`", prompt)
 		resultPath := regexGet("Output result path: `([^`]+)`", prompt)
 		if err := requirePromptOutputWithinScope(prompt, resultPath, "delivery result path"); err != nil {
@@ -513,11 +512,9 @@ func handlePrompt(prompt string) (string, error) {
 			return "", err
 		}
 		if mode == "pr" {
-			refspec := "HEAD:" + deliveryBranch
 			payload := map[string]any{
-				"mode":           mode,
-				"pushed_refspec": refspec,
-				"incomplete":     false,
+				"mode":       mode,
+				"incomplete": false,
 			}
 			if preparedBranch != "" {
 				payload["delivery_branch"] = preparedBranch
@@ -536,11 +533,9 @@ func handlePrompt(prompt string) (string, error) {
 			}
 			return "delivery complete", nil
 		}
-		refspec := "HEAD:" + sourceBranch
 		payload := map[string]any{
-			"mode":           mode,
-			"pushed_refspec": refspec,
-			"incomplete":     false,
+			"mode":       mode,
+			"incomplete": false,
 		}
 		b, _ := json.MarshalIndent(payload, "", "  ")
 		if err := writeText(resultPath, string(b)+"\n"); err != nil {

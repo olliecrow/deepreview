@@ -23,8 +23,8 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 6. If execute says `continue`, deepreview always runs another review round.
 7. If execute says `stop` once, deepreview still runs one confirmation round.
 8. If execute says `stop` for two consecutive rounds, deepreview stops the loop, even if the second stop round also changed code.
-9. In default mode, it opens one pull request back into your source branch; if the run made tangible repository changes but did not finish cleanly, it still opens a draft PR marked `[INCOMPLETE]`.
-10. In default mode, it runs one fresh Codex delivery stage for final local delivery preparation, then deepreview pushes and opens the PR.
+9. In `pr` mode (default), it runs one fresh Codex delivery stage to prepare the publishable local branch state, then deepreview pushes and opens one pull request back into your source branch.
+10. If the run made tangible repository changes but did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
 11. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 12. In yolo mode, it pushes directly to your source branch.
 13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.

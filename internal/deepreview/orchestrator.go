@@ -48,8 +48,6 @@ type prDeliveryState struct {
 type promptDeliveryResult struct {
 	Mode             string `json:"mode"`
 	DeliveryBranch   string `json:"delivery_branch,omitempty"`
-	PushedRefspec    string `json:"pushed_refspec,omitempty"`
-	PRURL            string `json:"pr_url,omitempty"`
 	Incomplete       bool   `json:"incomplete,omitempty"`
 	IncompleteReason string `json:"incomplete_reason,omitempty"`
 }
@@ -2515,17 +2513,12 @@ func readPromptDeliveryResult(path string, expectedMode string) (promptDeliveryR
 	}
 	result.Mode = strings.TrimSpace(result.Mode)
 	result.DeliveryBranch = strings.TrimSpace(result.DeliveryBranch)
-	result.PushedRefspec = strings.TrimSpace(result.PushedRefspec)
-	result.PRURL = strings.TrimSpace(result.PRURL)
 	result.IncompleteReason = strings.TrimSpace(result.IncompleteReason)
 	if result.Mode == "" {
 		return promptDeliveryResult{}, NewDeepReviewError("invalid delivery result %s: missing mode", path)
 	}
 	if expectedMode != "" && result.Mode != expectedMode {
 		return promptDeliveryResult{}, NewDeepReviewError("invalid delivery result %s: mode %q does not match expected %q", path, result.Mode, expectedMode)
-	}
-	if result.PushedRefspec == "" {
-		return promptDeliveryResult{}, NewDeepReviewError("invalid delivery result %s: missing pushed_refspec", path)
 	}
 	return result, nil
 }

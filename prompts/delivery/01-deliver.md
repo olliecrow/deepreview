@@ -52,7 +52,6 @@ Write `{{OUTPUT_RESULT_PATH}}` JSON with this schema:
 {
   "mode": "pr|yolo",
   "delivery_branch": "optional prepared local branch/ref to publish",
-  "pushed_refspec": "non-empty string",
   "incomplete": false,
   "incomplete_reason": "optional string"
 }
