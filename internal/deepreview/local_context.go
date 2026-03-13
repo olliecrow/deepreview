@@ -227,8 +227,9 @@ func validateLocalBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch 
 		return err
 	}
 	cwdState = resolveImplicitRepoState(gitBin, cwdState)
-	// Keep repo/branch inference shared across commands, but only review runs
-	// should fail on local-current-branch readiness problems.
+	// Share repo/branch inference across command surfaces, and only enforce
+	// readiness when the resolved source branch matches the current local branch
+	// context for the same repository.
 	return ensureExplicitSourceBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch, cwdState)
 }
 

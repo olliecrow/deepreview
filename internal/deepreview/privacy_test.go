@@ -43,9 +43,22 @@ func TestSanitizePublicTextRedactsGhBodyFilePath(t *testing.T) {
 	}
 }
 
+func TestSanitizePublicTextRedactsTestDotComEmail(t *testing.T) {
+	out := sanitizePublicText("contact alice@test.com")
+	if !strings.Contains(out, "[redacted-email]") {
+		t.Fatalf("expected test.com email to be redacted, got: %s", out)
+	}
+	if strings.Contains(out, "alice@test.com") {
+		t.Fatalf("expected test.com email to be removed, got: %s", out)
+	}
+}
+
 func TestAssertPublicTextSafeRejectsDisallowedSensitiveContent(t *testing.T) {
 	if err := assertPublicTextSafe("contact alice@corp.com", "test surface"); err == nil {
 		t.Fatalf("expected disallowed email to be rejected")
+	}
+	if err := assertPublicTextSafe("contact alice@test.com", "test surface"); err == nil {
+		t.Fatalf("expected test.com email to be rejected")
 	}
 	if err := assertPublicTextSafe("placeholder deepreview@example.com", "test surface"); err != nil {
 		t.Fatalf("expected placeholder email to be allowed, got: %v", err)
@@ -99,6 +112,26 @@ func TestDeliveryCommitMessageScanAllowsPlaceholderEmail(t *testing.T) {
 
 	if err := o.deliveryCommitMessageScan("candidate"); err != nil {
 		t.Fatalf("expected placeholder email commit message to pass, got: %v", err)
+	}
+}
+
+func TestDeliveryCommitMessageScanRejectsTestDotComEmail(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(filepath.Join(repoPath, "placeholder.txt"), []byte("value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "placeholder.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "notify alice@test.com")
+
+	err := o.deliveryCommitMessageScan("candidate")
+	if err == nil {
+		t.Fatalf("expected test.com email commit message to fail")
+	}
+	if !strings.Contains(err.Error(), "commit message") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 

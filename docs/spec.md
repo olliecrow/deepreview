@@ -122,6 +122,7 @@ This document defines the canonical runtime and product contract for `deepreview
 Helper command behavior:
 - `doctor` runs non-mutating preflight checks for local tools, auth state, prompt assets, and remote source-branch reachability.
 - `doctor` validates the actual prompt launcher that deepreview would use (`multicodex exec --help` when routed through multicodex, otherwise `codex exec --help`) and then checks matching auth state (`multicodex status` or `codex login status`).
+- `doctor` and `dry-run` reuse the same repo/branch inference and local-current-branch readiness validation rules as `review`, so they fail early on dirty or unsynchronized local source-branch state when that local context is authoritative.
 - `dry-run` prints resolved run context and stage order without running Codex or mutating git state.
 
 ## Round artifact contract
