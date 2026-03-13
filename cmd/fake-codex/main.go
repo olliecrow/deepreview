@@ -462,22 +462,9 @@ func handlePrompt(prompt string) (string, error) {
 		mode := regexGet("Mode: `([^`]+)`", prompt)
 		sourceBranch := regexGet("Source branch: `([^`]+)`", prompt)
 		deliveryBranch := regexGet("Delivery branch: `([^`]+)`", prompt)
-		repoSlug := regexGet("Repository: `([^`]+)`", prompt)
 		resultPath := regexGet("Output result path: `([^`]+)`", prompt)
-		titlePath := regexGet("Output PR title path: `([^`]+)`", prompt)
-		bodyPath := regexGet("Output PR body path: `([^`]+)`", prompt)
 		if err := requirePromptOutputWithinScope(prompt, resultPath, "delivery result path"); err != nil {
 			return "", err
-		}
-		if titlePath != "" {
-			if err := requirePromptOutputWithinScope(prompt, titlePath, "pr title path"); err != nil {
-				return "", err
-			}
-		}
-		if bodyPath != "" {
-			if err := requirePromptOutputWithinScope(prompt, bodyPath, "pr body path"); err != nil {
-				return "", err
-			}
 		}
 		if strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_WRITE_FILE")) != "" || strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_WRITE_FILE")) != "" {
 			if err := writeText(filepath.Join(".", "delivery-ready.txt"), "delivery\n"); err != nil {
@@ -500,41 +487,44 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
+		preparedBranch := ""
+		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_CREATE_BRANCH")) != "" {
+			if _, err := runGit("checkout", "-B", deliveryBranch); err != nil {
+				return "", err
+			}
+			preparedBranch = deliveryBranch
+		}
+		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_BRANCH_SECRET")) != "" {
+			if preparedBranch == "" {
+				if _, err := runGit("checkout", "-B", deliveryBranch); err != nil {
+					return "", err
+				}
+				preparedBranch = deliveryBranch
+			}
+			if err := writeText(filepath.Join(".", "delivery_branch_secret.txt"), "key AKIAABCDEFGHIJKLMNOP\n"); err != nil {
+				return "", err
+			}
+		}
 		if err := gitCommitIfPossible("deepreview: prepare delivery branch"); err != nil {
 			return "", err
 		}
 		if mode == "pr" {
-			title := "deepreview: fake delivery branch ready"
-			if err := writeText(titlePath, title+"\n"); err != nil {
-				return "", err
-			}
-			body := "## summary\n- fake delivery summary\n\n## what changed and why\n- fake delivery kept the branch merge-ready\n\n## round outcomes\n- fake round outcomes recorded\n\n## verification\n- fake checks passed\n\n## risks and follow-ups\n- none\n\n## final status\n- ready to merge\n"
-			if err := writeText(bodyPath, body); err != nil {
-				return "", err
-			}
 			refspec := "HEAD:" + deliveryBranch
-			if err := gitPushRefspecIfPossible(refspec); err != nil {
-				return "", err
-			}
-			prURL := ""
-			if repoSlug != "" {
-				completed, err := exec.Command(ghBin(), "pr", "create", "--repo", repoSlug, "--base", sourceBranch, "--head", deliveryBranch, "--title", title, "--body-file", bodyPath).CombinedOutput()
-				if err != nil {
-					return "", fmt.Errorf("gh pr create failed: %w (%s)", err, strings.TrimSpace(string(completed)))
-				}
-				if trimmed := strings.TrimSpace(string(completed)); trimmed != "" {
-					lines := strings.Split(trimmed, "\n")
-					prURL = strings.TrimSpace(lines[len(lines)-1])
-				}
-			} else {
-				prURL = "https://example.com/olliecrow/test/pull/123"
-			}
 			payload := map[string]any{
-				"mode":            mode,
-				"delivery_branch": deliveryBranch,
-				"pushed_refspec":  refspec,
-				"pr_url":          prURL,
-				"incomplete":      false,
+				"mode":           mode,
+				"pushed_refspec": refspec,
+				"incomplete":     false,
+			}
+			if preparedBranch != "" {
+				payload["delivery_branch"] = preparedBranch
+			}
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE")) != "" {
+				payload["incomplete"] = true
+				reason := strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE_REASON"))
+				if reason == "" {
+					reason = "fake delivery blocked on mergeability"
+				}
+				payload["incomplete_reason"] = reason
 			}
 			b, _ := json.MarshalIndent(payload, "", "  ")
 			if err := writeText(resultPath, string(b)+"\n"); err != nil {
@@ -543,9 +533,6 @@ func handlePrompt(prompt string) (string, error) {
 			return "delivery complete", nil
 		}
 		refspec := "HEAD:" + sourceBranch
-		if err := gitPushRefspecIfPossible(refspec); err != nil {
-			return "", err
-		}
 		payload := map[string]any{
 			"mode":           mode,
 			"pushed_refspec": refspec,

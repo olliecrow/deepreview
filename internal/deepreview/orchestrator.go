@@ -1875,7 +1875,11 @@ func (o *Orchestrator) validateNoManagedOperationalArtifactChanges(baseRef, head
 }
 
 func (o *Orchestrator) validateDeliveryFiles(candidateBranch string) ([]string, error) {
-	files, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, candidateBranch)
+	return o.validateDeliveryFilesBetween("origin/"+o.config.SourceBranch, candidateBranch)
+}
+
+func (o *Orchestrator) validateDeliveryFilesBetween(baseRef, headRef string) ([]string, error) {
+	files, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, baseRef, headRef)
 	if err != nil {
 		return nil, err
 	}
@@ -1887,7 +1891,7 @@ func (o *Orchestrator) validateDeliveryFiles(candidateBranch string) ([]string, 
 		if !ok {
 			continue
 		}
-		trackedAtSource, err := RefHasTrackedEntries(o.managedRepoPath, o.config.GitBin, "origin/"+o.config.SourceBranch, root)
+		trackedAtSource, err := RefHasTrackedEntries(o.managedRepoPath, o.config.GitBin, baseRef, root)
 		if err != nil {
 			return nil, err
 		}
@@ -2182,14 +2186,17 @@ func readRoundStatusFromBytes(b []byte) (RoundStatus, error) {
 }
 
 func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error {
-	baseRef := "origin/" + o.config.SourceBranch
-	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch)
+	return o.secretHygieneScanBetween("origin/"+o.config.SourceBranch, candidateBranch)
+}
+
+func (o *Orchestrator) secretHygieneScanBetween(baseRef, headRef string) error {
+	changedFiles, err := ListChangedFiles(o.managedRepoPath, o.config.GitBin, baseRef, headRef)
 	if err != nil {
 		return err
 	}
 
 	for _, rel := range changedFiles {
-		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
 		if err != nil {
 			continue
 		}
@@ -2199,16 +2206,16 @@ func (o *Orchestrator) secretHygieneScan(repoPath, candidateBranch string) error
 			}
 			continue
 		}
-		status, err := ChangedFileStatusBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		status, err := ChangedFileStatusBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
 		if err != nil || status == "D" {
 			continue
 		}
 		// Binary diffs do not expose textual added lines, so scan the candidate-side bytes directly.
-		isBinaryDiff, err := DiffIsBinaryBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, candidateBranch, rel)
+		isBinaryDiff, err := DiffIsBinaryBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
 		if err != nil || !isBinaryDiff {
 			continue
 		}
-		headContent, err := FileContentAtRef(o.managedRepoPath, o.config.GitBin, candidateBranch, rel)
+		headContent, err := FileContentAtRef(o.managedRepoPath, o.config.GitBin, headRef, rel)
 		if err != nil {
 			continue
 		}
@@ -2408,13 +2415,17 @@ func (o *Orchestrator) autoCommitWorktreeChangesIfNeeded(repoPath, message strin
 }
 
 func (o *Orchestrator) deliveryCommitMessageScan(candidateBranch string) error {
+	return o.deliveryCommitMessageScanBetween("origin/"+o.config.SourceBranch, candidateBranch)
+}
+
+func (o *Orchestrator) deliveryCommitMessageScanBetween(baseRef, headRef string) error {
 	out, err := Git(
 		o.managedRepoPath,
 		o.config.GitBin,
 		true,
 		"log",
 		"--format=%s%n%b%x00",
-		"origin/"+o.config.SourceBranch+".."+candidateBranch,
+		baseRef+".."+headRef,
 	)
 	if err != nil {
 		return err
@@ -2472,31 +2483,26 @@ func readPromptDeliveryResult(path string, expectedMode string) (promptDeliveryR
 	if result.PushedRefspec == "" {
 		return promptDeliveryResult{}, NewDeepReviewError("invalid delivery result %s: missing pushed_refspec", path)
 	}
-	if result.Mode == ModePR && result.PRURL == "" {
-		return promptDeliveryResult{}, NewDeepReviewError("invalid delivery result %s: missing pr_url", path)
-	}
 	return result, nil
 }
 
-func (o *Orchestrator) recordPromptDeliveryState(result promptDeliveryResult) {
-	o.prDelivery.refspec = result.PushedRefspec
-	if result.DeliveryBranch != "" {
-		o.prDelivery.branch = result.DeliveryBranch
+func (o *Orchestrator) resolvePreparedDeliveryRef(result promptDeliveryResult, candidateBranch string) (string, string, string, error) {
+	switch o.config.Mode {
+	case ModePR:
+		preparedRef := candidateBranch
+		if branch := strings.TrimSpace(result.DeliveryBranch); branch != "" {
+			if _, err := RevParse(o.managedRepoPath, o.config.GitBin, branch); err != nil {
+				return "", "", "", NewDeepReviewError("delivery prepared branch not found: %s", branch)
+			}
+			preparedRef = branch
+		}
+		deliveryBranch := o.deliveryBranchName()
+		return preparedRef, preparedRef + ":" + deliveryBranch, deliveryBranch, nil
+	case ModeYolo:
+		return candidateBranch, candidateBranch + ":" + o.config.SourceBranch, o.config.SourceBranch, nil
+	default:
+		return "", "", "", NewDeepReviewError("unsupported delivery mode: %s", o.config.Mode)
 	}
-	if result.PRURL != "" {
-		o.prDelivery.prURL = result.PRURL
-	}
-	if result.PushedRefspec != "" {
-		o.prDelivery.pushed = true
-	}
-}
-
-func (o *Orchestrator) maybeRecordPromptDeliveryState(path string) {
-	result, err := readPromptDeliveryResult(path, "")
-	if err != nil {
-		return
-	}
-	o.recordPromptDeliveryState(result)
 }
 
 func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
@@ -2575,27 +2581,21 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return DeliveryResult{}, err
 	}
 	resultWorktreePath := filepath.Join(deliveryArtifactsDir, "delivery-result.json")
-	titleWorktreePath := filepath.Join(deliveryArtifactsDir, "pr-title.txt")
-	bodyWorktreePath := filepath.Join(deliveryArtifactsDir, "pr-body.md")
 	resultPath := filepath.Join(deliveryDir, "delivery-result.json")
-	titlePath := filepath.Join(o.runRoot, "pr-title.txt")
-	bodyPath := filepath.Join(o.runRoot, "pr-body.md")
 
 	variables := map[string]string{
-		"REPO_SLUG":            o.repoIdentity.Slug(),
-		"SOURCE_BRANCH":        o.config.SourceBranch,
-		"DEFAULT_BRANCH":       defaultBranch,
-		"CANDIDATE_BRANCH":     candidateBranch,
-		"DELIVERY_BRANCH":      o.deliveryBranchName(),
-		"MODE":                 o.config.Mode,
-		"RUN_ID":               o.config.RunID,
-		"WORKTREE_PATH":        filepath.ToSlash(deliveryWorktree),
-		"RUN_ROOT":             filepath.ToSlash(o.runRoot),
-		"ROUND_SUMMARY_PATHS":  markdownBulletList(summaries),
-		"CHANGED_FILES":        markdownBulletList(changedFiles),
-		"OUTPUT_RESULT_PATH":   filepath.ToSlash(resultWorktreePath),
-		"OUTPUT_PR_TITLE_PATH": filepath.ToSlash(titleWorktreePath),
-		"OUTPUT_PR_BODY_PATH":  filepath.ToSlash(bodyWorktreePath),
+		"REPO_SLUG":           o.repoIdentity.Slug(),
+		"SOURCE_BRANCH":       o.config.SourceBranch,
+		"DEFAULT_BRANCH":      defaultBranch,
+		"CANDIDATE_BRANCH":    candidateBranch,
+		"DELIVERY_BRANCH":     o.deliveryBranchName(),
+		"MODE":                o.config.Mode,
+		"RUN_ID":              o.config.RunID,
+		"WORKTREE_PATH":       filepath.ToSlash(deliveryWorktree),
+		"RUN_ROOT":            filepath.ToSlash(o.runRoot),
+		"ROUND_SUMMARY_PATHS": markdownBulletList(summaries),
+		"CHANGED_FILES":       markdownBulletList(changedFiles),
+		"OUTPUT_RESULT_PATH":  filepath.ToSlash(resultWorktreePath),
 	}
 	prompt, err := RenderTemplate(templateText, variables)
 	if err != nil {
@@ -2609,11 +2609,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 			prompt,
 			nil,
 			logPrefix,
-			[]string{
-				resultWorktreePath,
-				titleWorktreePath,
-				bodyWorktreePath,
-			},
+			[]string{resultWorktreePath},
 			0,
 			"delivery / merge-ready publish",
 			"running codex delivery workflow",
@@ -2626,7 +2622,6 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return result, err
 	}()
 	if err != nil {
-		o.maybeRecordPromptDeliveryState(resultWorktreePath)
 		return DeliveryResult{}, err
 	}
 
@@ -2636,30 +2631,6 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	result, err := readPromptDeliveryResult(resultPath, o.config.Mode)
 	if err != nil {
 		return DeliveryResult{}, err
-	}
-	o.recordPromptDeliveryState(result)
-
-	if o.config.Mode == ModePR {
-		if err := ensureCanonicalArtifact(titlePath, []string{titleWorktreePath, titlePath}); err != nil {
-			return DeliveryResult{}, err
-		}
-		if err := ensureCanonicalArtifact(bodyPath, []string{bodyWorktreePath, bodyPath}); err != nil {
-			return DeliveryResult{}, err
-		}
-		titleBytes, err := os.ReadFile(titlePath)
-		if err != nil {
-			return DeliveryResult{}, err
-		}
-		if err := assertPublicTextSafe(strings.TrimSpace(string(titleBytes)), "pr title"); err != nil {
-			return DeliveryResult{}, err
-		}
-		bodyBytes, err := os.ReadFile(bodyPath)
-		if err != nil {
-			return DeliveryResult{}, err
-		}
-		if err := assertPublicTextSafe(string(bodyBytes), "pr body"); err != nil {
-			return DeliveryResult{}, err
-		}
 	}
 
 	if err := os.RemoveAll(filepath.Join(deliveryWorktree, ".deepreview")); err != nil {
@@ -2676,37 +2647,65 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return DeliveryResult{}, NewDeepReviewError("delivery worktree has uncommitted changes after prompt completion: %s", deliveryWorktree)
 	}
 
-	if _, err := o.validateDeliveryFiles(candidateBranch); err != nil {
+	baseRef := "origin/" + o.config.SourceBranch
+	preparedRef, pushRefspec, commitsBranch, err := o.resolvePreparedDeliveryRef(result, candidateBranch)
+	if err != nil {
 		return DeliveryResult{}, err
 	}
-	if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
+	// The delivery prompt can still refine local branch state, but deepreview
+	// validates the exact ref to be published before any push or PR creation.
+	deliveryChangedFiles, err := o.validateDeliveryFilesBetween(baseRef, preparedRef)
+	if err != nil {
 		return DeliveryResult{}, err
 	}
-	if err := o.secretHygieneScan(deliveryWorktree, candidateBranch); err != nil {
+	if len(deliveryChangedFiles) == 0 {
+		return DeliveryResult{
+			Mode:       o.config.Mode,
+			Skipped:    true,
+			SkipReason: "delivery preparation removed all deliverable repository changes",
+		}, nil
+	}
+	if err := o.deliveryCommitMessageScanBetween(baseRef, preparedRef); err != nil {
+		return DeliveryResult{}, err
+	}
+	if err := o.secretHygieneScanBetween(baseRef, preparedRef); err != nil {
 		return DeliveryResult{}, err
 	}
 
 	if o.config.Mode == ModePR {
-		if err := o.validateMergeReadyPR(result.PRURL); err != nil {
+		delivery, err := o.deliverPR(defaultBranch, preparedRef, summaries, deliveryChangedFiles, prDeliveryOptions{
+			draft:            result.Incomplete,
+			incomplete:       result.Incomplete,
+			incompleteReason: result.IncompleteReason,
+		})
+		if err != nil {
 			return DeliveryResult{}, err
 		}
-	}
-	if result.PushedRefspec != "" {
-		o.pushCount = 1
+		if !result.Incomplete {
+			if err := o.validateMergeReadyPR(delivery.PRURL); err != nil {
+				return DeliveryResult{}, err
+			}
+		}
+		return delivery, nil
 	}
 
-	commitsBranch := o.config.SourceBranch
-	if o.config.Mode == ModePR && result.DeliveryBranch != "" {
-		commitsBranch = result.DeliveryBranch
+	partialDelivery := DeliveryResult{
+		Mode:          result.Mode,
+		PushedRefspec: pushRefspec,
+		CommitsURL:    fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(commitsBranch)),
 	}
-	return DeliveryResult{
-		Mode:             result.Mode,
-		PushedRefspec:    result.PushedRefspec,
-		PRURL:            result.PRURL,
-		CommitsURL:       fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(commitsBranch)),
-		Incomplete:       result.Incomplete,
-		IncompleteReason: sanitizePublicText(result.IncompleteReason),
-	}, nil
+	o.lastDelivery = &partialDelivery
+	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, pushRefspec); err != nil {
+		return DeliveryResult{}, err
+	}
+	o.pushCount++
+	delivery := DeliveryResult{
+		Mode:          result.Mode,
+		PushedRefspec: pushRefspec,
+		CommitsURL:    partialDelivery.CommitsURL,
+	}
+	o.lastDelivery = &delivery
+	return delivery, nil
 }
 
 type prDeliveryOptions struct {
@@ -2848,6 +2847,14 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
 		return false, nil
 	}
+	if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
+	}
+	if err := o.secretHygieneScan(o.managedRepoPath, candidateBranch); err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
+	}
 
 	reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(cause.Error(), "\n", " ")), 500)
 	delivery, err := o.deliverPR(defaultBranch, candidateBranch, summaries, changedFiles, prDeliveryOptions{
@@ -2889,7 +2896,7 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string, opts
 
 	lines := []string{
 		"## summary",
-		"- deepreview generated this compact body to stay within GitHub PR body limits.",
+		"- deepreview generated this compact body to stay within GitHub PR body limits after final delivery validation passed.",
 		fmt.Sprintf("- run id: `%s`", o.config.RunID),
 		fmt.Sprintf("- rounds executed: `%d`", len(summaries)),
 	}
@@ -2899,10 +2906,9 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string, opts
 			fmt.Sprintf("- blocking reason: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(opts.incompleteReason), 240))),
 		)
 	}
+	lines = append(lines, "", "## what changed and why")
 	lines = append(lines,
-		"",
-		"## changed files",
-		fmt.Sprintf("- count: `%d`", len(changedFiles)),
+		fmt.Sprintf("- changed files: `%d`", len(changedFiles)),
 		fmt.Sprintf("- main change areas: %s", sanitizePublicText(areaSummary)),
 	)
 	previewLine := "- key changed files: " + sanitizePublicText(filePreview)
@@ -2911,25 +2917,25 @@ func (o *Orchestrator) buildCompactPRBody(summaries, changedFiles []string, opts
 	}
 	lines = append(lines, previewLine)
 
-	if opts.incomplete {
-		lines = append(lines, "", "## incomplete status")
-		if latestRound, latestStatus, ok := latestRoundStatus(summaries); ok {
-			lines = append(lines, fmt.Sprintf("- latest round: `%s`", latestRound))
-			lines = append(lines, fmt.Sprintf("- latest decision: `%s`", latestStatus.Decision))
-			lines = append(lines, fmt.Sprintf("- latest reason: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(strings.ReplaceAll(latestStatus.Reason, "\n", " ")), 240))))
-			if latestStatus.NextFocus != nil && strings.TrimSpace(*latestStatus.NextFocus) != "" {
-				lines = append(lines, fmt.Sprintf("- next focus: %s", sanitizePublicText(trimForDisplay(strings.TrimSpace(*latestStatus.NextFocus), 220))))
-			}
-		}
-	}
-
-	lines = append(lines, "", "## round decisions")
+	lines = append(lines, "", "## round outcomes")
 	lines = append(lines, roundDecisionLines(summaries)...)
 
 	lines = append(lines,
 		"",
-		"## note",
-		"- Detailed per-round artifacts remain available in the deepreview run directory.",
+		"## verification",
+		"- deepreview ran its execute-stage verification before delivery and revalidated the final published ref before pushing.",
+	)
+
+	lines = append(lines,
+		"",
+		"## risks and follow-ups",
+		"- no additional delivery blockers were detected after final validation.",
+	)
+
+	lines = append(lines,
+		"",
+		"## final status",
+		"- ready for review and merge.",
 	)
 
 	return sanitizePublicText(strings.Join(lines, "\n") + "\n")

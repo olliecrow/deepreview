@@ -69,14 +69,15 @@ This document defines the canonical runtime and product contract for `deepreview
 - in a Codex-owned delivery loop, multiple delivery-stage pushes are allowed when they are required to resolve mergeability or remote-check failures with high-confidence follow-up fixes.
 - PR mode has exactly four terminal outcomes: success with complete PR, success with incomplete draft PR, success with no deliverable repository changes (no push/PR), or failure.
 - default delivery mode is `pr` and must not push source branch directly.
-- in delivery, Codex owns repo mutation steps beyond workspace management: final local hygiene, branch updates, PR creation/editing, merge-readiness checks, PR text upkeep, and mergeability follow-through.
+- in delivery, Codex owns final local delivery preparation inside the worktree, while deepreview owns the final pre-publication validation and the actual remote push / PR creation steps.
 - in `pr` mode, run one fresh Codex delivery prompt in a candidate-branch worktree. That prompt must:
   - inspect the candidate diff and prior round artifacts
   - run any final local merge-readiness checks still needed
-  - prepare or refine branch state and PR metadata
-  - push the delivery branch and create or update the PR
-  - wait for required remote CI/checks
-  - if mergeability is blocked by high-confidence fixable issues, make fixes, push again, update PR text, and continue until the PR is mergeable or an explicit blocker prevents autonomous completion
+  - prepare or refine final local branch state for publication
+  - optionally move work onto the delivery branch locally
+  - report whether local delivery preparation is complete or incomplete
+- after the delivery prompt finishes, deepreview must validate the exact ref that will be published before any push or PR creation occurs.
+- post-prompt delivery validation must inspect the actual prepared ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
 - incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
 - incomplete draft PR bodies must explicitly state that the PR is incomplete, why delivery did not finish cleanly, and what remains to be done before merge.
