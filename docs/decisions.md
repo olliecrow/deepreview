@@ -807,17 +807,17 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `README.md`
 
 Decision:
-Standardize execute prompt variable naming on `REVIEW_*` placeholders while keeping fanout placeholders as backward-compatible aliases.
+Standardize execute prompt variable naming on `REVIEW_*` placeholders only.
 Context:
-Stage terminology was renamed to independent review/execute, but template variable names still referenced fanout.
+Stage terminology was renamed to independent review/execute, and the active prompt contract now uses `REVIEW_*` names consistently.
 Rationale:
-Aligned variable naming improves readability and keeps prompt terminology consistent with runtime stage names.
+Keeping only the active placeholder names removes redundant prompt wiring and makes the execute template contract easier to reason about.
 Trade-offs:
-Temporary duplication of variable keys until legacy templates are fully retired.
+Older custom prompt trees that still depend on legacy fanout placeholder names must be updated to the current `REVIEW_*` contract.
 Enforcement:
-Execute prompt templates use `REVIEW_REPORT_*` placeholders and orchestrator injects both new and legacy keys.
+Execute prompt templates use `REVIEW_REPORT_*` placeholders and orchestrator injects only the active `REVIEW_*` keys.
 References:
-`prompts/execute/01-triage-plan.md`, `internal/deepreview/orchestrator.go`
+`prompts/execute/01-triage-plan.md`, `internal/deepreview/orchestrator.go`, `docs/alignment.md`
 
 Decision:
 Codex prompt workers should stage review and execute artifacts inside their current worktree, while deepreview persists canonical copies under the run directory and records round completion with one authoritative `round.json` per successful round.
