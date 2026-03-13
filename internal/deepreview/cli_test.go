@@ -82,6 +82,33 @@ exit 0
 	return path
 }
 
+func writePromptsRootWithoutDeliveryTemplate(t *testing.T) string {
+	t.Helper()
+
+	root := t.TempDir()
+	sourceRoot := filepath.Join(repoRoot(t), "prompts")
+	for _, rel := range []string{
+		filepath.Join("review", "independent-review.md"),
+		filepath.Join("execute", "queue.txt"),
+		filepath.Join("execute", "01-triage-plan.md"),
+		filepath.Join("execute", "02-implement-verify-finalize.md"),
+	} {
+		payload, err := os.ReadFile(filepath.Join(sourceRoot, rel))
+		if err != nil {
+			t.Fatal(err)
+		}
+		dst := filepath.Join(root, rel)
+		if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(dst, payload, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	return root
+}
+
 func TestParseReviewArgsYoloAliasOverridesMode(t *testing.T) {
 	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature/test", "--mode", "pr", "--yolo"}, time.Unix(1700000000, 0))
 	if err != nil {
@@ -455,7 +482,7 @@ func TestParseReviewArgsInfersRepoAndBranchFromCurrentRepo(t *testing.T) {
 	})
 }
 
-func TestRunDryRunCommandBypassesReviewReadinessValidation(t *testing.T) {
+func TestRunDryRunCommandKeepsReadinessValidation(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
 
@@ -469,11 +496,11 @@ func TestRunDryRunCommandBypassesReviewReadinessValidation(t *testing.T) {
 		code, stdout, stderr := captureCommandOutput(t, func() int {
 			return runDryRunCommand([]string{})
 		})
-		if code != 0 {
-			t.Fatalf("expected dry-run to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		if code != 1 {
+			t.Fatalf("expected dry-run to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
 		}
-		if !strings.Contains(stdout, "deepreview dry-run") {
-			t.Fatalf("expected dry-run output, got:\n%s", stdout)
+		if !strings.Contains(stderr, "not synchronized") {
+			t.Fatalf("expected readiness failure in stderr, got:\n%s", stderr)
 		}
 	})
 }
@@ -545,7 +572,7 @@ func TestRunReviewCommandRejectsAheadOfRemoteForFilesystemOriginRepo(t *testing.
 	})
 }
 
-func TestRunDoctorCommandBypassesReviewReadinessValidation(t *testing.T) {
+func TestRunDoctorCommandKeepsReadinessValidation(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
 	toolDir := t.TempDir()
@@ -568,14 +595,47 @@ func TestRunDoctorCommandBypassesReviewReadinessValidation(t *testing.T) {
 		code, stdout, stderr := captureCommandOutput(t, func() int {
 			return runDoctorCommand([]string{})
 		})
-		if code != 0 {
-			t.Fatalf("expected doctor to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		if code != 1 {
+			t.Fatalf("expected doctor to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
 		}
-		if !strings.Contains(stdout, "deepreview doctor") {
-			t.Fatalf("expected doctor output, got:\n%s", stdout)
+		if !strings.Contains(stdout, "local source branch ready for review") {
+			t.Fatalf("expected readiness check output, got:\n%s", stdout)
 		}
-		if !strings.Contains(stdout, "doctor result: PASS") {
-			t.Fatalf("expected doctor pass output, got:\n%s", stdout)
+		if !strings.Contains(stdout, "doctor result: FAIL") {
+			t.Fatalf("expected doctor fail output, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "not synchronized") {
+			t.Fatalf("expected readiness failure detail, got:\n%s", stdout)
+		}
+	})
+}
+
+func TestRunDoctorCommandFailsWhenDeliveryTemplateMissingInYoloMode(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", writePromptsRootWithoutDeliveryTemplate(t))
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	t.Setenv("PATH", toolDir+string(os.PathListSeparator)+filepath.Dir(gitPath))
+	t.Setenv("DEEPREVIEW_GIT_BIN", gitPath)
+	writeFakeMulticodexTool(t, toolDir)
+	t.Setenv("SHELL", "")
+
+	withWorkingDir(t, repo, func() {
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDoctorCommand([]string{repo, "--source-branch", "feature/test", "--mode", "yolo"})
+		})
+		if code != 1 {
+			t.Fatalf("expected doctor to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "delivery prompt template missing") {
+			t.Fatalf("expected delivery template failure in stdout, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "doctor result: FAIL") {
+			t.Fatalf("expected doctor fail output, got:\n%s", stdout)
 		}
 	})
 }

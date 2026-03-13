@@ -924,6 +924,19 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `README.md`, `docs/spec.md`
 
 Decision:
+Keep `doctor` and `dry-run` launch blockers aligned with `review` for local-branch readiness and required prompt assets.
+Context:
+Helper commands are used as the safe preflight and preview path before starting a real run. If they pass when `review` would fail immediately, operators lose a full loop to avoidable launch-time blockers.
+Rationale:
+Sharing the same local-current-branch readiness gate and delivery-template validation keeps helper command outcomes trustworthy without making them mutate git state or launch Codex work.
+Trade-offs:
+`doctor` and `dry-run` now fail earlier in some local development states that previously produced optimistic output, so tests and operator expectations must stay aligned with the stricter contract.
+Enforcement:
+`doctor` reports local source-branch readiness as an explicit check, `dry-run` fails before printing the plan when the current local source branch is dirty or unsynchronized, and shared prompt-template validation requires `prompts/delivery/01-deliver.md` in both `pr` and `yolo` flows.
+References:
+`internal/deepreview/cli.go`, `internal/deepreview/local_context.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
+
+Decision:
 Apply strict privacy guardrails across outward-facing deepreview surfaces, with bounded pre-delivery remediation in PR mode.
 Context:
 Runs can generate or relay text into PR titles/descriptions, summaries, logs, and commit messages across both public and private repositories; these surfaces must never leak personal information or secrets.
