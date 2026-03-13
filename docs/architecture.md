@@ -47,7 +47,8 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - prompt 1: consolidate and plan (reviews are inputs, not gospel; accept only high-conviction items and produce the round plan)
   - prompt 2: execute/verify (apply approved changes, prefer simplification/removal when it cleanly resolves accepted issues, and run codex-led verification with evidence output)
   - prompt 3: cleanup/summary/commit (docs/decision upkeep, round status flag write, and complete round artifacts)
-- when a mutable execute or delivery worktree is retried after inactivity, reset it to the last clean candidate-branch baseline before rerunning so abandoned edits/commits from the stalled attempt do not survive into later history
+- when a mutable execute or delivery worktree is retried after inactivity, reset it to the immutable last clean candidate-branch SHA captured before that attempt before rerunning so abandoned edits/commits from the stalled attempt do not survive into later history
+- execute retries preserve only artifacts from earlier successful prompts in the same queue; final round status/summary artifacts must be rewritten by the successful prompt-3 attempt
 - execute prompts stage their output files inside reserved worktree-local `.deepreview/artifacts/` paths; after prompt queue completion, the orchestrator validates those staged files, persists canonical copies into the run directory, performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist), and then writes the authoritative `round.json` completion record for that round
 - apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
 - Codex workers run with the operator's normal local Codex configuration and inherited local environment; deepreview does not add a separate execution/temp-cache layer
@@ -62,7 +63,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 4. Final delivery (single push point):
 - require completed round execution and no blocking execute-stage verification failures
-- `pr` mode (default): run one Codex PR-preparation pass in a candidate-branch worktree; then run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree; mutable delivery worktrees are reset to a clean candidate-branch baseline before inactivity retries; early stop is allowed only after clean post-attempt scans and a clean remediation worktree after deepreview auto-commits any simple residual edits; then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; terminal outcomes are complete PR, incomplete draft PR, or failure
+- `pr` mode (default): run one Codex PR-preparation pass in a candidate-branch worktree; then run bounded pre-delivery privacy remediation attempts (up to 3 Codex-guided passes) in a candidate-branch worktree; mutable delivery worktrees are reset to the immutable candidate SHA captured before each attempt before inactivity retries; early stop is allowed only after clean post-attempt scans and a clean remediation worktree after deepreview auto-commits any simple residual edits; then create/push delivery branch, open PR into source branch, then run one fresh Codex post-delivery prompt to generate a clear final PR title + description and update both via `gh pr edit`; terminal outcomes are complete PR, incomplete draft PR, or failure
 - `yolo` mode: push committed candidate state directly to source branch
 
 5. Finalization:
