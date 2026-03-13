@@ -486,9 +486,8 @@ func TestExecutePromptLabel(t *testing.T) {
 		templateName string
 		want         string
 	}{
-		{templateName: "01-consolidate-plan.md", want: "consolidate and plan"},
-		{templateName: "02-execute-verify.md", want: "execute and verify"},
-		{templateName: "03-cleanup-summary-commit.md", want: "cleanup, summary, commit"},
+		{templateName: "01-triage-plan.md", want: "triage and plan"},
+		{templateName: "02-implement-verify-finalize.md", want: "implement, verify, finalize"},
 		{templateName: "unknown.md", want: "unknown.md"},
 	}
 
@@ -503,42 +502,42 @@ func TestExecutePromptLabel(t *testing.T) {
 	}
 }
 
-func TestTriagePolicyViolationsAcceptRequiresCriticalOrHighWithHighConfidence(t *testing.T) {
+func TestTriagePolicyViolationsAcceptRequiresMaterialImpactAndHighConfidence(t *testing.T) {
 	markdown := `# Round Triage
 
 ### item A
 - disposition: accept
-- severity: medium
+- impact: minor
 - confidence: high
 
 ### item B
 - disposition: accept
-- severity: high
+- impact: material
 - confidence: medium
 
 ### item C
 - disposition: reject
-- severity: low
+- impact: unclear
 - confidence: low
 `
 	violations := triagePolicyViolations(markdown)
 	if len(violations) != 2 {
 		t.Fatalf("expected 2 violations, got %d: %v", len(violations), violations)
 	}
-	if !strings.Contains(strings.Join(violations, " | "), "item A has disallowed severity \"medium\"") {
-		t.Fatalf("expected severity violation for item A, got: %v", violations)
+	if !strings.Contains(strings.Join(violations, " | "), "item A has disallowed impact \"minor\"") {
+		t.Fatalf("expected impact violation for item A, got: %v", violations)
 	}
 	if !strings.Contains(strings.Join(violations, " | "), "item B has disallowed confidence \"medium\"") {
 		t.Fatalf("expected confidence violation for item B, got: %v", violations)
 	}
 }
 
-func TestTriagePolicyViolationsAllowsAcceptedCriticalHighConfidence(t *testing.T) {
+func TestTriagePolicyViolationsAllowsAcceptedMaterialHighConfidence(t *testing.T) {
 	markdown := `# Round Triage
 
 ### fix unsafe branch behavior
 - disposition: accept
-- severity: critical
+- impact: material
 - confidence: high
 `
 	violations := triagePolicyViolations(markdown)
@@ -558,25 +557,25 @@ func TestTriagePolicyViolationsRequiresTagsForAcceptedItems(t *testing.T) {
 		t.Fatalf("expected 2 violations for missing tags, got %d: %v", len(violations), violations)
 	}
 	joined := strings.Join(violations, " | ")
-	if !strings.Contains(joined, "missing tags missing severity tag") {
-		t.Fatalf("expected missing severity tag violation, got: %v", violations)
+	if !strings.Contains(joined, "missing tags missing impact tag") {
+		t.Fatalf("expected missing impact tag violation, got: %v", violations)
 	}
 	if !strings.Contains(joined, "missing tags missing confidence tag") {
 		t.Fatalf("expected missing confidence tag violation, got: %v", violations)
 	}
 }
 
-func TestBuildReviewSummaryInjectionPrefersVerdictAndIssueHeadings(t *testing.T) {
+func TestBuildReviewInputManifestCapturesVerdictBullets(t *testing.T) {
 	td := t.TempDir()
 	report := filepath.Join(td, "review-01.md")
 	markdown := `# Independent Review 1
 
 ## Verdict
-- ` + "`critical_flags_found: yes`" + `
+- ` + "`material_findings_found: yes`" + `
 - ` + "`merge_readiness: needs_fixes`" + `
 
-## Critical Red Flags / Serious Issues
-### [severity: high] sample cache bug
+## Material Findings
+### sample cache bug
 - Location: ` + "`src/cache.py:10`" + `
 - Why it matters: stale cache can silently corrupt outputs.
 - Evidence: empirical repro showed stale values.
@@ -590,24 +589,21 @@ func TestBuildReviewSummaryInjectionPrefersVerdictAndIssueHeadings(t *testing.T)
 		t.Fatal(err)
 	}
 
-	summary, err := buildReviewSummaryInjection([]string{report})
+	summary, err := buildReviewInputManifest([]string{report})
 	if err != nil {
-		t.Fatalf("buildReviewSummaryInjection failed: %v", err)
+		t.Fatalf("buildReviewInputManifest failed: %v", err)
 	}
 	for _, want := range []string{
-		"## review-01.md",
-		"## Verdict",
-		"`critical_flags_found: yes`",
-		"### [severity: high] sample cache bug",
-		"- Why it matters: stale cache can silently corrupt outputs.",
-		"- Confidence: high",
+		"- `review-01.md`",
+		"`material_findings_found: yes`",
+		"`merge_readiness: needs_fixes`",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("expected summary to include %q, got:\n%s", want, summary)
 		}
 	}
-	if strings.Contains(summary, "## Verification ideas") {
-		t.Fatalf("summary should omit verification-ideas section, got:\n%s", summary)
+	if strings.Contains(summary, "sample cache bug") {
+		t.Fatalf("manifest should stay compact and omit issue bodies, got:\n%s", summary)
 	}
 }
 

@@ -207,13 +207,13 @@ Run a deep, multi-stage review pipeline against a source branch in an isolated w
 What this command does:
   1) Clones/fetches a branch-scoped managed copy of the repository under ~/deepreview (or override env).
   2) Runs independent review workers in isolated worktrees.
-  3) Runs three execute-stage prompts in one Codex thread: consolidate+plan, execute+verify, cleanup+summary+commit.
+  3) Runs two execute-stage prompts in one fresh Codex thread: triage+plan, then implement+verify+finalize.
   4) Repeats rounds up to max rounds while another round is still required.
      A `+"`continue`"+` decision always forces another round.
      A first `+"`stop`"+` still forces one confirmation round.
      A second consecutive `+"`stop`"+` ends the loop, even if that round also changed the repository.
   5) Delivers once at the end:
-     - mode=pr (default): optionally runs a Codex PR-preparation pass, then privacy remediation, then pushes candidate branch + opens PR back into source branch
+     - mode=pr (default): runs one fresh Codex delivery stage that gets the branch/PR merge-ready, pushes, opens/updates the PR, waits on required remote checks, and fixes follow-up blockers when needed
      - mode=yolo: pushes directly to source branch
 
 Usage:
@@ -948,9 +948,8 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 			fmt.Fprintf(out, "     %d. %s\n", idx+1, executePromptLabel(templateName))
 		}
 	} else {
-		fmt.Fprintln(out, "     1. consolidate and plan")
-		fmt.Fprintln(out, "     2. execute and verify")
-		fmt.Fprintln(out, "     3. cleanup, summary, commit")
+		fmt.Fprintln(out, "     1. triage and plan")
+		fmt.Fprintln(out, "     2. implement, verify, finalize")
 	}
 
 	fmt.Fprintln(out, "   - if round status is `continue`, run another review round")
@@ -959,12 +958,12 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintln(out, "5. delivery stage")
 	if cfg.Mode == ModePR {
 		fmt.Fprintln(out, "   - validate delivery files")
-		fmt.Fprintln(out, "   - run one Codex PR-preparation pass before privacy remediation")
-		fmt.Fprintln(out, "   - run bounded privacy remediation attempts (up to 3) before delivery")
-		fmt.Fprintln(out, "   - push candidate branch and open one pull request into source branch")
+		fmt.Fprintln(out, "   - run one fresh Codex delivery stage")
+		fmt.Fprintln(out, "   - get the delivery branch and PR into merge-ready state")
+		fmt.Fprintln(out, "   - push, wait for remote checks, and fix/retry when a high-confidence blocker appears")
 	} else {
 		fmt.Fprintln(out, "   - validate delivery files")
-		fmt.Fprintln(out, "   - push final changes directly to source branch")
+		fmt.Fprintln(out, "   - run one fresh Codex delivery stage and push the source branch after final verification")
 	}
 	fmt.Fprintln(out, "6. write final summary and print completion output")
 	fmt.Fprintln(out)

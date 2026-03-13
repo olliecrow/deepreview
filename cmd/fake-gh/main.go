@@ -69,5 +69,9 @@ func main() {
 		}
 		return
 	}
+	if len(args) >= 2 && args[0] == "pr" && args[1] == "view" {
+		fmt.Print(`{"url":"https://example.com/olliecrow/test/pull/123","state":"OPEN","isDraft":false,"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN"}`)
+		return
+	}
 	os.Exit(1)
 }
