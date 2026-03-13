@@ -178,9 +178,13 @@ func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 		}
 		return err
 	}
-	var removeErr error
-	for attempt := 0; attempt < 3; attempt++ {
-		_, removeErr = RunCommandContext(
+	// Interrupt-driven prompt teardown can lag slightly behind the first cleanup
+	// attempt, so keep retrying for a short window instead of failing after a
+	// few hundred milliseconds.
+	deadline := time.Now().Add(5 * time.Second)
+	var lastErr error
+	for {
+		_, removeErr := RunCommandContext(
 			context.Background(),
 			[]string{gitBin, "-C", repoPath, "worktree", "remove", "--force", worktreePath},
 			"",
@@ -188,24 +192,22 @@ func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 			true,
 			0,
 		)
-		if statErr := pruneStaleWorktree(repoPath, gitBin, worktreePath); statErr == nil {
+		if removeErr != nil {
+			lastErr = removeErr
+		}
+		if err := os.RemoveAll(worktreePath); err != nil && !os.IsNotExist(err) {
+			lastErr = err
+		}
+		if err := pruneStaleWorktree(repoPath, gitBin, worktreePath); err == nil {
 			return nil
+		} else {
+			lastErr = err
+		}
+		if time.Now().After(deadline) {
+			return lastErr
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	if err := os.RemoveAll(worktreePath); err != nil && !os.IsNotExist(err) {
-		if removeErr != nil {
-			return removeErr
-		}
-		return err
-	}
-	if err := pruneStaleWorktree(repoPath, gitBin, worktreePath); err != nil {
-		if removeErr != nil {
-			return removeErr
-		}
-		return err
-	}
-	return nil
 }
 
 func pruneStaleWorktree(repoPath, gitBin, worktreePath string) error {

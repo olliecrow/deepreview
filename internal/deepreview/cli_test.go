@@ -743,6 +743,48 @@ func TestPrintFailureArtifactSummary(t *testing.T) {
 	}
 }
 
+func TestPrintFailureArtifactSummaryWithoutOrchestrator(t *testing.T) {
+	var out strings.Builder
+	config := ReviewConfig{
+		WorkspaceRoot: t.TempDir(),
+		RunID:         "20260228T002535Z-39dab37e",
+		Repo:          "owner/repo",
+		SourceBranch:  "main",
+	}
+
+	printFailureArtifactSummary(&out, nil, config)
+	text := out.String()
+	for _, want := range []string{
+		"deepreview failure summary:\n",
+		"run: `20260228T002535Z-39dab37e`\n",
+		"repository reviewed: `owner/repo`\n",
+		"source branch reviewed: `main`\n",
+		"run exited before delivery; no push or PR was created.\n",
+		"run artifacts: ",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("expected failure summary to include %q, got:\n%s", want, text)
+		}
+	}
+}
+
+func TestCleanupInterruptedRunArtifactsRemovesLingeringWorktrees(t *testing.T) {
+	runRoot := t.TempDir()
+	worktreePath := filepath.Join(runRoot, "round-01", "review", "worker-01", "worktree")
+	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktreePath, "leftover.txt"), []byte("leftover\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cleanupInterruptedRunArtifacts(runRoot)
+
+	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
+		t.Fatalf("expected lingering worktree path to be removed, err=%v", err)
+	}
+}
+
 func TestPrintFailureArtifactSummaryMentionsExistingDeliveryArtifacts(t *testing.T) {
 	var out strings.Builder
 	config := ReviewConfig{

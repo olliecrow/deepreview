@@ -89,6 +89,9 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	}
 
 	runRoot := filepath.Join(workspaceRoot, "runs", config.RunID)
+	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+		return nil, err
+	}
 	managedRepoPath := filepath.Join(
 		append(
 			[]string{workspaceRoot, "repos"},
@@ -889,14 +892,14 @@ func (e *promptInactivityError) Error() string {
 }
 
 type monitoredPromptRequest struct {
-	label          string
-	cwd            string
-	prompt         string
-	codexContext   *CodexContext
+	label               string
+	cwd                 string
+	prompt              string
+	codexContext        *CodexContext
 	resetContextOnRetry bool
-	logPrefix      string
-	useGitStatus   bool
-	monitoredPaths []string
+	logPrefix           string
+	useGitStatus        bool
+	monitoredPaths      []string
 }
 
 type monitoredPromptCallbacks struct {
@@ -1201,7 +1204,6 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	stageCtx, cancelStage := context.WithCancel(currentRunCommandContext())
 	restoreCommandContext := setRunCommandContext(stageCtx)
 	defer func() {
-		cancelStage()
 		restoreCommandContext()
 	}()
 
@@ -1209,9 +1211,23 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	reviewPaths := make([]string, 0, o.config.Concurrency)
 	workerReviewPaths := make([]string, 0, o.config.Concurrency)
 	workerNotesPaths := make([]string, 0, o.config.Concurrency)
+	var workers sync.WaitGroup
 	defer func() {
+		cancelStage()
+		workers.Wait()
+		waitForActiveCommandsToExit(5 * time.Second)
 		for _, worktree := range worktrees {
-			_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktree)
+			deadline := time.Now().Add(15 * time.Second)
+			for {
+				_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktree)
+				if _, err := os.Stat(worktree); os.IsNotExist(err) {
+					break
+				}
+				if time.Now().After(deadline) {
+					break
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
 		}
 	}()
 
@@ -1247,7 +1263,9 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	resultsCh := make(chan reviewWorkerResult, o.config.Concurrency)
 
 	for idx := range reviewPaths {
+		workers.Add(1)
 		go func(i int) {
+			defer workers.Done()
 			workerID := i + 1
 			worktreePath := worktrees[i]
 			scope := buildReviewPromptScope(o.config.SourceBranch, defaultBranch)
@@ -1475,11 +1493,11 @@ func (o *Orchestrator) runExecuteStage(
 		"REVIEW_INPUT_MANIFEST":       reviewInputManifest,
 		"ROUND_MODE_NOTE":             roundModeNote,
 		"ROUND_EXECUTE_MODE_OVERRIDE": roundExecuteModeOverride,
-		"ROUND_TRIAGE_PATH":       filepath.ToSlash(roundTriageWorktreePath),
-		"ROUND_PLAN_PATH":         filepath.ToSlash(roundPlanWorktreePath),
-		"ROUND_VERIFICATION_PATH": filepath.ToSlash(roundVerificationWorktreePath),
-		"ROUND_STATUS_PATH":       filepath.ToSlash(roundStatusWorktreePath),
-		"ROUND_SUMMARY_PATH":      filepath.ToSlash(roundSummaryWorktreePath),
+		"ROUND_TRIAGE_PATH":           filepath.ToSlash(roundTriageWorktreePath),
+		"ROUND_PLAN_PATH":             filepath.ToSlash(roundPlanWorktreePath),
+		"ROUND_VERIFICATION_PATH":     filepath.ToSlash(roundVerificationWorktreePath),
+		"ROUND_STATUS_PATH":           filepath.ToSlash(roundStatusWorktreePath),
+		"ROUND_SUMMARY_PATH":          filepath.ToSlash(roundSummaryWorktreePath),
 	}
 
 	var codexContext *CodexContext
@@ -1669,14 +1687,14 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 	result, _, err := o.runPromptWithWatchdog(
 		currentRunCommandContext(),
 		monitoredPromptRequest{
-			label:          stageName,
-			cwd:            cwd,
-			prompt:         prompt,
-			codexContext:   codexContext,
+			label:               stageName,
+			cwd:                 cwd,
+			prompt:              prompt,
+			codexContext:        codexContext,
 			resetContextOnRetry: resetContextOnRetry,
-			logPrefix:      logPrefix,
-			useGitStatus:   true,
-			monitoredPaths: append(append([]string{}, monitoredPaths...), logPrefix+".stdout.jsonl", logPrefix+".stderr.log"),
+			logPrefix:           logPrefix,
+			useGitStatus:        true,
+			monitoredPaths:      append(append([]string{}, monitoredPaths...), logPrefix+".stdout.jsonl", logPrefix+".stderr.log"),
 		},
 		monitoredPromptCallbacks{
 			onHeartbeat: func(elapsed, silence time.Duration) {
