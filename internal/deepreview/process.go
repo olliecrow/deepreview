@@ -288,6 +288,24 @@ func terminateActiveCommands() {
 	for _, pid := range pids {
 		terminateActiveProcessByPID(pid)
 	}
+
+	waitForActiveCommandsToExit(3 * time.Second)
+}
+
+func waitForActiveCommandsToExit(timeout time.Duration) {
+	if timeout <= 0 {
+		return
+	}
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		activeCommandMu.Lock()
+		activeCount := len(activeCommandPIDs)
+		activeCommandMu.Unlock()
+		if activeCount == 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
 }
 
 func commandContextError(ctxErr error, command []string, timeout time.Duration, completed CompletedProcess) error {
