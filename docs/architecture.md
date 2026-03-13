@@ -71,6 +71,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - run any remaining local merge-readiness checks
   - optionally move work onto the delivery branch locally
   - report whether local delivery preparation is complete or incomplete
+  - write only local-readiness result fields for the orchestrator (mode, optional prepared delivery branch, incomplete status/reason), not push refspecs or PR metadata
 - the orchestrator validates the prepared ref, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
 - when delivery is blocked by PR-range/history state outside the current prepared tip, deepreview reports the blocker precisely and stops; it does not perform history rewrite/rebuild recovery automatically
 - in `yolo` mode, the orchestrator pushes the prepared source-branch ref instead of creating a PR
