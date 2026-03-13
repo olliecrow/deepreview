@@ -178,10 +178,10 @@ func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 		}
 		return err
 	}
-	// Interrupt-driven prompt teardown can lag slightly behind the first cleanup
-	// attempt, so keep retrying for a short window instead of failing after a
-	// few hundred milliseconds.
-	deadline := time.Now().Add(5 * time.Second)
+	// Interrupt-driven prompt teardown can lag behind the first cleanup attempt,
+	// so own the full bounded wait here rather than pushing retry loops into
+	// callers.
+	deadline := time.Now().Add(15 * time.Second)
 	var lastErr error
 	for {
 		_, removeErr := RunCommandContext(

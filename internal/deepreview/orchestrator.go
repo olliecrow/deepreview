@@ -1217,17 +1217,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		workers.Wait()
 		waitForActiveCommandsToExit(5 * time.Second)
 		for _, worktree := range worktrees {
-			deadline := time.Now().Add(15 * time.Second)
-			for {
-				_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktree)
-				if _, err := os.Stat(worktree); os.IsNotExist(err) {
-					break
-				}
-				if time.Now().After(deadline) {
-					break
-				}
-				time.Sleep(100 * time.Millisecond)
-			}
+			_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktree)
 		}
 	}()
 
