@@ -703,7 +703,7 @@ func runDoctorCommand(args []string) int {
 
 func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 	cfg := o.config
-	checks := make([]doctorCheck, 0, 10)
+	checks := make([]doctorCheck, 0, 11)
 
 	for _, tool := range requiredHostTools(cfg) {
 		path, err := exec.LookPath(tool)
@@ -866,6 +866,19 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 			Detail: fmt.Sprintf("%s (%s)", cfg.SourceBranch, o.repoIdentity.CloneSource),
 		})
 	}
+	if err := validateLocalBranchReadyForRemoteReview(cfg.GitBin, cfg.Repo, cfg.SourceBranch); err != nil {
+		checks = append(checks, doctorCheck{
+			Name:   "local source branch ready for review",
+			Passed: false,
+			Detail: err.Error(),
+		})
+	} else {
+		checks = append(checks, doctorCheck{
+			Name:   "local source branch ready for review",
+			Passed: true,
+			Detail: "ready",
+		})
+	}
 
 	return checks
 }
@@ -884,6 +897,10 @@ func checkPromptTemplates(promptsRoot string) error {
 	}
 	if _, err := os.Stat(filepath.Join(promptsRoot, "review", "independent-review.md")); err != nil {
 		return NewDeepReviewError("independent review prompt template missing")
+	}
+	deliveryTemplate := filepath.Join(promptsRoot, "delivery", "01-deliver.md")
+	if _, err := os.Stat(deliveryTemplate); err != nil {
+		return NewDeepReviewError("delivery prompt template missing: %s", deliveryTemplate)
 	}
 	return nil
 }
@@ -919,6 +936,10 @@ func runDryRunCommand(args []string) int {
 	}
 	orchestrator, err := NewOrchestrator(parsed.Config, &NullProgressReporter{})
 	if err != nil {
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
+		return 1
+	}
+	if err := validateLocalBranchReadyForRemoteReview(parsed.Config.GitBin, parsed.Config.Repo, parsed.Config.SourceBranch); err != nil {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}

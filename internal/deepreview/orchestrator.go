@@ -290,7 +290,6 @@ var allowedPlaceholderEmailDomains = map[string]struct{}{
 	"example.com": {},
 	"example.org": {},
 	"example.net": {},
-	"test.com":    {},
 	"localhost":   {},
 	"local":       {},
 	"invalid":     {},
@@ -612,25 +611,8 @@ func (o *Orchestrator) preflight() error {
 	if _, err := o.codexRunner.resolveLauncher(); err != nil {
 		return err
 	}
-	queuePath := filepath.Join(o.promptsRoot, "execute", "queue.txt")
-	queue, err := ReadQueue(queuePath)
-	if err != nil {
+	if err := checkPromptTemplates(o.promptsRoot); err != nil {
 		return err
-	}
-	for _, templateName := range queue {
-		templatePath := filepath.Join(o.promptsRoot, "execute", templateName)
-		if _, err := os.Stat(templatePath); err != nil {
-			return NewDeepReviewError("execute template file not found: %s", templatePath)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(o.promptsRoot, "review", "independent-review.md")); err != nil {
-		return NewDeepReviewError("independent review prompt template missing")
-	}
-	if o.config.Mode == ModePR {
-		deliveryTemplate := filepath.Join(o.promptsRoot, "delivery", "01-deliver.md")
-		if _, err := os.Stat(deliveryTemplate); err != nil {
-			return NewDeepReviewError("delivery prompt template missing: %s", deliveryTemplate)
-		}
 	}
 	return nil
 }
