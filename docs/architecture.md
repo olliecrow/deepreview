@@ -51,7 +51,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - execute retries preserve only artifacts from earlier successful prompts in the same queue; final round status/summary artifacts must be rewritten by the successful prompt-3 attempt
 - execute prompts stage their output files inside reserved worktree-local `.deepreview/artifacts/` paths; after prompt queue completion, the orchestrator validates those staged files, persists canonical copies into the run directory, performs execute-stage post-processing (artifact validation, hygiene checks, and local auto-commit when changes exist), and then writes the authoritative `round.json` completion record for that round
 - apply the same inactivity watchdog/restart policy to execute and post-delivery Codex workers
-- Codex workers run with the operator's normal local Codex configuration and inherited local environment; deepreview does not add a separate execution/temp-cache layer
+- Codex workers run with the operator's normal local Codex configuration and inherited local environment; deepreview does not add a separate execution/temp-cache layer, except that resumed multicodex-backed threads stay pinned to the profile that created the thread
 - allow local checkpoint commits throughout execution; never push during rounds
 - Codex writes the round status file inside the execute worktree, and the orchestrator persists the canonical copy at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - the orchestrator writes `~/deepreview/runs/<run-id>/round-<round>/round.json` after successful execute-stage completion; final completion reporting counts only rounds with that authoritative record
