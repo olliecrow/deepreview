@@ -2120,10 +2120,6 @@ func executePromptLabel(templateName string) string {
 		return "triage and plan"
 	case "02-implement-verify-finalize.md":
 		return "implement, verify, finalize"
-	case "01-consolidate-plan.md":
-		return "triage and plan"
-	case "02-execute-verify.md":
-		return "implement, verify, finalize"
 	default:
 		return templateName
 	}
