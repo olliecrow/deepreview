@@ -72,12 +72,13 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - optionally move work onto the delivery branch locally
   - report whether local delivery preparation is complete or incomplete
 - the orchestrator validates the prepared ref, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
+- when delivery is blocked by PR-range/history state outside the current prepared tip, deepreview reports the blocker precisely and stops; it does not perform history rewrite/rebuild recovery automatically
 - in `yolo` mode, the orchestrator pushes the prepared source-branch ref instead of creating a PR
 - the orchestrator still stays out of repo-specific local mutation logic except for worktree lifecycle, prompt launching/resume, artifact validation, remote publication, and terminal classification
 
 5. Finalization:
 - if TUI mode was active, exit TUI immediately on completion and clear terminal screen before summary output
-- emit final summary and alignment evidence pointers
+- emit final summary and alignment evidence pointers; successful terminal states backfill the root `final-summary.md` if an earlier path failed to write it
 - ensure no stale transient worktrees/artifacts remain
 
 ## Fresh-context model
