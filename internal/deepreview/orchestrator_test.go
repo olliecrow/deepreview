@@ -486,9 +486,8 @@ func TestExecutePromptLabel(t *testing.T) {
 		templateName string
 		want         string
 	}{
-		{templateName: "01-consolidate-plan.md", want: "consolidate and plan"},
-		{templateName: "02-execute-verify.md", want: "execute and verify"},
-		{templateName: "03-cleanup-summary-commit.md", want: "cleanup, summary, commit"},
+		{templateName: "01-triage-plan.md", want: "triage and plan"},
+		{templateName: "02-implement-verify-finalize.md", want: "implement, verify, finalize"},
 		{templateName: "unknown.md", want: "unknown.md"},
 	}
 
@@ -503,42 +502,69 @@ func TestExecutePromptLabel(t *testing.T) {
 	}
 }
 
-func TestTriagePolicyViolationsAcceptRequiresCriticalOrHighWithHighConfidence(t *testing.T) {
+func TestPreparePromptRetryRequestClearsContextOnlyWhenConfigured(t *testing.T) {
+	originalContext := &CodexContext{
+		ThreadID:          "thread-123",
+		MulticodexProfile: "beta",
+	}
+
+	unchanged := preparePromptRetryRequest(monitoredPromptRequest{
+		label:        "execute / triage and plan",
+		codexContext: originalContext,
+	})
+	if unchanged.codexContext != originalContext {
+		t.Fatalf("expected codex context to be preserved when resetContextOnRetry is false")
+	}
+
+	reset := preparePromptRetryRequest(monitoredPromptRequest{
+		label:               "execute / implement, verify, finalize",
+		codexContext:        originalContext,
+		resetContextOnRetry: true,
+	})
+	if reset.codexContext != nil {
+		t.Fatalf("expected codex context to be cleared on retry when resetContextOnRetry is true")
+	}
+	if originalContext.ThreadID != "thread-123" || originalContext.MulticodexProfile != "beta" {
+		t.Fatalf("expected original codex context to remain unchanged, got %+v", originalContext)
+	}
+}
+
+func TestTriagePolicyViolationsAcceptRequiresMaterialImpactAndHighConfidence(t *testing.T) {
 	markdown := `# Round Triage
 
 ### item A
 - disposition: accept
-- severity: medium
+- impact: minor
 - confidence: high
 
 ### item B
 - disposition: accept
-- severity: high
+- impact: material
 - confidence: medium
 
 ### item C
 - disposition: reject
-- severity: low
+- impact: unclear
 - confidence: low
 `
 	violations := triagePolicyViolations(markdown)
 	if len(violations) != 2 {
 		t.Fatalf("expected 2 violations, got %d: %v", len(violations), violations)
 	}
-	if !strings.Contains(strings.Join(violations, " | "), "item A has disallowed severity \"medium\"") {
-		t.Fatalf("expected severity violation for item A, got: %v", violations)
+	if !strings.Contains(strings.Join(violations, " | "), "item A has disallowed impact \"minor\"") {
+		t.Fatalf("expected impact violation for item A, got: %v", violations)
 	}
 	if !strings.Contains(strings.Join(violations, " | "), "item B has disallowed confidence \"medium\"") {
 		t.Fatalf("expected confidence violation for item B, got: %v", violations)
 	}
 }
 
-func TestTriagePolicyViolationsAllowsAcceptedCriticalHighConfidence(t *testing.T) {
+func TestTriagePolicyViolationsAllowsAcceptedMaterialHighConfidence(t *testing.T) {
 	markdown := `# Round Triage
 
 ### fix unsafe branch behavior
 - disposition: accept
-- severity: critical
+- impact: material
 - confidence: high
 `
 	violations := triagePolicyViolations(markdown)
@@ -558,25 +584,25 @@ func TestTriagePolicyViolationsRequiresTagsForAcceptedItems(t *testing.T) {
 		t.Fatalf("expected 2 violations for missing tags, got %d: %v", len(violations), violations)
 	}
 	joined := strings.Join(violations, " | ")
-	if !strings.Contains(joined, "missing tags missing severity tag") {
-		t.Fatalf("expected missing severity tag violation, got: %v", violations)
+	if !strings.Contains(joined, "missing tags missing impact tag") {
+		t.Fatalf("expected missing impact tag violation, got: %v", violations)
 	}
 	if !strings.Contains(joined, "missing tags missing confidence tag") {
 		t.Fatalf("expected missing confidence tag violation, got: %v", violations)
 	}
 }
 
-func TestBuildReviewSummaryInjectionPrefersVerdictAndIssueHeadings(t *testing.T) {
+func TestBuildReviewInputManifestCapturesVerdictBullets(t *testing.T) {
 	td := t.TempDir()
 	report := filepath.Join(td, "review-01.md")
 	markdown := `# Independent Review 1
 
 ## Verdict
-- ` + "`critical_flags_found: yes`" + `
+- ` + "`material_findings_found: yes`" + `
 - ` + "`merge_readiness: needs_fixes`" + `
 
-## Critical Red Flags / Serious Issues
-### [severity: high] sample cache bug
+## Material Findings
+### sample cache bug
 - Location: ` + "`src/cache.py:10`" + `
 - Why it matters: stale cache can silently corrupt outputs.
 - Evidence: empirical repro showed stale values.
@@ -590,24 +616,21 @@ func TestBuildReviewSummaryInjectionPrefersVerdictAndIssueHeadings(t *testing.T)
 		t.Fatal(err)
 	}
 
-	summary, err := buildReviewSummaryInjection([]string{report})
+	summary, err := buildReviewInputManifest([]string{report})
 	if err != nil {
-		t.Fatalf("buildReviewSummaryInjection failed: %v", err)
+		t.Fatalf("buildReviewInputManifest failed: %v", err)
 	}
 	for _, want := range []string{
-		"## review-01.md",
-		"## Verdict",
-		"`critical_flags_found: yes`",
-		"### [severity: high] sample cache bug",
-		"- Why it matters: stale cache can silently corrupt outputs.",
-		"- Confidence: high",
+		"- `review-01.md`",
+		"`material_findings_found: yes`",
+		"`merge_readiness: needs_fixes`",
 	} {
 		if !strings.Contains(summary, want) {
 			t.Fatalf("expected summary to include %q, got:\n%s", want, summary)
 		}
 	}
-	if strings.Contains(summary, "## Verification ideas") {
-		t.Fatalf("summary should omit verification-ideas section, got:\n%s", summary)
+	if strings.Contains(summary, "sample cache bug") {
+		t.Fatalf("manifest should stay compact and omit issue bodies, got:\n%s", summary)
 	}
 }
 
@@ -867,6 +890,20 @@ func TestCapPRBodyForGitHubKeepsNormalBody(t *testing.T) {
 	}
 }
 
+func TestBuildCompactPRBodyUsesNeutralDeliveryStatusCopy(t *testing.T) {
+	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
+	body := o.buildCompactPRBody(nil, []string{"internal/deepreview/orchestrator.go"}, prDeliveryOptions{})
+	if strings.Contains(body, "after final delivery validation passed") {
+		t.Fatalf("compact pr body should not claim validation already passed, got:\n%s", body)
+	}
+	if strings.Contains(body, "ready for review and merge") {
+		t.Fatalf("compact pr body should not claim merge readiness before terminal delivery result, got:\n%s", body)
+	}
+	if !strings.Contains(body, "published by deepreview; check the terminal run summary for final delivery status.") {
+		t.Fatalf("expected neutral final-status guidance, got:\n%s", body)
+	}
+}
+
 func TestNormalizePRTitleAddsPrefixAndNormalizesWhitespace(t *testing.T) {
 	out := normalizePRTitle("  improve logging clarity \n and test coverage  ", "deepreview: review updates")
 	if out != "deepreview: improve logging clarity and test coverage" {
@@ -929,6 +966,84 @@ func TestBuildIncompletePRBodyMentionsIncompleteStatus(t *testing.T) {
 	}
 	if !strings.Contains(body, "latest decision: `continue`") {
 		t.Fatalf("expected latest round decision in body, got:\n%s", body)
+	}
+}
+
+func TestEnsureTerminalFinalSummaryBackfillsMissingRootSummary(t *testing.T) {
+	runRoot := t.TempDir()
+	roundDir := filepath.Join(runRoot, "round-01")
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-summary.md"), []byte("summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-status.json"), []byte(`{"decision":"stop","reason":"ready","confidence":0.95}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := RoundRecord{
+		Round:   1,
+		Summary: "round-summary.md",
+		Status: RoundStatus{
+			Decision: "stop",
+			Reason:   "ready",
+		},
+	}
+	recordBytes, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round.json"), append(recordBytes, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{
+		config:  ReviewConfig{RunID: "run-1"},
+		runRoot: runRoot,
+		lastDelivery: &DeliveryResult{
+			Mode:             ModePR,
+			PushedRefspec:    "candidate:deepreview/feature/test/run-1",
+			PRURL:            "https://example.com/olliecrow/test/pull/123",
+			Incomplete:       true,
+			IncompleteReason: "required check still fails on an earlier commit in the PR range",
+		},
+	}
+
+	if err := o.ensureTerminalFinalSummary("main", "candidate", nil); err != nil {
+		t.Fatalf("ensureTerminalFinalSummary failed: %v", err)
+	}
+
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runRoot, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing backfilled final summary: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "- delivery: `incomplete-draft`") {
+		t.Fatalf("expected incomplete delivery marker, got:\n%s", finalSummary)
+	}
+	if !strings.Contains(finalSummary, "required check still fails on an earlier commit in the PR range") {
+		t.Fatalf("expected incomplete reason in final summary, got:\n%s", finalSummary)
+	}
+}
+
+func TestReadPromptDeliveryResultDoesNotRequirePushMetadata(t *testing.T) {
+	resultPath := filepath.Join(t.TempDir(), "delivery-result.json")
+	if err := os.WriteFile(resultPath, []byte("{\n  \"mode\": \"pr\",\n  \"incomplete\": false\n}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := readPromptDeliveryResult(resultPath, "pr")
+	if err != nil {
+		t.Fatalf("readPromptDeliveryResult failed: %v", err)
+	}
+	if result.Mode != "pr" {
+		t.Fatalf("unexpected mode: %q", result.Mode)
+	}
+	if result.DeliveryBranch != "" {
+		t.Fatalf("expected empty delivery branch, got %q", result.DeliveryBranch)
+	}
+	if result.Incomplete {
+		t.Fatal("expected complete delivery result")
 	}
 }
 

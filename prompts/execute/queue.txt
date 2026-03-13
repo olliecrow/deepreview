@@ -1,3 +1,2 @@
-01-consolidate-plan.md
-02-execute-verify.md
-03-cleanup-summary-commit.md
+01-triage-plan.md
+02-implement-verify-finalize.md
