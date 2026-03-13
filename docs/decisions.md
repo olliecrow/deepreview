@@ -469,30 +469,30 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Final PR metadata must be Codex-generated and human-readable: concise PR title plus structured PR description sections (summary, what changed and why, round outcomes, verification, risks/follow-ups, final status).
+Final PR metadata must be deepreview-generated and human-readable: concise PR title plus structured PR description sections (summary, what changed and why, round outcomes, verification, risks/follow-ups, final status).
 Context:
 Final PR output should consistently communicate what changed, why it changed, what was verified, and what risks remain without requiring readers to parse raw artifact dumps.
 Rationale:
-A fixed title/body contract improves readability and keeps reporting quality stable across runs.
+A fixed title/body contract improves readability and keeps reporting quality stable across runs without requiring extra post-create prompt steps.
 Trade-offs:
-Relies on Codex quality and may require prompt tuning if title/body quality drifts.
+Title/body generation is now deterministic orchestration code rather than an extra prompt, so wording changes require code updates instead of prompt tuning.
 Enforcement:
-The delivery prompt template defines required title/body outputs and section structure; integration tests assert title artifacts and key body section presence.
+Orchestrator title/body builders define the section structure; integration tests assert title artifacts and key body section presence.
 References:
-`docs/spec.md`, `prompts/delivery/pr-description-summary.md`, `internal/deepreview/integration_test.go`
+`docs/spec.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`
 
 Decision:
-In PR mode, run one fresh post-delivery Codex call to generate final PR title + description body and replace both via `gh pr edit`.
+In PR mode, generate final PR title + description body before `gh pr create`; do not require a post-create PR metadata edit step.
 Context:
-Large deterministic artifact-heavy PR bodies can exceed GitHub limits and cause `gh pr create` failures; users also need clearer human-readable PR metadata than static generic titles.
+Large artifact-heavy PR bodies can exceed GitHub limits and cause `gh pr create` failures; users still need clear human-readable PR metadata without adding another post-create prompt or edit flow.
 Rationale:
-Using one Codex-generated final title/body pair keeps PRs readable, improves scannability, reduces size pressure, and avoids exposing unnecessary internal artifact detail.
+Generating the final title/body before PR creation keeps PRs readable, improves scannability, reduces size pressure, and avoids exposing unnecessary internal artifact detail while keeping delivery orchestration simpler.
 Trade-offs:
 Raw artifact detail is not embedded in final PR body and must be read from run artifacts when needed.
 Enforcement:
-Delivery flow creates PR with base title/body, runs dedicated delivery metadata template in a fresh Codex context, provides path-level context (run root + managed repo path) without injected digest blocks, writes final `pr-title.txt`/`pr-body.md` from generated output, and updates PR title/body via `gh pr edit`.
+Delivery flow writes final `pr-title.txt`/`pr-body.md` before `gh pr create`, validates both for privacy, and does not depend on `gh pr edit`.
 References:
-`internal/deepreview/orchestrator.go`, `prompts/delivery/pr-description-summary.md`, `docs/spec.md`, `docs/architecture.md`
+`internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Use codex-led verification by default: codex should attempt available tests, pre-commit checks, and locally runnable CI-like checks, then report what ran and outcomes.
@@ -965,7 +965,7 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/cli_test.go`, `README.md`
 
 Decision:
-Keep PR descriptions size-safe and privacy-safe by using a detailed Codex-generated final body and excluding raw per-worker review reports/full execute artifact dumps.
+Keep PR descriptions size-safe and privacy-safe by using a detailed generated final body and excluding raw per-worker review reports/full execute artifact dumps.
 Context:
 Large multi-round runs can produce PR descriptions that exceed GitHub's body limit (`65536` chars), causing delivery failures at `gh pr create`.
 Rationale:
@@ -973,9 +973,22 @@ A structured narrative final body preserves actionable signal while avoiding ove
 Trade-offs:
 Some deep artifact detail is no longer directly embedded in PR body and must be read from run artifacts when needed.
 Enforcement:
-Final PR body is generated in post-delivery Codex stage, validated with privacy checks, and capped with compact fallback when body size approaches GitHub limits.
+Final PR body is generated during delivery orchestration, validated with privacy checks, and capped with compact fallback when body size approaches GitHub limits.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
+
+Decision:
+When delivery ends incomplete because a remote check is blocked by PR-range/history state rather than the current tip, report that precisely and stop; do not add automatic history-rewrite recovery.
+Context:
+A retained self-run produced a clean current tip but still failed GitHub `security-policy` because the PR commit range contained an earlier fixture commit with a secret-shaped literal. The correct operator action was clear manual follow-up, not autonomous branch-history surgery.
+Rationale:
+This failure mode is important to surface accurately, but automatic ancestry rebuilding or history rewriting would add a lot of complexity and risk for limited benefit. deepreview should fail clearly here, not recover cleverly.
+Trade-offs:
+Operators may sometimes need to create a clean replacement branch manually, but the core system remains simpler and more predictable.
+Enforcement:
+Delivery prompt guidance requires precise incomplete reporting for current-tip-vs-history blockers and explicitly forbids history surgery inside the delivery stage. Successful terminal runs also backfill the root `final-summary.md` if it was somehow not written earlier so incomplete outcomes remain easy to inspect.
+References:
+`prompts/delivery/01-deliver.md`, `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
 Emit periodic stage heartbeat progress updates while long-running worker/prompt execution is in flight.
@@ -1156,15 +1169,15 @@ References:
 `docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `prompts/execute/queue.txt`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`
 
 Decision:
-Replace the multi-stage PR-prep/privacy/post-description delivery stack with one Codex-owned delivery stage.
+Replace the multi-stage PR-prep/privacy/post-description delivery stack with one delivery prompt for final local preparation plus orchestrator-owned publication/validation.
 Context:
 The previous delivery flow spread branch hygiene, privacy remediation, PR creation, and PR metadata writing across several orchestrator-managed stages. This created a lot of code and tests for workflow plumbing rather than review quality.
 Rationale:
-One delivery stage in a fresh context is simpler: Codex can inspect the branch, run final checks, push, create or update the PR, wait on remote checks, fix high-confidence blockers if needed, and keep the PR title/body current.
+One delivery prompt in a fresh context is simpler: Codex can inspect the branch and run final local checks while the orchestrator handles the narrow remote publication path and bounded mergeability validation.
 Trade-offs:
-Delivery prompts become more important, and the orchestrator must still validate that the delivery result is real and safe before declaring success.
+The orchestrator now owns more of the remote delivery mechanics and final PR wording, while the prompt stays focused on repo-specific local preparation.
 Enforcement:
-Spec, architecture, and alignment define one shared delivery prompt. The delivery contract requires Codex to pursue merge readiness, including waiting on remote checks and updating PR metadata, while the orchestrator remains responsible only for lifecycle, validation, and incomplete-draft recovery.
+Spec, architecture, and alignment define one shared delivery prompt for local preparation. The delivery contract keeps Codex focused on local branch readiness while the orchestrator owns publication, bounded post-create mergeability checks, and incomplete-draft recovery.
 References:
 `docs/spec.md`, `docs/architecture.md`, `docs/alignment.md`, `prompts/delivery/01-deliver.md`, `internal/deepreview/orchestrator.go`
 
@@ -1195,15 +1208,15 @@ References:
 `prompts/README.md`, `prompts/review/independent-review.md`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`, `prompts/delivery/01-deliver.md`, `docs/spec.md`
 
 Decision:
-Allow the delivery stage to push more than once when that is required to converge on a merge-ready result.
+Keep delivery publication to one orchestrator-owned push/create path per terminal attempt, with bounded post-create mergeability polling instead of a remote fix-and-retry loop.
 Context:
-The simplified delivery model gives one fresh Codex stage responsibility for final branch/PR readiness, including waiting on remote checks. A strict "exactly one final push" invariant conflicts with that responsibility because a failed remote check may require one more high-confidence fix and another push.
+The current simplified delivery model no longer includes a remote Codex fix loop after PR creation. The real delivery need is to tolerate GitHub's transient mergeability states briefly without pretending the system can autonomously repair post-create blockers.
 Rationale:
-The important invariant is still "no pushes during rounds." Once delivery begins, bounded additional pushes are acceptable if they are part of the same Codex-owned merge-readiness loop and are backed by clear evidence.
+The important invariant is still "no pushes during rounds." Once delivery begins, a single publish path plus bounded mergeability polling is simpler, matches the implemented flow, and avoids overstating autonomous repair behavior.
 Trade-offs:
-Delivery history can now include more than one remote update, so summaries and validations must key off the final pushed refspec and mergeability state rather than a fixed push count.
+Deepreview will fail terminal post-create blockers instead of attempting remote follow-up fixes, so operators may need a new run for those cases.
 Enforcement:
-Spec, architecture, workflows, and alignment now forbid pushes during rounds but allow delivery-stage fix-and-retry pushes. Final summary validation requires a non-empty pushed refspec for non-skipped deliveries rather than an exact push count.
+Spec, architecture, workflows, and alignment forbid pushes during rounds, allow final delivery publication only after validation, and describe bounded post-create mergeability polling rather than remote fix-and-retry pushes.
 References:
 `docs/spec.md`, `docs/architecture.md`, `docs/workflows.md`, `docs/alignment.md`, `internal/deepreview/orchestrator.go`
 
