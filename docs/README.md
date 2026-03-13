@@ -25,7 +25,7 @@ Relationship to `/plan/`:
 - [alignment.md](alignment.md): requirements traceability baseline from user description to canonical contracts.
 - [project-preferences.md](project-preferences.md): durable maintenance and collaboration preferences.
 - [untrusted-third-party-repos.md](untrusted-third-party-repos.md): safety policy for external repository snapshots.
-- [../prompts/README.md](../prompts/README.md): prompt-template pack and queue layout for independent review/execute stages.
+- [../prompts/README.md](../prompts/README.md): prompt-template pack and queue layout for review, execute, and delivery stages.
 
 ## Source-Of-Truth Layering
 - Product/runtime invariants: `spec.md`
@@ -33,7 +33,7 @@ Relationship to `/plan/`:
 - Process and routing conventions: `workflows.md`
 - Durable rationale/trade-offs: `decisions.md`
 - Requirement-to-contract mapping: `alignment.md`
-- Prompt-template contracts and stage templates: `../prompts/README.md`
+- Prompt-template contracts and review/execute/delivery stage templates: `../prompts/README.md`
 
 ## Active Scratch Pointers
 - Use `../plan/current/` for active scratch artifacts (for example `notes.md`, `open-questions.md`, or task-specific files).

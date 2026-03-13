@@ -140,7 +140,7 @@ deepreview
 - each round uses fresh worktrees to minimize stale code/context carryover.
 
 ## Safety model
-- default mode is `pr` and must not push source branch directly.
+- `pr` mode is the default and must not push source branch directly.
 - `yolo` mode is explicit opt-in.
 - no pushes occur during intermediate rounds.
 - PR mode performs bounded post-create mergeability validation before it reports terminal delivery success.

@@ -57,9 +57,9 @@ Optional launcher:
 - Codex prompt runs use your normal local Codex configuration by default; deepreview does not force a separate profile/model/runtime layer beyond pinning resumed multicodex-backed threads to the profile that created them.
 - Managed repository state is isolated per repo and source branch, so different branches of the same repo can run concurrently without sharing a checkout.
 - deepreview blocks concurrent runs only when both the repo and source branch match.
-- Default mode works on a delivery branch and opens a pull request.
+- `pr` mode (default) works on a delivery branch and opens a pull request.
 - Default pull request mode requires a GitHub-backed repo identity.
-- Your current branch and working directory stay untouched in default mode.
+- Your current branch and working directory stay untouched in `pr` mode.
 - yolo mode is available, and it is off by default.
 - Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
 - Public delivery surfaces are privacy-guarded (PR title/body and delivery summaries are redacted/guarded before final delivery is accepted).
@@ -70,7 +70,7 @@ Optional launcher:
 
 - Windows is unsupported.
 - Requires local `git` and `codex`; default pull request mode also requires `gh`.
-- Local filesystem origin remotes are not supported in default `pr` mode.
+- Local filesystem origin remotes are not supported in `pr` mode.
 - Review quality depends on Codex outputs and repository test coverage.
 - Deep runs can take significant time on large repositories or high `--max-rounds`.
 - Execute prompt 1 receives review file paths plus a compact manifest, so Codex can read more detail when it chooses without forcing large review-summary blocks into the prompt.
