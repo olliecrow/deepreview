@@ -722,9 +722,9 @@ Long-running review runs need a predictable operator escape hatch that does not 
 Rationale:
 Immediate hard-stop preserves operator control/token budget while still maintaining workspace hygiene and lock correctness via cleanup.
 Trade-offs:
-Adds interrupt orchestration and aggressive process teardown behavior.
+Adds interrupt orchestration, aggressive process teardown behavior, and a small amount of extra cleanup/reporting logic around transient run-root artifacts.
 Enforcement:
-Review command captures interrupts, cancels run context, and force-terminates active command/process trees immediately with `SIGKILL`, then returns exit code `130` after cleanup; tests verify cancellation classification, command teardown behavior, and interrupt-triggered cleanup/source-branch non-mutation.
+Review command captures interrupts, cancels run context, and force-terminates active command/process trees immediately with `SIGKILL`; run roots are created eagerly once arguments resolve so interrupted runs still have a stable artifact location; interrupt exit prints the failure summary surface before returning exit code `130`; review-stage teardown waits for worker goroutines plus active command shutdown before removing worktrees; and interrupt finalization performs a last transient-worktree scrub under the run root so interrupted runs do not report cleanup complete while review worktrees still exist. Tests verify cancellation classification, command teardown behavior, interrupt failure-summary output, and interrupt-triggered cleanup/source-branch non-mutation.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/tui.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/gitops.go`
 
