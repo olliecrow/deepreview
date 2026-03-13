@@ -1466,10 +1466,6 @@ func (o *Orchestrator) runExecuteStage(
 		"REVIEW_INPUT_MANIFEST":       reviewInputManifest,
 		"ROUND_MODE_NOTE":             roundModeNote,
 		"ROUND_EXECUTE_MODE_OVERRIDE": roundExecuteModeOverride,
-		// Backward compatibility for older templates that still use fanout placeholders.
-		"FANOUT_REVIEW_PATHS":     reviewReportPathsBullet,
-		"FANOUT_REVIEWS_MARKDOWN": reviewInputManifest,
-		"REVIEW_REPORTS_MARKDOWN": reviewInputManifest,
 		"ROUND_TRIAGE_PATH":       filepath.ToSlash(roundTriageWorktreePath),
 		"ROUND_PLAN_PATH":         filepath.ToSlash(roundPlanWorktreePath),
 		"ROUND_VERIFICATION_PATH": filepath.ToSlash(roundVerificationWorktreePath),

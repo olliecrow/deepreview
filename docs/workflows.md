@@ -27,8 +27,7 @@ This document defines how work is tracked so progress compounds without context 
 - Independent reviewers must never share chat history.
 - Reset both the worktree and Codex context on mutable-stage retries.
 - Keep orchestration simple: avoid unbounded retries; only bounded inactivity restarts are allowed.
-- Encourage local commits throughout rounds; never push during intermediate rounds.
-- Pushes remain forbidden during intermediate rounds. Delivery publishes only after local preparation and final pre-publication validation are complete.
+- Encourage local commits throughout rounds, but never push during intermediate rounds. Delivery publishes only after local preparation and final pre-publication validation are complete.
 - In PR mode, let the delivery prompt own final local branch preparation, then let deepreview push, create the PR, and perform bounded post-create mergeability checks.
 - Aggressively clean stale worktrees/transient artifacts after each round.
 
