@@ -18,17 +18,17 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 1. You run deepreview for a repository and source branch.
 2. It launches several independent review workers in parallel.
 3. Each independent review worker must complete and write its review markdown report; deepreview monitors all Codex workers for activity and restarts stalled workers with bounded retries to avoid pipeline stalls.
-4. The execute stage runs three prompts in one Codex thread: consolidate and plan, execute and verify, cleanup/summary/commit.
+4. The execute stage runs two prompts in one Codex thread: triage/plan, then implement/verify/finalize/commit.
 5. Canonical round artifacts and logs are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside the active worktree first, and deepreview copies the canonical artifacts back into the run directory.
 6. If execute says `continue`, deepreview always runs another review round.
 7. If execute says `stop` once, deepreview still runs one confirmation round.
 8. If execute says `stop` for two consecutive rounds, deepreview stops the loop, even if the second stop round also changed code.
-9. In default mode, it opens one pull request back into your source branch; if the run made tangible repository changes but did not finish cleanly, it still opens a draft PR marked `[INCOMPLETE]`.
-10. In default mode, it first runs one Codex PR-preparation pass, then bounded privacy remediation, then one post-delivery Codex pass to generate the final PR title and description for complete PR deliveries.
-11. The final PR title/body are Codex-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
+9. In `pr` mode (default), it runs one fresh Codex delivery stage to prepare the publishable local branch state, then deepreview pushes and opens one pull request back into your source branch.
+10. If the run made tangible repository changes but did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
+11. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 12. In yolo mode, it pushes directly to your source branch.
 13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
-14. In PR mode, deepreview runs a bounded privacy remediation loop (up to 3 Codex-guided attempts) in a candidate-branch worktree immediately before push/PR delivery, and then proceeds with PR delivery by policy after the bounded attempts.
+14. In PR mode, deepreview performs bounded post-create mergeability validation after PR creation; it does not currently run a remote fix/retry/edit loop after the PR is opened.
 
 ## Requirements
 
@@ -57,23 +57,23 @@ Optional launcher:
 - Codex prompt runs use your normal local Codex configuration by default; deepreview does not force a separate profile/model/runtime layer beyond pinning resumed multicodex-backed threads to the profile that created them.
 - Managed repository state is isolated per repo and source branch, so different branches of the same repo can run concurrently without sharing a checkout.
 - deepreview blocks concurrent runs only when both the repo and source branch match.
-- Default mode works on a delivery branch and opens a pull request.
+- `pr` mode (default) works on a delivery branch and opens a pull request.
 - Default pull request mode requires a GitHub-backed repo identity.
-- Your current branch and working directory stay untouched in default mode.
+- Your current branch and working directory stay untouched in `pr` mode.
 - yolo mode is available, and it is off by default.
 - Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
-- Public delivery surfaces are privacy-guarded (PR title/body and delivery summaries are redacted/guarded; PR mode also runs bounded pre-delivery privacy remediation attempts over delivery commit messages and changed files).
+- Public delivery surfaces are privacy-guarded (PR title/body and delivery summaries are redacted/guarded before final delivery is accepted).
 - Local terminal output is intentionally unredacted so operators can see literal paths and command errors while running deepreview.
-- You can cancel at any time with `Ctrl+C`; deepreview performs lock/worktree cleanup before exit.
+- You can cancel at any time with `Ctrl+C`; deepreview prints an interrupt failure summary, cleans up locks/worktrees, and then exits.
 
 ## Known limitations
 
 - Windows is unsupported.
 - Requires local `git` and `codex`; default pull request mode also requires `gh`.
-- Local filesystem origin remotes are not supported in default `pr` mode.
+- Local filesystem origin remotes are not supported in `pr` mode.
 - Review quality depends on Codex outputs and repository test coverage.
 - Deep runs can take significant time on large repositories or high `--max-rounds`.
-- Execute prompt 1 receives compact review summaries plus file paths to the full on-disk reviews, so Codex can read more detail when it chooses without forcing all review text into the prompt.
+- Execute prompt 1 receives review file paths plus a compact manifest, so Codex can read more detail when it chooses without forcing large review-summary blocks into the prompt.
 
 ## Quick start
 

@@ -207,13 +207,13 @@ Run a deep, multi-stage review pipeline against a source branch in an isolated w
 What this command does:
   1) Clones/fetches a branch-scoped managed copy of the repository under ~/deepreview (or override env).
   2) Runs independent review workers in isolated worktrees.
-  3) Runs three execute-stage prompts in one Codex thread: consolidate+plan, execute+verify, cleanup+summary+commit.
+  3) Runs two execute-stage prompts in one fresh Codex thread: triage+plan, then implement+verify+finalize.
   4) Repeats rounds up to max rounds while another round is still required.
      A `+"`continue`"+` decision always forces another round.
      A first `+"`stop`"+` still forces one confirmation round.
      A second consecutive `+"`stop`"+` ends the loop, even if that round also changed the repository.
   5) Delivers once at the end:
-     - mode=pr (default): optionally runs a Codex PR-preparation pass, then privacy remediation, then pushes candidate branch + opens PR back into source branch
+     - mode=pr (default): runs one fresh Codex delivery stage for final local delivery preparation, then deepreview pushes, opens the PR, and performs bounded post-create mergeability validation
      - mode=yolo: pushes directly to source branch
 
 Usage:
@@ -566,14 +566,21 @@ func runReviewCommand(args []string) int {
 			return 0
 		}
 		if isInterruptError(err) || interruptCount.Load() > 0 {
+			printFailureArtifactSummary(os.Stderr, nil, ReviewConfig{})
 			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 			return 130
 		}
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
+	if err := os.MkdirAll(filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID), 0o755); err != nil {
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
+		return 1
+	}
 	if err := validateLocalBranchReadyForRemoteReview(parsed.Config.GitBin, parsed.Config.Repo, parsed.Config.SourceBranch); err != nil {
 		if isInterruptError(err) || interruptCount.Load() > 0 {
+			cleanupInterruptedRunArtifacts(filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID))
+			printFailureArtifactSummary(os.Stderr, nil, parsed.Config)
 			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 			return 130
 		}
@@ -616,6 +623,7 @@ func runReviewCommand(args []string) int {
 	}
 	if err != nil {
 		if isInterruptError(err) || interruptCount.Load() > 0 {
+			cleanupInterruptedRunArtifacts(orchestrator.RunRoot())
 			printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
 			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 			return 130
@@ -627,6 +635,7 @@ func runReviewCommand(args []string) int {
 		return 1
 	}
 	if interruptCount.Load() > 0 {
+		cleanupInterruptedRunArtifacts(orchestrator.RunRoot())
 		printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
 		fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
 		return 130
@@ -948,9 +957,8 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 			fmt.Fprintf(out, "     %d. %s\n", idx+1, executePromptLabel(templateName))
 		}
 	} else {
-		fmt.Fprintln(out, "     1. consolidate and plan")
-		fmt.Fprintln(out, "     2. execute and verify")
-		fmt.Fprintln(out, "     3. cleanup, summary, commit")
+		fmt.Fprintln(out, "     1. triage and plan")
+		fmt.Fprintln(out, "     2. implement, verify, finalize")
 	}
 
 	fmt.Fprintln(out, "   - if round status is `continue`, run another review round")
@@ -959,12 +967,12 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintln(out, "5. delivery stage")
 	if cfg.Mode == ModePR {
 		fmt.Fprintln(out, "   - validate delivery files")
-		fmt.Fprintln(out, "   - run one Codex PR-preparation pass before privacy remediation")
-		fmt.Fprintln(out, "   - run bounded privacy remediation attempts (up to 3) before delivery")
-		fmt.Fprintln(out, "   - push candidate branch and open one pull request into source branch")
+		fmt.Fprintln(out, "   - run one fresh Codex delivery stage")
+		fmt.Fprintln(out, "   - finalize local branch state for publication")
+		fmt.Fprintln(out, "   - push the delivery branch, open the PR, and wait briefly for mergeability to settle")
 	} else {
 		fmt.Fprintln(out, "   - validate delivery files")
-		fmt.Fprintln(out, "   - push final changes directly to source branch")
+		fmt.Fprintln(out, "   - run one fresh Codex delivery stage and push the source branch after final verification")
 	}
 	fmt.Fprintln(out, "6. write final summary and print completion output")
 	fmt.Fprintln(out)
@@ -1010,30 +1018,69 @@ func shouldPrintFailureArtifactSummary(err error) bool {
 	return err != nil
 }
 
-func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, config ReviewConfig) {
-	if out == nil || orchestrator == nil {
+func cleanupInterruptedRunArtifacts(runRoot string) {
+	if strings.TrimSpace(runRoot) == "" {
 		return
 	}
-	runRoot := orchestrator.RunRoot()
+	_ = os.MkdirAll(runRoot, 0o755)
+	waitForActiveCommandsToExit(15 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		worktrees := make([]string, 0)
+		_ = filepath.WalkDir(runRoot, func(path string, d os.DirEntry, err error) error {
+			if err != nil {
+				return nil
+			}
+			if d.IsDir() && filepath.Base(path) == "worktree" {
+				worktrees = append(worktrees, path)
+				return filepath.SkipDir
+			}
+			return nil
+		})
+		if len(worktrees) == 0 {
+			return
+		}
+		for _, worktree := range worktrees {
+			_ = os.RemoveAll(worktree)
+		}
+		if time.Now().After(deadline) {
+			return
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
+func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, config ReviewConfig) {
+	if out == nil {
+		return
+	}
+	runRoot := ""
+	repoSlug := strings.TrimSpace(config.Repo)
+	if orchestrator != nil {
+		runRoot = orchestrator.RunRoot()
+		if candidate := strings.TrimSpace(orchestrator.RepoSlug()); strings.Trim(candidate, "/") != "" {
+			repoSlug = candidate
+		}
+	}
 	if strings.TrimSpace(runRoot) == "" {
 		runRoot = filepath.Join(config.WorkspaceRoot, "runs", config.RunID)
 	}
 	logsPath := filepath.Join(runRoot, "logs")
-	repoSlug := strings.TrimSpace(orchestrator.RepoSlug())
 	if strings.Trim(repoSlug, "/") == "" {
 		repoSlug = ""
-	}
-	if repoSlug == "" {
-		repoSlug = strings.TrimSpace(config.Repo)
 	}
 	reviewSnapshot := readCompletionReviewSnapshot(runRoot)
 
 	_, _ = fmt.Fprintln(out, "deepreview failure summary:")
-	_, _ = fmt.Fprintf(out, "run: `%s`\n", config.RunID)
+	if strings.TrimSpace(config.RunID) != "" {
+		_, _ = fmt.Fprintf(out, "run: `%s`\n", config.RunID)
+	}
 	if repoSlug != "" {
 		_, _ = fmt.Fprintf(out, "repository reviewed: `%s`\n", repoSlug)
 	}
-	_, _ = fmt.Fprintf(out, "source branch reviewed: `%s`\n", config.SourceBranch)
+	if strings.TrimSpace(config.SourceBranch) != "" {
+		_, _ = fmt.Fprintf(out, "source branch reviewed: `%s`\n", config.SourceBranch)
+	}
 	if reviewSnapshot.CompletedRounds > 0 {
 		_, _ = fmt.Fprintf(out, "review rounds completed before exit: %d\n", reviewSnapshot.CompletedRounds)
 	}
@@ -1043,7 +1090,10 @@ func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, conf
 			_, _ = fmt.Fprintf(out, "latest review summary: %s\n", reason)
 		}
 	}
-	delivery := orchestrator.LastDelivery()
+	var delivery *DeliveryResult
+	if orchestrator != nil {
+		delivery = orchestrator.LastDelivery()
+	}
 	switch {
 	case delivery == nil || delivery.Skipped:
 		_, _ = fmt.Fprintln(out, "run exited before delivery; no push or PR was created.")

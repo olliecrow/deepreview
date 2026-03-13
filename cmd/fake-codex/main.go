@@ -252,6 +252,25 @@ func gitCommitIfPossible(message string) error {
 	return nil
 }
 
+func gitPushRefspecIfPossible(refspec string) error {
+	if strings.TrimSpace(refspec) == "" {
+		return fmt.Errorf("empty refspec")
+	}
+	_, err := runGit("push", "origin", refspec)
+	return err
+}
+
+func ghBin() string {
+	if candidate := strings.TrimSpace(os.Getenv("DEEPREVIEW_GH_BIN")); candidate != "" {
+		return candidate
+	}
+	return "gh"
+}
+
+func fakeAWSAccessKey() string {
+	return "AKIA" + strings.Repeat("A", 8) + strings.Repeat("B", 8)
+}
+
 func handlePrompt(prompt string) (string, error) {
 	if strings.Contains(prompt, "independent deepreview reviewer in the independent review stage") {
 		outPath := regexGet("Output report path: `([^`]+)`", prompt)
@@ -259,23 +278,31 @@ func handlePrompt(prompt string) (string, error) {
 			return "", err
 		}
 		if outPath != "" {
-			if err := writeText(outPath, "# Independent Review\n\n## Findings\n- no actionable findings\n"); err != nil {
+			report := "# Independent Review 1\n\n## Verdict\n- `material_findings_found: no`\n- `merge_readiness: ready`\n- `No high-confidence material findings were found.`\n\n## Material Findings\n\n## Verification ideas\n- no additional checks suggested by fake codex\n"
+			if err := writeText(outPath, report); err != nil {
 				return "", err
 			}
 		}
 		return "review complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 1 of 3") {
+	if strings.Contains(prompt, "prompt 1 of 2") || strings.Contains(prompt, "prompt 1 of 3") {
 		triage := regexGet("Write triage decisions to `([^`]+)`", prompt)
 		if triage == "" {
 			triage = regexGet("Triage output path: `([^`]+)`", prompt)
+		}
+		if triage == "" {
+			triage = filepath.Join(".", ".deepreview", "artifacts", "round-triage.md")
 		}
 		if err := requirePromptOutputWithinScope(prompt, triage, "triage output path"); err != nil {
 			return "", err
 		}
 		if triage != "" {
-			if err := writeText(triage, "# Triage\n\n- accept: sample change\n"); err != nil {
+			triageText := "# Round Triage\n\n### sample accepted change\n- source reviewers: 1\n- commonality count: 1\n- disposition: accept\n- impact: material\n- confidence: high\n- evidence summary: fake codex validated a sample change path\n- rationale: used by integration tests\n\n## accepted items\n- sample accepted change\n"
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_SKIP_ACCEPTED_TRIAGE")) != "" {
+				triageText = "# Round Triage\n\nNo execute items selected for this round.\n"
+			}
+			if err := writeText(triage, triageText); err != nil {
 				return "", err
 			}
 		}
@@ -283,25 +310,31 @@ func handlePrompt(prompt string) (string, error) {
 		if plan == "" {
 			plan = regexGet("Plan output path: `([^`]+)`", prompt)
 		}
+		if plan == "" {
+			plan = filepath.Join(".", ".deepreview", "artifacts", "round-plan.md")
+		}
 		if err := requirePromptOutputWithinScope(prompt, plan, "plan output path"); err != nil {
 			return "", err
 		}
 		if plan != "" {
-			if err := writeText(plan, "# Plan\n\n- apply sample change\n"); err != nil {
+			if err := writeText(plan, "# Plan\n\n## scope\n- fake execute scope\n\n## task list\n- apply sample change\n\n## complexity/size impact\n- neutral\n\n## verification matrix\n- fake checks\n\n## docs/notes/decision updates\n- none\n\n## risks and mitigations\n- none\n\n## stop conditions\n- stop when fake checks pass\n"); err != nil {
 				return "", err
 			}
 		}
 		return "triage and plan complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 2 of 3") {
+	if strings.Contains(prompt, "prompt 2 of 2") || strings.Contains(prompt, "prompt 2 of 3") {
 		roundNumber := roundNumberFromPrompt(prompt)
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
+		if verification == "" {
+			verification = filepath.Join(".", ".deepreview", "artifacts", "round-verification.md")
+		}
 		if err := requirePromptOutputWithinScope(prompt, verification, "verification output path"); err != nil {
 			return "", err
 		}
 		if verification != "" {
-			if err := writeText(verification, "# Verification\n\n- fake checks passed\n"); err != nil {
+			if err := writeText(verification, "# Verification\n\n- commands attempted: fake checks\n- pass/fail outcomes: passed\n- checks skipped with reason: none\n- unresolved failures or blockers: none\n- residual risks: none\n"); err != nil {
 				return "", err
 			}
 		}
@@ -359,11 +392,11 @@ func handlePrompt(prompt string) (string, error) {
 				changeContent = "path /" + strings.Join([]string{"Users", "fake-user", "private", "project"}, "/") + "\n"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE")) != "" {
-				changeContent = "key " + "AKIA" + "ABCDEFGHIJKLMNOP" + "\n"
+				changeContent = "key " + fakeAWSAccessKey() + "\n"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_BINARY_SECRET_PATTERN_CHANGE")) != "" {
 				changePath = filepath.Join(".", "secret.bin")
-				changeContent = "prefix\x00" + "AKIA" + "ABCDEFGHIJKLMNOP" + "\x00suffix"
+				changeContent = "prefix\x00" + fakeAWSAccessKey() + "\x00suffix"
 			}
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
 				changePath = filepath.Join(".", "docs", "generated.md")
@@ -372,30 +405,30 @@ func handlePrompt(prompt string) (string, error) {
 			if err := writeText(changePath, changeContent); err != nil {
 				return "", err
 			}
-			commitMessage := strings.TrimSpace(os.Getenv("FAKE_CODEX_CHANGE_COMMIT_MESSAGE"))
-			if commitMessage == "" {
-				commitMessage = "deepreview: fake execute change"
-			}
-			if err := gitCommitIfPossible(commitMessage); err != nil {
-				return "", err
-			}
 		}
-		return "execute complete", nil
-	}
-
-	if strings.Contains(prompt, "prompt 3 of 3") {
-		roundNumber := roundNumberFromPrompt(prompt)
 		summary := regexGet("Write round summary to `([^`]+)`", prompt)
+		if summary == "" {
+			summary = regexGet("Round summary output path: `([^`]+)`", prompt)
+		}
+		if summary == "" {
+			summary = filepath.Join(".", ".deepreview", "artifacts", "round-summary.md")
+		}
 		if err := requirePromptOutputWithinScope(prompt, summary, "summary output path"); err != nil {
 			return "", err
 		}
 		if summary != "" {
-			if err := writeText(summary, "# Round Summary\n\n- complete\n"); err != nil {
+			if err := writeText(summary, "# Round Summary\n\n- accepted/rejected/deferred triage outcomes: fake accept\n- implemented changes: fake execute update\n- verification evidence overview: fake checks passed\n- residual risks: none\n- complexity/size impact: neutral\n- strict-scope statement: accepted work remained material/high-confidence only\n"); err != nil {
 				return "", err
 			}
 		}
 
 		statusPath := regexGet("Write `([^`]+)` JSON", prompt)
+		if statusPath == "" {
+			statusPath = regexGet("Round status output path: `([^`]+)`", prompt)
+		}
+		if statusPath == "" {
+			statusPath = filepath.Join(".", ".deepreview", "artifacts", "round-status.json")
+		}
 		if err := requirePromptOutputWithinScope(prompt, statusPath, "status output path"); err != nil {
 			return "", err
 		}
@@ -419,13 +452,37 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
-		return "finalize complete", nil
+		commitMessage := strings.TrimSpace(os.Getenv("FAKE_CODEX_CHANGE_COMMIT_MESSAGE"))
+		if commitMessage == "" {
+			commitMessage = "deepreview: fake execute change"
+		}
+		if err := gitCommitIfPossible(commitMessage); err != nil {
+			return "", err
+		}
+		return "implement, verify, finalize complete", nil
 	}
 
-	if strings.Contains(prompt, "pre-delivery PR preparation stage") {
-		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_WRITE_FILE")) != "" {
-			if err := writeText(filepath.Join(".", "pr-prepare.txt"), "prepared\n"); err != nil {
+	if strings.Contains(prompt, "deepreview final delivery stage") {
+		mode := regexGet("Mode: `([^`]+)`", prompt)
+		deliveryBranch := regexGet("Delivery branch: `([^`]+)`", prompt)
+		resultPath := regexGet("Output result path: `([^`]+)`", prompt)
+		if err := requirePromptOutputWithinScope(prompt, resultPath, "delivery result path"); err != nil {
+			return "", err
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_WRITE_FILE")) != "" || strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_WRITE_FILE")) != "" {
+			if err := writeText(filepath.Join(".", "delivery-ready.txt"), "delivery\n"); err != nil {
 				return "", err
+			}
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
+			docPath := filepath.Join(".", "docs", "generated.md")
+			content, err := os.ReadFile(docPath)
+			if err == nil {
+				sourcePath := filepath.ToSlash(filepath.Join(string(os.PathSeparator)+"Users", "fake-user", "private", "project"))
+				sanitized := strings.ReplaceAll(string(content), sourcePath, "/path/to/project")
+				if err := writeText(docPath, sanitized); err != nil {
+					return "", err
+				}
 			}
 		}
 		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_DELETE_ROUND_FILE")) != "" {
@@ -433,74 +490,58 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
-		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_STAGE_ALL")) != "" {
-			if err := gitCommitIfPossible("deepreview: prepare delivery branch"); err != nil {
+		preparedBranch := ""
+		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_CREATE_BRANCH")) != "" {
+			if _, err := runGit("checkout", "-B", deliveryBranch); err != nil {
 				return "", err
 			}
+			preparedBranch = deliveryBranch
 		}
-		return "pr preparation complete", nil
-	}
-
-	if strings.Contains(prompt, "post-delivery PR description enhancement stage") {
-		titlePath := regexGet("Output title path: `([^`]+)`", prompt)
-		if titlePath != "" {
-			title := "deepreview: tighten diagnostics and summarize round outcomes clearly"
-			if err := writeText(titlePath, title+"\n"); err != nil {
-				return "", err
-			}
-		}
-		outPath := regexGet("Output summary path: `([^`]+)`", prompt)
-		if outPath != "" {
-			content := "## summary\n- top summary generated by fake codex\n\n## what changed and why\n- execute outputs were reviewed and summarized\n\n## round outcomes\n- round-01: stop, no additional high-conviction issues remained\n\n## verification\n- fake checks passed in execute stage\n\n## risks and follow-ups\n- no material follow-ups identified in this fake flow\n\n## final status\n- pr body enhancement complete\n"
-			if err := writeText(outPath, content); err != nil {
-				return "", err
-			}
-		}
-		return "pr description summary complete", nil
-	}
-
-	if strings.Contains(prompt, "pre-delivery privacy remediation stage") {
-		statusPath := regexGet("Output status path: `([^`]+)`", prompt)
-		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_WRITE_UNCOMMITTED_FILE")) != "" {
-			if err := writeText(filepath.Join(".", "privacy-fix-dirty.txt"), "dirty remediation\n"); err != nil {
-				return "", err
-			}
-		}
-		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_SANITIZE_BINARY_UNCOMMITTED")) != "" {
-			if err := writeText(filepath.Join(".", "secret.bin"), "prefix\x00clean\x00suffix"); err != nil {
-				return "", err
-			}
-		}
-		if statusPath != "" {
-			if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_PRIVACY_STATUS_WITHIN_CWD")) != "" {
-				cwd, err := os.Getwd()
-				if err != nil {
+		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_BRANCH_SECRET")) != "" {
+			if preparedBranch == "" {
+				if _, err := runGit("checkout", "-B", deliveryBranch); err != nil {
 					return "", err
 				}
-				if !pathWithinBase(cwd, statusPath) {
-					return "", fmt.Errorf("privacy status path must stay within cwd: %s", statusPath)
-				}
+				preparedBranch = deliveryBranch
 			}
-			decision := strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_DECISION"))
-			if decision == "" {
-				decision = "continue"
+			if err := writeText(filepath.Join(".", "delivery_branch_secret.txt"), "key "+fakeAWSAccessKey()+"\n"); err != nil {
+				return "", err
 			}
+		}
+		if err := gitCommitIfPossible("deepreview: prepare delivery branch"); err != nil {
+			return "", err
+		}
+		if mode == "pr" {
 			payload := map[string]any{
-				"decision":   decision,
-				"reason":     "fake privacy remediation status",
-				"confidence": 0.9,
+				"mode":       mode,
+				"incomplete": false,
+			}
+			if preparedBranch != "" {
+				payload["delivery_branch"] = preparedBranch
+			}
+			if strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE")) != "" {
+				payload["incomplete"] = true
+				reason := strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE_REASON"))
+				if reason == "" {
+					reason = "fake delivery blocked on mergeability"
+				}
+				payload["incomplete_reason"] = reason
 			}
 			b, _ := json.MarshalIndent(payload, "", "  ")
-			if err := writeText(statusPath, string(b)+"\n"); err != nil {
+			if err := writeText(resultPath, string(b)+"\n"); err != nil {
 				return "", err
 			}
+			return "delivery complete", nil
 		}
-		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PRIVACY_STAGE_ALL")) != "" {
-			if err := gitCommitIfPossible("deepreview: privacy remediation attempt"); err != nil {
-				return "", err
-			}
+		payload := map[string]any{
+			"mode":       mode,
+			"incomplete": false,
 		}
-		return "privacy remediation complete", nil
+		b, _ := json.MarshalIndent(payload, "", "  ")
+		if err := writeText(resultPath, string(b)+"\n"); err != nil {
+			return "", err
+		}
+		return "delivery complete", nil
 	}
 
 	return "ok", nil

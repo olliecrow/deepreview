@@ -22,13 +22,15 @@ This document defines how work is tracked so progress compounds without context 
 
 ## Round-loop operating rules
 - Execute deepreview as bounded rounds (`max_rounds`, default `5`) with round-loop control driven by Codex status decisions plus repository change detection.
-- Use fresh review/execute worktrees each round; do not reuse stale round worktrees.
-- Use one shared independent-review prompt template and an ordered execute prompt queue in one Codex context per round.
+- Use fresh review/execute/delivery worktrees each round/stage; do not reuse stale mutable worktrees.
+- Use one shared independent-review prompt template, one two-prompt execute queue in a shared execute context, and one fresh delivery prompt context.
+- Independent reviewers must never share chat history.
+- Reset both the worktree and Codex context on mutable-stage retries.
 - Keep orchestration simple: avoid unbounded retries; only bounded inactivity restarts are allowed.
-- Encourage local commits throughout rounds; never push during intermediate rounds.
-- Push only once at final delivery; do not push intermediate-round commits.
-- In PR mode, run one Codex PR-preparation pass before privacy remediation so final delivery cleanup/history fixes stay inside the same managed branch workflow.
+- Encourage local commits throughout rounds, but never push during intermediate rounds. Delivery publishes only after local preparation and final pre-publication validation are complete.
+- In PR mode, let the delivery prompt own final local branch preparation, then let deepreview push, create the PR, and perform bounded post-create mergeability checks.
 - Aggressively clean stale worktrees/transient artifacts after each round.
+- On user interrupt (`Ctrl+C`), treat the run as a self-serve failure: stop active commands immediately, print the interrupt failure summary, scrub transient run-root worktrees, and exit with cancel status.
 
 ## Parallel and subagent workflows
 - Use isolated worktrees or dedicated working directories when streams are independent.
