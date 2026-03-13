@@ -2545,3 +2545,84 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 		t.Fatalf("did not expect round decision entry from missing round record, got:\n%s", finalSummary)
 	}
 }
+
+func TestRunPRModeIncompleteDraftAutoSanitizesDocsBeforePublishing(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "docs", "generated.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "docs/generated.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE=1",
+		"FAKE_CODEX_DECISION=continue",
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected incomplete draft PR summary output, got: %s", output)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	var deliveryRef string
+	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
+		ref = strings.TrimSpace(ref)
+		if strings.Contains(ref, "origin/deepreview/feature/test/") {
+			deliveryRef = ref
+			break
+		}
+	}
+	if deliveryRef == "" {
+		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
+	}
+	deliveredDoc := runCmd(t, td, nil, "git", "-C", userClone, "show", deliveryRef+":docs/generated.md")
+	if strings.Contains(deliveredDoc, "/Users/") {
+		t.Fatalf("expected incomplete draft delivery doc to be sanitized, got: %s", deliveredDoc)
+	}
+	if !strings.Contains(deliveredDoc, "/path/to/project") {
+		t.Fatalf("expected incomplete draft delivery doc to contain sanitized placeholder, got: %s", deliveredDoc)
+	}
+}

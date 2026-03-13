@@ -2344,14 +2344,26 @@ func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(repoPath, candi
 	if !isAutoSanitizableDocPath(relPath) {
 		return false, nil
 	}
+	if _, err := Git(repoPath, o.config.GitBin, true, "checkout", candidateBranch); err != nil {
+		return false, err
+	}
 	targetPath := filepath.Join(repoPath, relPath)
 	content, err := os.ReadFile(targetPath)
 	if err != nil {
-		return false, err
+		if !os.IsNotExist(err) {
+			return false, err
+		}
+		content, err = FileContentAtRef(repoPath, o.config.GitBin, candidateBranch, relPath)
+		if err != nil {
+			return false, err
+		}
 	}
 	sanitized := replaceLocalPathsWithPlaceholder(string(content))
 	if sanitized == string(content) {
 		return false, nil
+	}
+	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
+		return false, err
 	}
 	if err := os.WriteFile(targetPath, []byte(sanitized), 0o644); err != nil {
 		return false, err
@@ -2923,8 +2935,32 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		return false, err
 	}
 	if err := o.secretHygieneScan(o.managedRepoPath, candidateBranch); err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-		return false, err
+		remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(o.managedRepoPath, candidateBranch, err)
+		if remediationErr != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(remediationErr))
+			return false, remediationErr
+		}
+		if !remediated {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
+		changedFiles, err = o.validateDeliveryFiles(candidateBranch)
+		if err != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
+		if len(changedFiles) == 0 {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
+			return false, nil
+		}
+		if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
+		if err := o.secretHygieneScan(o.managedRepoPath, candidateBranch); err != nil {
+			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+			return false, err
+		}
 	}
 
 	reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(cause.Error(), "\n", " ")), 500)
