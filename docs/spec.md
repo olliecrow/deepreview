@@ -32,7 +32,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview resolves the Codex prompt launcher by name instead of by hardcoded local repo path: use `multicodex` whenever it is available on `PATH`; otherwise fall back to `codex` unless `DEEPREVIEW_REQUIRE_MULTICODEX` is set.
 - fresh multicodex-backed prompt contexts use normal `multicodex exec` profile selection, but once a prompt creates a resumable Codex thread, later deepreview resumes for that logical context must stay on the same selected multicodex profile.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
-- deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, then lock/worktree cleanup runs before process exit.
+- deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, deepreview emits a failure summary for the interrupted run, then lock/worktree cleanup and final transient-worktree scrubbing run before process exit.
 - round loop runs up to `--max-rounds` (default `5`) total execute rounds and may stop early.
 - independent reviews run in independent worktrees.
 - independent review concurrency defaults to `4` and is configurable.
