@@ -1102,3 +1102,16 @@ Enforcement:
 Orchestrator retry logic snapshots immutable delivery baselines before PR-prep/privacy-fix attempts, execute retries preserve only prior successful prompt outputs, and integration tests cover stale execute artifacts plus stale PR-prep/privacy-remediation commits.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
+
+Decision:
+Pin resumed multicodex-backed deepreview contexts to the profile that created the thread, while leaving fresh contexts on normal multicodex selection.
+Context:
+Deepreview runs many separate Codex prompt contexts during a run. Fresh multicodex invocations are intended to balance usage dynamically, but execute-stage prompt chains resume a prior Codex thread. If usage ranking changes mid-run, a later `multicodex exec resume <thread>` can otherwise land on a different multicodex profile than the one that created the thread.
+Rationale:
+Per-context pinning keeps the desired balancing behavior for new work while protecting thread continuity for resumed work. Pinning the entire run would reduce balancing more than necessary, and inferring the owning profile indirectly would be brittle.
+Trade-offs:
+Resumed contexts can no longer migrate to a lower-usage profile mid-thread, so balancing is slightly less flexible once a thread has started. Deepreview now depends on multicodex exposing the selected profile in machine-readable form for fresh thread creation.
+Enforcement:
+Fresh multicodex-backed prompts request selected-profile metadata, deepreview stores the creating profile alongside resumable thread state, later resumes run through `multicodex run <profile> -- codex exec ...`, and execute-stage orchestration fails fast if a resumable multicodex thread is created without selected-profile metadata.
+References:
+`internal/deepreview/codex.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/codex_test.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`, `README.md`, `docs/spec.md`, `docs/architecture.md`

@@ -44,6 +44,7 @@ Optional launcher:
 - `multicodex`
   - when available on `PATH`, deepreview always uses `multicodex exec` for Codex prompt runs
   - when a multicodex-backed prompt creates a resumable Codex thread, deepreview records the selected multicodex profile and reuses that profile for later `resume` calls in the same logical context
+  - fresh prompt families still start with normal multicodex lowest-usage selection
   - when unavailable, deepreview falls back to `codex exec`
   - set `DEEPREVIEW_REQUIRE_MULTICODEX=1` to fail fast instead of falling back
   - `DEEPREVIEW_CODEX_BIN` only changes the codex fallback path; it does not override a working `multicodex`
