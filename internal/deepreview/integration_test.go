@@ -269,6 +269,57 @@ fi`)
 	return wrapperPath
 }
 
+func buildReviewArtifactStallCodexWrapper(t *testing.T, fakeCodex string) string {
+	t.Helper()
+	tmpDir := t.TempDir()
+	wrapperPath := filepath.Join(tmpDir, "review-artifact-stalling-codex")
+	script := buildStallCodexWrapperScript(fakeCodex, `if grep -q "independent deepreview reviewer" "$prompt_file" && [ ! -f "$marker_path" ]; then
+  mkdir -p "$(dirname "$marker_path")"
+  : > "$marker_path"
+  mkdir -p .deepreview
+  cat > .deepreview/review-01.md <<'EOF'
+# Independent Review 1
+
+## Verdict
+- material_findings_found: yes
+- merge_readiness: needs_fixes
+
+## Material Findings
+### stale review artifact
+- Category: bug
+- Impact: material
+- Location: stale worker output
+- Why it matters: stale artifact should not be reused
+- Evidence: injected by test wrapper
+- Recommendation: reset before retry
+- Confidence: high
+
+## Verification ideas
+- ensure stale artifact is not reused
+EOF
+  sleep "${STALL_SECONDS:-15}"
+fi
+if grep -q "independent deepreview reviewer" "$prompt_file"; then
+  thread_id="thread-skip-review-output"
+  if [ "${1:-}" = "exec" ] && [ "${2:-}" = "resume" ] && [ -n "${3:-}" ]; then
+    thread_id="$3"
+  fi
+  printf '{"type":"thread.started","thread_id":"%s"}\n' "$thread_id"
+  printf '{"type":"turn.started"}\n'
+  printf '{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"review complete"}}\n'
+  printf '{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":1}}\n'
+  exit 0
+fi
+`)
+	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write review artifact stalling codex wrapper: %v", err)
+	}
+	if err := os.Symlink(wrapperPath, filepath.Join(tmpDir, "multicodex")); err != nil {
+		t.Fatalf("symlink review artifact stalling multicodex: %v", err)
+	}
+	return wrapperPath
+}
+
 func buildStageCommitStallCodexWrapper(t *testing.T, fakeCodex, promptNeedle, staleFile, commitMessage string) string {
 	t.Helper()
 	tmpDir := t.TempDir()
@@ -972,6 +1023,65 @@ func TestEndToEndPRModeFailsBeforePublishingSecretChange(t *testing.T) {
 	}
 }
 
+func TestEndToEndPRModeFailsWhenCandidateBranchLosesCandidateTip(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_DELIVERY_RESET_TO_MAIN=1",
+		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery candidate branch lost the reviewed candidate tip; rebuild clean history on a separate delivery branch instead") {
+		t.Fatalf("expected candidate-tip validation failure before publish, got:\n%s", output)
+	}
+	if !strings.Contains(output, "incomplete draft PR not needed: no deliverable repository changes") {
+		t.Fatalf("expected no-op incomplete draft fallback when nothing remains to publish, got:\n%s", output)
+	}
+	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
+		t.Fatalf("did not expect gh pr create to run before candidate-tip validation, err=%v", err)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	if strings.TrimSpace(refsOut) != "" {
+		t.Fatalf("expected no delivery refs after blocked publish, got: %s", refsOut)
+	}
+}
+
 func TestEndToEndYoloFailsBeforePublishingSecretChange(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
@@ -1092,6 +1202,95 @@ func TestEndToEndPRModeScansPreparedDeliveryBranch(t *testing.T) {
 	}
 	if !strings.Contains(string(argsBytes), "--draft") {
 		t.Fatalf("expected safe fallback draft PR creation, got:\n%s", string(argsBytes))
+	}
+}
+
+func TestEndToEndPRModeRebuildsCleanDeliveryBranchForHistoryScopedPushRangeBlocker(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, "scripts", "security"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkSensitiveText, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-sensitive-text.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-sensitive-text.sh"), checkSensitiveText, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkPushRange, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-push-range.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-push-range.sh"), checkPushRange, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "add", "scripts/security/check-sensitive-text.sh", "scripts/security/check-push-range.sh")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE=1",
+		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
+		"FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE=1",
+		"FAKE_CODEX_DELIVERY_REBUILD_FROM_CANDIDATE=1",
+		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected successful pr delivery output, got:\n%s", output)
+	}
+	if strings.Contains(output, "Draft PR created:") {
+		t.Fatalf("did not expect draft PR output after clean-history rebuild, got:\n%s", output)
+	}
+	if strings.Contains(output, "delivery status: incomplete") {
+		t.Fatalf("did not expect incomplete delivery after clean-history rebuild, got:\n%s", output)
+	}
+	argsBytes, err := os.ReadFile(ghArgsPath)
+	if err != nil {
+		t.Fatalf("missing gh args capture: %v", err)
+	}
+	if strings.Contains(string(argsBytes), "--draft") {
+		t.Fatalf("did not expect rebuilt delivery branch to create a draft PR, got:\n%s", string(argsBytes))
 	}
 }
 
@@ -1500,6 +1699,72 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-02.md")); err != nil {
 		t.Fatalf("expected worker-02 review artifact after restart, got: %v", err)
+	}
+}
+
+func TestReviewStageDoesNotReuseStaleArtifactsFromKilledWorker(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+	stallingCodex := buildReviewArtifactStallCodexWrapper(t, fakeCodex)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	stallMarkerPath := filepath.Join(td, "stall-once.marker")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
+
+	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env = append(env,
+		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
+		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
+		"DEEPREVIEW_REVIEW_MAX_RESTARTS=1",
+		"STALL_MARKER_PATH="+stallMarkerPath,
+		"STALL_SECONDS=15",
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "main",
+		"--concurrency", "1",
+		"--max-rounds", "1",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "independent review output missing") {
+		t.Fatalf("expected review-stage stale artifact rejection, got: %s", output)
+	}
+	if strings.Contains(output, "requires another review round") {
+		t.Fatalf("did not expect stale review artifact reuse to drive max-round flow, got: %s", output)
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	runDir := runsGlob[0]
+	if _, err := os.Stat(filepath.Join(runDir, "round-01", "review-01.md")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect canonical review-01.md after stale-artifact rejection, err=%v", err)
 	}
 }
 
