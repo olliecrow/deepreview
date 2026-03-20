@@ -25,32 +25,33 @@ Execute the plan end-to-end, verify thoroughly, finalize the round artifacts, an
 Execution requirements:
 1. Apply all approved code/doc changes.
 2. Keep changes scoped to accepted triage items only.
-3. Accepted work may include bug fixes, simplifications, deletions, high-value refactors, meaningful cleanup, or documentation alignment, but only when the triage marked it material and high-confidence.
-4. Do not add low-value churn, speculative hardening, or nice-to-have cleanup.
-5. Keep implementation simple and pragmatic; avoid speculative over-engineering.
-6. Prefer deleting dead code, removing unnecessary branches, or shrinking scope over adding new machinery when that cleanly resolves the accepted item.
-7. Maintain a high no-regret bar while implementing; if confidence drops materially, stop and document instead of forcing changes.
-8. Run Codex-led verification:
+3. Treat the approved triage as the gating contract: every implemented change must trace back to an individually investigated and explicitly accepted item.
+4. Accepted work may include bug fixes, simplifications, deletions, high-value refactors, meaningful cleanup, or documentation alignment, but only when the triage marked it material and high-confidence.
+5. Do not add low-value churn, speculative hardening, or nice-to-have cleanup.
+6. Keep implementation simple and pragmatic; avoid speculative over-engineering.
+7. Prefer deleting dead code, removing unnecessary branches, or shrinking scope over adding new machinery when that cleanly resolves the accepted item.
+8. Maintain a high no-regret bar while implementing; if confidence drops materially, stop and document instead of forcing changes.
+9. Run Codex-led verification:
    - run relevant tests when available
    - run pre-commit checks when available
    - run locally runnable CI-like checks when available
-9. Add quick empirical checks for changed behavior when feasible and not long-running.
-10. Capture command-level evidence and outcomes.
-11. Update relevant docs/notes/decision records required by the accepted changes.
-12. Write `{{ROUND_VERIFICATION_PATH}}` with:
+10. Add quick empirical checks for changed behavior when feasible and not long-running.
+11. Capture command-level evidence and outcomes.
+12. Update relevant docs/notes/decision records required by the accepted changes.
+13. Write `{{ROUND_VERIFICATION_PATH}}` with:
    - commands attempted
    - pass/fail outcomes
    - checks skipped with reason
    - unresolved failures or blockers
    - residual risks
-13. Write `{{ROUND_SUMMARY_PATH}}` with:
+14. Write `{{ROUND_SUMMARY_PATH}}` with:
    - accepted/rejected/deferred triage outcomes
    - implemented changes
    - verification evidence overview
    - residual risks
    - complexity/size impact
    - strict-scope statement confirming accepted work remained material/high-confidence only
-14. Write `{{ROUND_STATUS_PATH}}` JSON with strict schema:
+15. Write `{{ROUND_STATUS_PATH}}` JSON with strict schema:
 ```json
 {
   "decision": "continue|stop",
@@ -59,12 +60,12 @@ Execution requirements:
   "next_focus": "optional string"
 }
 ```
-15. Decide round status conservatively:
+16. Decide round status conservatively:
    - `stop` when quality is sufficient or no further meaningful changes are needed
    - `continue` when another round is likely to materially improve quality
-16. Create any needed local commit before finishing this prompt.
-17. Internal deepreview artifacts are operational outputs; never stage/commit/push them.
-18. Leave the worktree clean when the prompt exits.
+17. Create any needed local commit before finishing this prompt.
+18. Internal deepreview artifacts are operational outputs; never stage/commit/push them.
+19. Leave the worktree clean when the prompt exits.
 
 Rules:
 - Do not push.

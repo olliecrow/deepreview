@@ -18,7 +18,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 1. You run deepreview for a repository and source branch.
 2. It launches several independent review workers in parallel.
 3. Each independent review worker must complete and write its review markdown report; deepreview monitors all Codex workers for activity and restarts stalled workers with bounded retries to avoid pipeline stalls.
-4. The execute stage runs two prompts in one Codex thread: triage/plan, then implement/verify/finalize/commit.
+4. The execute stage runs two prompts in one Codex thread: first triage/plan, which investigates proposed changes one by one and accepts only high-confidence material work, then implement/verify/finalize/commit.
 5. Canonical round artifacts and logs are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside the active worktree first, and deepreview copies the canonical artifacts back into the run directory.
 6. If execute says `continue`, deepreview always runs another review round.
 7. If execute says `stop` once, deepreview still runs one confirmation round.
@@ -73,7 +73,7 @@ Optional launcher:
 - Local filesystem origin remotes are not supported in `pr` mode.
 - Review quality depends on Codex outputs and repository test coverage.
 - Deep runs can take significant time on large repositories or high `--max-rounds`.
-- Execute prompt 1 receives review file paths plus a compact manifest, so Codex can read more detail when it chooses without forcing large review-summary blocks into the prompt.
+- Execute prompt 1 receives review file paths plus a compact manifest, so Codex can inspect candidate items in detail and confirm them individually without forcing large review-summary blocks into the prompt.
 
 ## Quick start
 
