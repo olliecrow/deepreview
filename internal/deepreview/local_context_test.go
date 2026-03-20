@@ -219,6 +219,28 @@ func TestInferRepoAndBranchExplicitSourceBranchRejectsAheadOfRemote(t *testing.T
 	})
 }
 
+func TestValidateLocalBranchReadyForRemoteReviewRejectsCaseVariantExplicitGitHubLocator(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	withWorkingDir(t, repo, func() {
+		if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("modified\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		testCases := []string{
+			"Example-Org/Example-Repo",
+			"https://github.com/Example-Org/Example-Repo.git",
+		}
+		for _, locator := range testCases {
+			err := validateLocalBranchReadyForRemoteReview("git", locator, "feature/test")
+			if err == nil {
+				t.Fatalf("expected tracked-change error for locator %q", locator)
+			}
+			if !strings.Contains(err.Error(), "local tracked changes are present") {
+				t.Fatalf("unexpected error for locator %q: %v", locator, err)
+			}
+		}
+	})
+}
+
 func TestInferRepoAndBranchExplicitDifferentBranchSkipsCurrentBranchReadinessCheck(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {

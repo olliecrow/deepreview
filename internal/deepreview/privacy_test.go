@@ -45,6 +45,17 @@ func TestSanitizePublicTextRedactsGhBodyFilePath(t *testing.T) {
 	}
 }
 
+func TestSanitizePublicTextRedactsDriveLetterPath(t *testing.T) {
+	input := "path " + sensitiveDriveLetterPathFixture()
+	out := sanitizePublicText(input)
+	if strings.Contains(out, sensitiveDriveLetterPathFixture()) {
+		t.Fatalf("expected drive-letter path to be redacted, got: %s", out)
+	}
+	if !strings.Contains(out, "[redacted-path]") {
+		t.Fatalf("expected redacted path marker, got: %s", out)
+	}
+}
+
 func TestSanitizePublicTextRedactsTestDotComEmail(t *testing.T) {
 	out := sanitizePublicText("contact alice@test.com")
 	if !strings.Contains(out, "[redacted-email]") {
@@ -105,10 +116,10 @@ func TestAssertPublicTextSafeAllowsShellPathExpansionFragments(t *testing.T) {
 	}
 }
 
-func TestAssertPublicTextSafeIgnoresUnsupportedDriveLetterPathSyntax(t *testing.T) {
-	driveLetterPath := "path " + "C:" + `\` + `Users\alice\secret.txt`
-	if err := assertPublicTextSafe(driveLetterPath, "test surface"); err != nil {
-		t.Fatalf("expected unsupported drive-letter path syntax to be ignored, got: %v", err)
+func TestAssertPublicTextSafeRejectsDriveLetterPathSyntax(t *testing.T) {
+	driveLetterPath := "path " + sensitiveDriveLetterPathFixture()
+	if err := assertPublicTextSafe(driveLetterPath, "test surface"); err == nil {
+		t.Fatalf("expected drive-letter path syntax to be rejected")
 	}
 }
 
