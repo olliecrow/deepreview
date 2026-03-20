@@ -86,6 +86,93 @@ func TestDryRunPushRefspec(t *testing.T) {
 	}
 }
 
+func TestRefContainsCommit(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+
+	runGitCommand(t, td, "-C", repo, "checkout", "-b", "candidate")
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "feature.txt")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "feature")
+	candidateHead := runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD")
+
+	runGitCommand(t, td, "-C", repo, "checkout", "-b", "delivery")
+	if err := os.WriteFile(filepath.Join(repo, "delivery.txt"), []byte("delivery\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "delivery.txt")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "delivery")
+
+	contains, err := RefContainsCommit(repo, "git", candidateHead, "delivery")
+	if err != nil {
+		t.Fatalf("RefContainsCommit delivery failed: %v", err)
+	}
+	if !contains {
+		t.Fatalf("expected delivery branch to contain %s", candidateHead)
+	}
+
+	contains, err = RefContainsCommit(repo, "git", candidateHead, "main")
+	if err != nil {
+		t.Fatalf("RefContainsCommit main failed: %v", err)
+	}
+	if contains {
+		t.Fatalf("did not expect main to contain candidate head %s", candidateHead)
+	}
+}
+
+func TestRefsHaveSameTree(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+
+	runGitCommand(t, td, "-C", repo, "checkout", "-b", "candidate")
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "feature.txt")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "feature")
+
+	runGitCommand(t, td, "-C", repo, "checkout", "main")
+	runGitCommand(t, td, "-C", repo, "checkout", "-b", "rebuilt")
+	runGitCommand(t, td, "-C", repo, "restore", "--source", "candidate", "--staged", "--worktree", ":/")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "rebuilt")
+
+	sameTree, err := RefsHaveSameTree(repo, "git", "candidate", "rebuilt")
+	if err != nil {
+		t.Fatalf("RefsHaveSameTree candidate/rebuilt failed: %v", err)
+	}
+	if !sameTree {
+		t.Fatalf("expected rebuilt branch to match candidate tree")
+	}
+
+	sameTree, err = RefsHaveSameTree(repo, "git", "main", "candidate")
+	if err != nil {
+		t.Fatalf("RefsHaveSameTree main/candidate failed: %v", err)
+	}
+	if sameTree {
+		t.Fatalf("did not expect main and candidate trees to match")
+	}
+}
+
 func TestResolveDefaultBranchFallsBackToExactRemoteRef(t *testing.T) {
 	cases := []struct {
 		name   string

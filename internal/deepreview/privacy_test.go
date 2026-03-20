@@ -1,7 +1,9 @@
 package deepreview
 
 import (
+	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -50,6 +52,37 @@ func TestSanitizePublicTextRedactsTestDotComEmail(t *testing.T) {
 	}
 	if strings.Contains(out, "alice@test.com") {
 		t.Fatalf("expected test.com email to be removed, got: %s", out)
+	}
+}
+
+func TestSensitivePatternHelpersCoverExpandedSecretFamilies(t *testing.T) {
+	cases := []string{
+		buildSensitiveToken("github_pat_"),
+		buildSensitiveToken("gho_"),
+		buildSensitiveToken("ghu_"),
+		buildSensitiveToken("ghs_"),
+		buildSensitiveToken("ghr_"),
+		buildSensitiveToken("sk-"),
+		buildSensitiveToken("sk-admin-"),
+		buildSensitiveToken("sk-proj-"),
+		fmt.Sprintf(`token="%s"`, testSecretAssignmentValue()),
+		fmt.Sprintf("api_key: %s", testSecretAssignmentValue()),
+	}
+
+	for _, tc := range cases {
+		if !textHasDisallowedSensitivePattern(tc) {
+			t.Fatalf("expected sensitive pattern detection for %q", tc)
+		}
+		if err := assertPublicTextSafe(tc, "test surface"); err == nil {
+			t.Fatalf("expected public-text guard to reject %q", tc)
+		}
+		out := sanitizePublicText(tc)
+		if strings.Contains(out, tc) {
+			t.Fatalf("expected %q to be redacted, got: %s", tc, out)
+		}
+		if !strings.Contains(out, "[redacted-secret]") {
+			t.Fatalf("expected secret redaction marker for %q, got: %s", tc, out)
+		}
 	}
 }
 
@@ -135,6 +168,26 @@ func TestDeliveryCommitMessageScanRejectsTestDotComEmail(t *testing.T) {
 	}
 }
 
+func TestDeliveryCommitMessageScanRejectsExpandedGitHubToken(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(filepath.Join(repoPath, "placeholder.txt"), []byte("value\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "placeholder.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "token "+buildSensitiveToken("github_pat_"))
+
+	err := o.deliveryCommitMessageScan("candidate")
+	if err == nil {
+		t.Fatalf("expected expanded GitHub token commit message to fail")
+	}
+	if !strings.Contains(err.Error(), "commit message") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSecretHygieneScanRejectsPersonalInfoInChangedFiles(t *testing.T) {
 	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
 	repoParent := filepath.Dir(repoPath)
@@ -175,6 +228,26 @@ func TestSecretHygieneScanRejectsSecretPatternInChangedFiles(t *testing.T) {
 	err := o.secretHygieneScan(repoPath, "candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for secret pattern")
+	}
+	if !strings.Contains(err.Error(), "secret-like pattern") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSecretHygieneScanRejectsSecretAssignmentInChangedFiles(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(filepath.Join(repoPath, "secret.txt"), []byte(fmt.Sprintf("token = %s\n", testSecretAssignmentValue())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add assignment secret")
+
+	err := o.secretHygieneScan(repoPath, "candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail for secret assignment")
 	}
 	if !strings.Contains(err.Error(), "secret-like pattern") {
 		t.Fatalf("unexpected error: %v", err)
@@ -411,6 +484,48 @@ func TestSecretHygieneScanRejectsSensitiveLineAddedToExistingFile(t *testing.T) 
 	}
 }
 
+func TestSecretHygieneScanFailsClosedWhenAddedLinesReadFails(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(filepath.Join(repoPath, "notes.txt"), []byte("safe update\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "notes.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add notes")
+
+	o.config.GitBin = buildSelectiveGitFailureWrapper(t, "--unified=0 origin/feature/test..candidate -- notes.txt", "forced diff failure")
+	err := o.secretHygieneScan(repoPath, "candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail closed on added-lines read failure")
+	}
+	if !strings.Contains(err.Error(), "unable to read added lines for notes.txt") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSecretHygieneScanFailsClosedWhenBinaryContentReadFails(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(filepath.Join(repoPath, "secret.bin"), []byte("prefix\x00safe\x00suffix"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add binary file")
+
+	o.config.GitBin = buildSelectiveGitFailureWrapper(t, "show candidate:secret.bin", "forced show failure")
+	err := o.secretHygieneScan(repoPath, "candidate")
+	if err == nil {
+		t.Fatalf("expected privacy scan to fail closed on binary content read failure")
+	}
+	if !strings.Contains(err.Error(), "unable to read candidate file contents for secret.bin") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestSummarizePrivacyScanIssues(t *testing.T) {
 	commitErr := NewDeepReviewError("privacy scan failed: disallowed sensitive content detected in delivery commit message")
 	fileErr := NewDeepReviewError("privacy scan failed: local path pattern matched in docs/example.md")
@@ -512,4 +627,34 @@ func newPrivacyScanOrchestrator(t *testing.T) (*Orchestrator, string, string) {
 		},
 	}
 	return o, repoPath, sourceSHA
+}
+
+func buildSelectiveGitFailureWrapper(t *testing.T, needle, failureText string) string {
+	t.Helper()
+	realGit, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("locate git: %v", err)
+	}
+	wrapperPath := filepath.Join(t.TempDir(), "git-wrapper")
+	script := fmt.Sprintf(`#!/bin/sh
+set -eu
+args="$*"
+if printf '%%s' "$args" | grep -F -q -- %q; then
+  echo %q >&2
+  exit 1
+fi
+exec %q "$@"
+`, needle, failureText, realGit)
+	if err := os.WriteFile(wrapperPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("write git wrapper: %v", err)
+	}
+	return wrapperPath
+}
+
+func buildSensitiveToken(prefix string) string {
+	return prefix + strings.Repeat("a", 26) + "012345"
+}
+
+func testSecretAssignmentValue() string {
+	return strings.Repeat("a", 16)
 }

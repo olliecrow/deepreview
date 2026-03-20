@@ -141,6 +141,38 @@ func RevParse(repoPath, gitBin, ref string) (string, error) {
 	return Git(repoPath, gitBin, true, "rev-parse", "--verify", ref)
 }
 
+func RefContainsCommit(repoPath, gitBin, ancestorRef, descendantRef string) (bool, error) {
+	ancestorSHA := strings.TrimSpace(ancestorRef)
+	if parsed, err := RevParse(repoPath, gitBin, ancestorRef); err == nil {
+		ancestorSHA = parsed
+	}
+	mergeBase, err := Git(repoPath, gitBin, true, "merge-base", ancestorSHA, descendantRef)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(mergeBase) == strings.TrimSpace(ancestorSHA), nil
+}
+
+func RefTree(repoPath, gitBin, ref string) (string, error) {
+	trimmedRef := strings.TrimSpace(ref)
+	if trimmedRef == "" {
+		return "", NewDeepReviewError("tree ref is required")
+	}
+	return Git(repoPath, gitBin, true, "rev-parse", "--verify", trimmedRef+"^{tree}")
+}
+
+func RefsHaveSameTree(repoPath, gitBin, leftRef, rightRef string) (bool, error) {
+	leftTree, err := RefTree(repoPath, gitBin, leftRef)
+	if err != nil {
+		return false, err
+	}
+	rightTree, err := RefTree(repoPath, gitBin, rightRef)
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(leftTree) == strings.TrimSpace(rightTree), nil
+}
+
 func AddDetachedWorktree(repoPath, gitBin, worktreePath, ref string) error {
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return err
