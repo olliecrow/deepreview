@@ -12,6 +12,7 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - Prefer explicit output schemas with concrete examples so Codex formatting is consistent and machine-validated contracts are reliably satisfied.
 - Emphasize proactive/autonomous execution and evidence-backed decisions.
 - Treat independent reviews as strong inputs, not gospel, and require independent consolidation.
+- Require execute prompt 1 to confirm proposed changes item by item before accepting implementation work.
 - Keep execution no-regret and high-conviction: defer low-confidence items and reject low-value churn.
 - Require end-to-end plan and execute behavior, including local verification and docs/decision upkeep.
 - In PR mode, let one fresh delivery prompt own final local merge-readiness and branch preparation, while deepreview owns publication, PR creation, and bounded post-create mergeability checks.

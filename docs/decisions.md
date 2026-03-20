@@ -384,7 +384,7 @@ Treating review artifacts as signals (not instructions) reduces low-confidence c
 Trade-offs:
 Adds upfront consolidation effort per round and may defer some plausible-but-uncertain items.
 Enforcement:
-Prompt templates require per-item accept/reject/defer with evidence, commonality tracking across reviewers, and explicit deferral of low-confidence items.
+Prompt templates require candidate items to be investigated individually before acceptance, require per-item accept/reject/defer with evidence, track commonality across reviewers, and explicitly defer low-confidence items.
 References:
 `prompts/execute/01-triage-plan.md`, `docs/spec.md`, `docs/architecture.md`
 

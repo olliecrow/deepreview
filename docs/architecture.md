@@ -48,7 +48,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - create fresh execute worktree from current candidate head
 - start a fresh Codex context for the execute stage
 - run ordered execute prompt queue in one Codex chat context:
-  - prompt 1: triage and plan (reviews are inputs, not gospel; accept only high-confidence material items and produce the round plan)
+  - prompt 1: triage and plan (reviews are inputs, not gospel; investigate candidate items one by one, accept only high-confidence material items, and produce the round plan)
   - prompt 2: implement, verify, finalize, update docs/decisions, write round artifacts, and create any needed local commit
 - normal execute queue continuity is limited to a healthy prompt chain; if an execute prompt is retried after inactivity, the retry restarts fresh and relies on the preserved round artifacts instead of the stalled thread history
 - when a mutable execute or delivery worktree is retried after inactivity, reset it to the immutable last clean candidate-branch SHA captured before that attempt before rerunning so abandoned edits/commits from the stalled attempt do not survive into later history
