@@ -1205,6 +1205,167 @@ func TestEndToEndPRModeScansPreparedDeliveryBranch(t *testing.T) {
 	}
 }
 
+func TestEndToEndPRModeDoesNotFallbackPublishHistoryBlockedCandidateBranch(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, "scripts", "security"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkSensitiveText, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-sensitive-text.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-sensitive-text.sh"), checkSensitiveText, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkPushRange, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-push-range.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-push-range.sh"), checkPushRange, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "add", "scripts/security/check-sensitive-text.sh", "scripts/security/check-push-range.sh")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE=1",
+		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
+		"FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE=1",
+		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery push-range policy failed") {
+		t.Fatalf("expected range-scoped delivery blocker to prevent fallback publish, got:\n%s", output)
+	}
+	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
+		t.Fatalf("did not expect gh pr create after blocked incomplete fallback, err=%v", err)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	if strings.TrimSpace(refsOut) != "" {
+		t.Fatalf("expected no delivery refs after blocked incomplete fallback, got: %s", refsOut)
+	}
+}
+
+func TestEndToEndPRModeUsesPreparedRefPushRangeScript(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, "scripts", "security"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-sensitive-text.sh"), []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-push-range.sh"), []byte("#!/usr/bin/env bash\necho MAIN-PASS\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "add", "scripts/security/check-sensitive-text.sh", "scripts/security/check-push-range.sh")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-push-range.sh"), []byte("#!/usr/bin/env bash\necho FEATURE-FAIL >&2\nexit 1\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt", "scripts/security/check-push-range.sh")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "tighten delivery policy")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
+		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+	)
+	output := runCmdExpectFailure(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "delivery push-range policy failed") {
+		t.Fatalf("expected prepared ref push-range policy to fail publish, got:\n%s", output)
+	}
+	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
+		t.Fatalf("did not expect gh pr create when prepared ref policy fails, err=%v", err)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	if strings.TrimSpace(refsOut) != "" {
+		t.Fatalf("expected no delivery refs after prepared ref policy failure, got: %s", refsOut)
+	}
+}
+
 func TestEndToEndPRModeRebuildsCleanDeliveryBranchForHistoryScopedPushRangeBlocker(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)

@@ -180,7 +180,9 @@ func repoLocatorMatchesState(repo string, state *LocalGitHubRepoState) bool {
 	if !ok {
 		return false
 	}
-	return state.SourceType == RepoSourceGitHub && owner == state.Owner && name == state.Name
+	return state.SourceType == RepoSourceGitHub &&
+		strings.EqualFold(owner, state.Owner) &&
+		strings.EqualFold(name, state.Name)
 }
 
 func inferSourceBranchFromState(state *LocalGitHubRepoState) (string, error) {
