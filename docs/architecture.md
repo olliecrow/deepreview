@@ -72,10 +72,11 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - inspect candidate diff/history and prior verification evidence
   - run any remaining local merge-readiness checks
   - optionally move work onto the delivery branch locally
+  - when publication is blocked by branch-history state outside the current tip, prefer rebuilding a clean publishable delivery branch from the reviewed candidate tree instead of stopping immediately
   - report whether local delivery preparation is complete or incomplete
   - write only local-readiness result fields for the orchestrator (mode, optional prepared delivery branch, incomplete status/reason), not push refspecs or PR metadata
-- the orchestrator validates the prepared ref, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
-- when delivery is blocked by PR-range/history state outside the current prepared tip, deepreview reports the blocker precisely and stops; it does not perform history rewrite/rebuild recovery automatically
+- the orchestrator validates the prepared ref, re-runs repo-native outbound-history policy checks against the prepared publish range, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
+- clean-history repair is allowed only on the dedicated delivery branch; the reviewed candidate branch must continue to preserve the original candidate tip, and any rebuilt delivery branch must match the final reviewed candidate tree exactly before publication
 - in `yolo` mode, the orchestrator pushes the prepared source-branch ref instead of creating a PR
 - the orchestrator still stays out of repo-specific local mutation logic except for worktree lifecycle, prompt launching/resume, artifact validation, remote publication, and terminal classification
 
