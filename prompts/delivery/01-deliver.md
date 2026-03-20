@@ -34,17 +34,20 @@ Get local branch state and delivery intent into a state where deepreview can pub
 4. Prefer simplification or deletion over additive complexity when that cleanly resolves a real blocker.
 5. In `pr` mode, prepare the delivery branch locally if needed, but do not push and do not open/edit the PR yourself.
 6. In `pr` mode:
+   - treat repo-native history/range checks as part of delivery readiness when they exist (for example push-range sensitive-text policy), not just current-tip tests
    - if you create or switch to `{{DELIVERY_BRANCH}}`, leave it committed and clean
    - set `delivery_branch` in the result when the prepared local ref to publish is not `{{CANDIDATE_BRANCH}}`
-   - use `incomplete` / `incomplete_reason` when local delivery preparation is materially blocked and deepreview should preserve the branch as an incomplete draft PR
-   - if the local tip looks ready but delivery is still blocked by PR-range or branch-history state outside the current tip (for example, a required check failing on an earlier commit in the publish range), report that precisely in `incomplete_reason`
-   - do not rewrite history, rebuild branch ancestry, or attempt manual recovery/surgery inside this stage; report the blocker clearly and stop
+   - if the current tip is good but publication is blocked by PR-range or branch-history state outside the current tip, first try to repair that locally instead of defaulting to `incomplete`
+   - the preferred repair path for history-scoped blockers is: keep `{{CANDIDATE_BRANCH}}` as the reviewed branch, create `{{DELIVERY_BRANCH}}` from `origin/{{DEFAULT_BRANCH}}` (or the relevant source-branch base), replay the final reviewed candidate tree into clean commit history there, rerun the relevant local checks, and publish that rebuilt branch by setting `delivery_branch`
+   - do not rewrite `{{CANDIDATE_BRANCH}}` ancestry in place to repair history-scoped blockers; preserve the reviewed candidate branch and do history cleanup only on `{{DELIVERY_BRANCH}}`
+   - use `incomplete` / `incomplete_reason` only when local delivery preparation or clean-history repair is materially blocked, unverifiable, or would require unsafe/speculative surgery
+   - when you leave an incomplete result, say whether the current tip is clean, whether the blocker is current-tip or historical/range-scoped, and what exact follow-up is still required
 7. In `yolo` mode:
    - do not push; only leave the local branch clean and ready for deepreview to publish after validation
 8. Never stage or commit `.deepreview` operational artifacts.
 9. Leave the worktree clean before finishing.
 10. Do not expose secrets, tokens, personal information, or private local paths in the result artifact.
-11. When reporting an incomplete result, be specific about whether the current tip is clean, whether the blocker is historical/range-scoped, and what manual operator follow-up would be needed.
+11. When history-scoped repair succeeds, prefer publishing the repaired delivery branch normally instead of asking the operator to salvage it by hand.
 
 ## Output
 Write `{{OUTPUT_RESULT_PATH}}` JSON with this schema:

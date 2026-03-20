@@ -273,9 +273,14 @@ var ownerRepoSegmentRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 var githubSCPLikeRemoteRe = regexp.MustCompile(`^git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$`)
 var secretRiskyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-	regexp.MustCompile(`ghp_[A-Za-z0-9]{36,}`),
+	regexp.MustCompile(`(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}`),
+	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),
+	regexp.MustCompile(`sk(?:-[A-Za-z0-9]+)?-[A-Za-z0-9]{20,}`),
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
 	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
+}
+var secretAssignmentRiskyPatterns = []*regexp.Regexp{
+	regexp.MustCompile(`(?i)\b(?:api[_-]?key|token|password|secret)\b[[:space:]]*[:=][[:space:]]*["']?[A-Za-z0-9_./+=-]{12,}`),
 }
 var emailPattern = regexp.MustCompile(`(?i)\b[A-Z0-9._%+\-]+@(?:[A-Z0-9\-]+\.)+[A-Z]{2,}\b`)
 var personalRiskyPatterns = []*regexp.Regexp{
@@ -355,6 +360,13 @@ func ownerRepoSegmentValid(text string) bool {
 
 func isOwnerRepoSlug(text string) bool {
 	return ownerRepoSlugRe.MatchString(strings.TrimSpace(text))
+}
+
+func allSecretRiskyPatterns() []*regexp.Regexp {
+	patterns := make([]*regexp.Regexp, 0, len(secretRiskyPatterns)+len(secretAssignmentRiskyPatterns))
+	patterns = append(patterns, secretRiskyPatterns...)
+	patterns = append(patterns, secretAssignmentRiskyPatterns...)
+	return patterns
 }
 
 func tryReadRemoteURL(gitBin, repoPath string) (string, error) {
@@ -1240,6 +1252,8 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 			defer workers.Done()
 			workerID := i + 1
 			worktreePath := worktrees[i]
+			workerReviewPath := workerReviewPaths[i]
+			workerNotesPath := workerNotesPaths[i]
 			scope := buildReviewPromptScope(o.config.SourceBranch, defaultBranch)
 			variables := map[string]string{
 				"REPO_SLUG":          o.repoIdentity.Slug(),
@@ -1248,8 +1262,8 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 				"WORKER_ID":          fmt.Sprintf("%d", workerID),
 				"CONCURRENCY":        fmt.Sprintf("%d", o.config.Concurrency),
 				"WORKTREE_PATH":      filepath.ToSlash(worktreePath),
-				"OUTPUT_REVIEW_PATH": filepath.ToSlash(workerReviewPaths[i]),
-				"WORKER_NOTES_PATH":  filepath.ToSlash(workerNotesPaths[i]),
+				"OUTPUT_REVIEW_PATH": filepath.ToSlash(workerReviewPath),
+				"WORKER_NOTES_PATH":  filepath.ToSlash(workerNotesPath),
 				"REVIEW_MODE_LABEL":  scope.ModeLabel,
 				"REVIEW_MODE_NOTE":   scope.ModeNote,
 				"REVIEW_PROCESS_1":   scope.ProcessStep1,
@@ -1270,13 +1284,16 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 					logPrefix:    logPrefix,
 					useGitStatus: true,
 					monitoredPaths: []string{
-						workerReviewPaths[i],
-						workerNotesPaths[i],
+						workerReviewPath,
+						workerNotesPath,
 						logPrefix + ".stdout.jsonl",
 						logPrefix + ".stderr.log",
 					},
 				},
 				monitoredPromptCallbacks{
+					onBeforeRetry: func(_ int, _ int, _ *promptInactivityError) error {
+						return prepareReviewWorkerRetry(worktreePath, o.config.GitBin, candidateHead, workerReviewPath, workerNotesPath)
+					},
 					onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
 						o.reporter.StageProgress(
 							"independent review stage",
@@ -1372,6 +1389,25 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		),
 	)
 	return selectedReviewPaths, nil
+}
+
+func prepareReviewWorkerRetry(worktreePath, gitBin, baselineRef, reviewPath, notesPath string) error {
+	if err := resetMutablePromptWorktree(worktreePath, gitBin, baselineRef, nil); err != nil {
+		return err
+	}
+	for _, path := range []string{reviewPath, notesPath} {
+		trimmed := strings.TrimSpace(path)
+		if trimmed == "" {
+			continue
+		}
+		if err := os.Remove(trimmed); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err := os.MkdirAll(filepath.Dir(trimmed), 0o755); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (o *Orchestrator) runExecuteStage(
@@ -2232,7 +2268,7 @@ func (o *Orchestrator) secretHygieneScanBetween(baseRef, headRef string) error {
 	for _, rel := range changedFiles {
 		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
 		if err != nil {
-			continue
+			return privacyScanReadFailure(rel, "read added lines")
 		}
 		if len(addedLines) > 0 {
 			if err := privacyScanText(strings.Join(addedLines, "\n"), rel); err != nil {
@@ -2241,17 +2277,23 @@ func (o *Orchestrator) secretHygieneScanBetween(baseRef, headRef string) error {
 			continue
 		}
 		status, err := ChangedFileStatusBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
-		if err != nil || status == "D" {
+		if err != nil {
+			return privacyScanReadFailure(rel, "read file change status")
+		}
+		if status == "D" {
 			continue
 		}
 		// Binary diffs do not expose textual added lines, so scan the candidate-side bytes directly.
 		isBinaryDiff, err := DiffIsBinaryBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
-		if err != nil || !isBinaryDiff {
+		if err != nil {
+			return privacyScanReadFailure(rel, "inspect binary diff status")
+		}
+		if !isBinaryDiff {
 			continue
 		}
 		headContent, err := FileContentAtRef(o.managedRepoPath, o.config.GitBin, headRef, rel)
 		if err != nil {
-			continue
+			return privacyScanReadFailure(rel, "read candidate file contents")
 		}
 		if len(headContent) == 0 {
 			continue
@@ -2260,7 +2302,7 @@ func (o *Orchestrator) secretHygieneScanBetween(baseRef, headRef string) error {
 		if status == "M" {
 			baseContent, err = FileContentAtRef(o.managedRepoPath, o.config.GitBin, baseRef, rel)
 			if err != nil {
-				continue
+				return privacyScanReadFailure(rel, "read base file contents")
 			}
 		}
 		if err := privacyScanModifiedBinaryText(string(baseContent), string(headContent), rel); err != nil {
@@ -2270,11 +2312,15 @@ func (o *Orchestrator) secretHygieneScanBetween(baseRef, headRef string) error {
 	return nil
 }
 
+func privacyScanReadFailure(rel, action string) error {
+	return NewDeepReviewError("privacy scan failed: unable to %s for %s", action, rel)
+}
+
 func privacyScanText(text, rel string) error {
 	if containsDisallowedEmail(text) {
 		return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
 	}
-	for _, pattern := range secretRiskyPatterns {
+	for _, pattern := range allSecretRiskyPatterns() {
 		if pattern.MatchString(text) {
 			return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
 		}
@@ -2296,7 +2342,7 @@ func privacyScanModifiedBinaryText(baseText, headText, rel string) error {
 	if hasNewDisallowedEmail(baseText, headText) {
 		return NewDeepReviewError("privacy scan failed: disallowed email-like value detected in %s", rel)
 	}
-	if hasNewRegexMatch(baseText, headText, secretRiskyPatterns) {
+	if hasNewRegexMatch(baseText, headText, allSecretRiskyPatterns()) {
 		return NewDeepReviewError("privacy scan failed: secret-like pattern matched in %s", rel)
 	}
 	if hasNewRegexMatch(baseText, headText, personalRiskyPatterns) {
@@ -2488,6 +2534,51 @@ func (o *Orchestrator) deliveryCommitMessageScanBetween(baseRef, headRef string)
 	return nil
 }
 
+func (o *Orchestrator) deliveryPushRangePolicyScanBetween(baseRef, headRef string) error {
+	scriptPath := filepath.Join(o.managedRepoPath, "scripts", "security", "check-push-range.sh")
+	if _, err := os.Stat(scriptPath); err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	env := append(
+		os.Environ(),
+		"PRE_COMMIT_FROM_REF="+strings.TrimSpace(baseRef),
+		"PRE_COMMIT_TO_REF="+strings.TrimSpace(headRef),
+	)
+	completed, err := RunCommandContextWithEnvAndCallbacks(
+		currentRunCommandContext(),
+		[]string{"bash", "scripts/security/check-push-range.sh"},
+		o.managedRepoPath,
+		env,
+		"",
+		false,
+		0,
+		nil,
+	)
+	if err != nil {
+		return err
+	}
+	if completed.ReturnCode == 0 {
+		return nil
+	}
+	snippet := firstNonEmptyLine(completed.Stderr)
+	if snippet == "" {
+		snippet = firstNonEmptyLine(completed.Stdout)
+	}
+	snippet = sanitizePublicText(strings.TrimSpace(snippet))
+	if snippet == "" {
+		snippet = "repo push-range sensitive-text policy failed"
+	}
+	return NewDeepReviewError(
+		"delivery push-range policy failed for %s..%s: %s",
+		strings.TrimSpace(baseRef),
+		strings.TrimSpace(headRef),
+		trimForDisplay(snippet, 220),
+	)
+}
+
 func markdownBulletList(items []string) string {
 	if len(items) == 0 {
 		return "none"
@@ -2544,6 +2635,48 @@ func (o *Orchestrator) resolvePreparedDeliveryRef(result promptDeliveryResult, c
 	default:
 		return "", "", "", NewDeepReviewError("unsupported delivery mode: %s", o.config.Mode)
 	}
+}
+
+func (o *Orchestrator) validatePreparedDeliveryRef(candidateHead, candidateBranch, preparedRef string) error {
+	trimmedPreparedRef := strings.TrimSpace(preparedRef)
+	if trimmedPreparedRef == "" {
+		return NewDeepReviewError("delivery prepared ref is required")
+	}
+	if strings.TrimSpace(candidateHead) == "" {
+		return NewDeepReviewError("delivery candidate head is required")
+	}
+	trimmedCandidateBranch := strings.TrimSpace(candidateBranch)
+	if trimmedCandidateBranch == "" {
+		return NewDeepReviewError("delivery candidate branch is required")
+	}
+	candidateContainsOriginal, err := RefContainsCommit(o.managedRepoPath, o.config.GitBin, candidateHead, trimmedCandidateBranch)
+	if err != nil {
+		return err
+	}
+	if !candidateContainsOriginal {
+		return NewDeepReviewError(
+			"delivery candidate branch lost the reviewed candidate tip; rebuild clean history on a separate delivery branch instead: %s",
+			trimmedCandidateBranch,
+		)
+	}
+	contains, err := RefContainsCommit(o.managedRepoPath, o.config.GitBin, candidateHead, trimmedPreparedRef)
+	if err != nil {
+		return err
+	}
+	if contains {
+		return nil
+	}
+	sameTree, err := RefsHaveSameTree(o.managedRepoPath, o.config.GitBin, trimmedCandidateBranch, trimmedPreparedRef)
+	if err != nil {
+		return err
+	}
+	if sameTree {
+		return nil
+	}
+	return NewDeepReviewError(
+		"delivery prepared ref must contain the candidate tip or match the current candidate tree before publish: %s",
+		trimmedPreparedRef,
+	)
 }
 
 func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
@@ -2753,6 +2886,9 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	if err != nil {
 		return DeliveryResult{}, err
 	}
+	if err := o.validatePreparedDeliveryRef(candidateHead, candidateBranch, preparedRef); err != nil {
+		return DeliveryResult{}, err
+	}
 	// The delivery prompt can still refine local branch state, but deepreview
 	// validates the exact ref to be published before any push or PR creation.
 	deliveryChangedFiles, err := o.validateDeliveryFilesBetween(baseRef, preparedRef)
@@ -2765,6 +2901,9 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 			Skipped:    true,
 			SkipReason: "delivery preparation removed all deliverable repository changes",
 		}, nil
+	}
+	if err := o.deliveryPushRangePolicyScanBetween(baseRef, preparedRef); err != nil {
+		return DeliveryResult{}, err
 	}
 	if err := o.deliveryCommitMessageScanBetween(baseRef, preparedRef); err != nil {
 		return DeliveryResult{}, err
@@ -3435,7 +3574,7 @@ func escapeBranchForURL(branch string) string {
 
 func sanitizePublicText(text string) string {
 	sanitized := text
-	for _, pattern := range secretRiskyPatterns {
+	for _, pattern := range allSecretRiskyPatterns() {
 		sanitized = pattern.ReplaceAllString(sanitized, "[redacted-secret]")
 	}
 	for _, pattern := range privatePathPatterns {
@@ -3482,7 +3621,7 @@ func textHasDisallowedSensitivePattern(text string) bool {
 	if containsDisallowedEmail(text) {
 		return true
 	}
-	for _, pattern := range secretRiskyPatterns {
+	for _, pattern := range allSecretRiskyPatterns() {
 		if pattern.MatchString(text) {
 			return true
 		}

@@ -464,6 +464,8 @@ func handlePrompt(prompt string) (string, error) {
 
 	if strings.Contains(prompt, "deepreview final delivery stage") {
 		mode := regexGet("Mode: `([^`]+)`", prompt)
+		candidateBranch := regexGet("Candidate branch: `([^`]+)`", prompt)
+		defaultBranch := regexGet("Default branch: `([^`]+)`", prompt)
 		deliveryBranch := regexGet("Delivery branch: `([^`]+)`", prompt)
 		resultPath := regexGet("Output result path: `([^`]+)`", prompt)
 		if err := requirePromptOutputWithinScope(prompt, resultPath, "delivery result path"); err != nil {
@@ -507,6 +509,40 @@ func handlePrompt(prompt string) (string, error) {
 			if err := writeText(filepath.Join(".", "delivery_branch_secret.txt"), "key "+fakeAWSAccessKey()+"\n"); err != nil {
 				return "", err
 			}
+		}
+		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_RESET_TO_MAIN")) != "" {
+			targetRef := "origin/" + defaultBranch
+			if strings.TrimSpace(defaultBranch) == "" {
+				targetRef = "origin/main"
+			}
+			if _, err := runGit("reset", "--hard", targetRef); err != nil {
+				return "", err
+			}
+		}
+		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE")) != "" {
+			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
+				return "", err
+			}
+			if err := gitCommitIfPossible("deepreview: sanitize candidate delivery state"); err != nil {
+				return "", err
+			}
+		}
+		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_REBUILD_FROM_CANDIDATE")) != "" {
+			sourceBranch := strings.TrimSpace(candidateBranch)
+			if sourceBranch == "" {
+				sourceBranch = "candidate"
+			}
+			targetRef := "origin/" + defaultBranch
+			if strings.TrimSpace(defaultBranch) == "" {
+				targetRef = "origin/main"
+			}
+			if _, err := runGit("checkout", "-B", deliveryBranch, targetRef); err != nil {
+				return "", err
+			}
+			if _, err := runGit("restore", "--source", sourceBranch, "--staged", "--worktree", ":/"); err != nil {
+				return "", err
+			}
+			preparedBranch = deliveryBranch
 		}
 		if err := gitCommitIfPossible("deepreview: prepare delivery branch"); err != nil {
 			return "", err
