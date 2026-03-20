@@ -22,20 +22,21 @@ import (
 )
 
 type Orchestrator struct {
-	config          ReviewConfig
-	toolRoot        string
-	promptsRoot     string
-	workspaceRoot   string
-	runRoot         string
-	repoIdentity    RepoIdentity
-	managedRepoPath string
-	codexRunner     CodexRunner
-	reporter        ProgressReporter
-	pushCount       int
-	lastDelivery    *DeliveryResult
-	prDelivery      prDeliveryState
-	runLockPath     string
-	commitIdentity  CommitIdentity
+	config                ReviewConfig
+	toolRoot              string
+	promptsRoot           string
+	workspaceRoot         string
+	runRoot               string
+	repoIdentity          RepoIdentity
+	managedRepoPath       string
+	codexRunner           CodexRunner
+	reporter              ProgressReporter
+	pushCount             int
+	lastDelivery          *DeliveryResult
+	prDelivery            prDeliveryState
+	runLockPath           string
+	commitIdentity        CommitIdentity
+	reviewedCandidateHead string
 }
 
 type prDeliveryState struct {
@@ -290,6 +291,7 @@ var personalRiskyPatterns = []*regexp.Regexp{
 var privatePathPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?m)/Users/\S+`),
 	regexp.MustCompile(`(?m)/home/\S+`),
+	regexp.MustCompile(`(?mi)\b[A-Z]:\\+Users\\+\S+`),
 }
 var allowedPlaceholderEmailDomains = map[string]struct{}{
 	"example.com": {},
@@ -548,6 +550,10 @@ func (o *Orchestrator) Run() (retErr error) {
 
 	if len(roundSummaries) == 0 {
 		return NewDeepReviewError("internal run state invalid: no review/execute rounds were completed")
+	}
+	o.reviewedCandidateHead, err = RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return err
 	}
 
 	deliveryStage := "delivery"
@@ -2535,7 +2541,12 @@ func (o *Orchestrator) deliveryCommitMessageScanBetween(baseRef, headRef string)
 }
 
 func (o *Orchestrator) deliveryPushRangePolicyScanBetween(baseRef, headRef string) error {
-	scriptPath := filepath.Join(o.managedRepoPath, "scripts", "security", "check-push-range.sh")
+	policyWorktree, cleanup, err := o.addTemporaryPolicyWorktree(headRef)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+	scriptPath := filepath.Join(policyWorktree, "scripts", "security", "check-push-range.sh")
 	if _, err := os.Stat(scriptPath); err != nil {
 		if os.IsNotExist(err) {
 			return nil
@@ -2550,7 +2561,7 @@ func (o *Orchestrator) deliveryPushRangePolicyScanBetween(baseRef, headRef strin
 	completed, err := RunCommandContextWithEnvAndCallbacks(
 		currentRunCommandContext(),
 		[]string{"bash", "scripts/security/check-push-range.sh"},
-		o.managedRepoPath,
+		policyWorktree,
 		env,
 		"",
 		false,
@@ -2677,6 +2688,62 @@ func (o *Orchestrator) validatePreparedDeliveryRef(candidateHead, candidateBranc
 		"delivery prepared ref must contain the candidate tip or match the current candidate tree before publish: %s",
 		trimmedPreparedRef,
 	)
+}
+
+func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func(), error) {
+	worktreeRoot := filepath.Join(o.runRoot, "tmp")
+	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+		return "", nil, err
+	}
+	worktreePath, err := os.MkdirTemp(worktreeRoot, "push-range-policy-")
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.RemoveAll(worktreePath); err != nil {
+		return "", nil, err
+	}
+	if err := AddDetachedWorktree(o.managedRepoPath, o.config.GitBin, worktreePath, ref); err != nil {
+		return "", nil, err
+	}
+	// Run repo-native push-range policy from the exact ref being published so
+	// branch-specific scripts and helper files travel with that ref.
+	cleanup := func() {
+		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktreePath)
+		_ = os.RemoveAll(worktreePath)
+	}
+	return worktreePath, cleanup, nil
+}
+
+func (o *Orchestrator) validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, publishRef string) ([]string, error) {
+	if err := o.validatePreparedDeliveryRef(candidateHead, candidateBranch, publishRef); err != nil {
+		return nil, err
+	}
+	// Both complete delivery and incomplete fallback must validate the exact ref
+	// that will be pushed, not just the current candidate tip.
+	changedFiles, err := o.validateDeliveryFilesBetween(baseRef, publishRef)
+	if err != nil {
+		return nil, err
+	}
+	if len(changedFiles) == 0 {
+		return changedFiles, nil
+	}
+	if err := o.deliveryPushRangePolicyScanBetween(baseRef, publishRef); err != nil {
+		return nil, err
+	}
+	if err := o.deliveryCommitMessageScanBetween(baseRef, publishRef); err != nil {
+		return nil, err
+	}
+	if err := o.secretHygieneScanBetween(baseRef, publishRef); err != nil {
+		return nil, err
+	}
+	return changedFiles, nil
+}
+
+func (o *Orchestrator) reviewedCandidateHeadForPublish(candidateBranch string) (string, error) {
+	if trimmed := strings.TrimSpace(o.reviewedCandidateHead); trimmed != "" {
+		return trimmed, nil
+	}
+	return RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 }
 
 func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
@@ -2886,12 +2953,9 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	if err != nil {
 		return DeliveryResult{}, err
 	}
-	if err := o.validatePreparedDeliveryRef(candidateHead, candidateBranch, preparedRef); err != nil {
-		return DeliveryResult{}, err
-	}
 	// The delivery prompt can still refine local branch state, but deepreview
 	// validates the exact ref to be published before any push or PR creation.
-	deliveryChangedFiles, err := o.validateDeliveryFilesBetween(baseRef, preparedRef)
+	deliveryChangedFiles, err := o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, preparedRef)
 	if err != nil {
 		return DeliveryResult{}, err
 	}
@@ -2902,16 +2966,6 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 			SkipReason: "delivery preparation removed all deliverable repository changes",
 		}, nil
 	}
-	if err := o.deliveryPushRangePolicyScanBetween(baseRef, preparedRef); err != nil {
-		return DeliveryResult{}, err
-	}
-	if err := o.deliveryCommitMessageScanBetween(baseRef, preparedRef); err != nil {
-		return DeliveryResult{}, err
-	}
-	if err := o.secretHygieneScanBetween(baseRef, preparedRef); err != nil {
-		return DeliveryResult{}, err
-	}
-
 	if o.config.Mode == ModePR {
 		delivery, err := o.deliverPR(defaultBranch, preparedRef, summaries, deliveryChangedFiles, prDeliveryOptions{
 			draft:            result.Incomplete,
@@ -3078,6 +3132,12 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 	}
 
 	o.reporter.StageStarted("delivery", nil, "publishing incomplete draft PR to preserve work")
+	baseRef := "origin/" + o.config.SourceBranch
+	candidateHead, err := o.reviewedCandidateHeadForPublish(candidateBranch)
+	if err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
+	}
 	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
 	if err != nil {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
@@ -3087,11 +3147,8 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
 		return false, nil
 	}
-	if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-		return false, err
-	}
-	if err := o.secretHygieneScan(o.managedRepoPath, candidateBranch); err != nil {
+	changedFiles, err = o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
+	if err != nil {
 		remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(o.managedRepoPath, candidateBranch, err)
 		if remediationErr != nil {
 			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(remediationErr))
@@ -3101,23 +3158,15 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 			return false, err
 		}
-		changedFiles, err = o.validateDeliveryFiles(candidateBranch)
+		changedFiles, err = o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
 		if err != nil {
 			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 			return false, err
 		}
-		if len(changedFiles) == 0 {
-			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
-			return false, nil
-		}
-		if err := o.deliveryCommitMessageScan(candidateBranch); err != nil {
-			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-			return false, err
-		}
-		if err := o.secretHygieneScan(o.managedRepoPath, candidateBranch); err != nil {
-			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-			return false, err
-		}
+	}
+	if len(changedFiles) == 0 {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
+		return false, nil
 	}
 
 	reason := trimForDisplay(strings.TrimSpace(strings.ReplaceAll(cause.Error(), "\n", " ")), 500)
