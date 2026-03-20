@@ -15,15 +15,17 @@ fi
 local_path_regex='(/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+|[A-Za-z]:\\+Users\\+[A-Za-z0-9._-]+)'
 allowed_path_placeholder_regex='(/Users/(YOU|USER|username)|/home/(user|USER|username)|[A-Za-z]:\\+Users\\+(YOU|USER|USERNAME|username))'
 secret_assignment_regex='([Aa][Pp][Ii][_-]?[Kk][Ee][Yy]|[Tt][Oo][Kk][Ee][Nn]|[Pp][Aa][Ss][Ss][Ww][Oo][Rr][Dd]|[Ss][Ee][Cc][Rr][Ee][Tt])[[:space:]]*[:=][[:space:]]*["'"'"']?[A-Za-z0-9_./+=-]{12,}'
-known_token_regex='((ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk-[A-Za-z0-9]{20,})'
+email_regex='[A-Za-z0-9._%+-]+@(?:[A-Za-z0-9-]+\.)+[A-Za-z]{2,}'
+allowed_placeholder_email_regex='@([A-Za-z0-9._%+-]+\.)?example\.(com|org|net)\b'
+known_token_regex='((ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk(?:-[A-Za-z0-9]+)?-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'
 
 search_pattern() {
   local pattern="$1"
   local file_path="$2"
   if command -v rg >/dev/null 2>&1; then
-    rg --line-number --no-heading --color never -e "$pattern" "$file_path" || true
+    rg --line-number --only-matching --no-heading --color never -e "$pattern" "$file_path" || true
   else
-    grep -nE "$pattern" "$file_path" || true
+    grep -nEo "$pattern" "$file_path" || true
   fi
 }
 
@@ -48,9 +50,13 @@ for target in "$@"; do
   fi
 
   secret_assignment_matches="$(search_pattern "$secret_assignment_regex" "$target")"
+  email_matches="$(search_pattern "$email_regex" "$target")"
+  if [[ -n "$email_matches" ]]; then
+    email_matches="$(printf '%s\n' "$email_matches" | exclude_pattern "$allowed_placeholder_email_regex")"
+  fi
   known_token_matches="$(search_pattern "$known_token_regex" "$target")"
 
-  matches="$(printf '%s\n%s\n%s\n' "$path_matches" "$secret_assignment_matches" "$known_token_matches" | sed '/^$/d' | sort -u)"
+  matches="$(printf '%s\n%s\n%s\n%s\n' "$path_matches" "$email_matches" "$secret_assignment_matches" "$known_token_matches" | sed '/^$/d' | sort -u)"
   if [[ -n "$matches" ]]; then
     echo "policy violation in ${context}: ${target}" >&2
     echo "$matches" >&2

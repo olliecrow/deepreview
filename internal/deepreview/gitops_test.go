@@ -438,7 +438,9 @@ func TestResolveCommitIdentityUsesMatchedLocalRepoConfigForRepoLocator(t *testin
 		locator string
 	}{
 		{name: "owner repo", locator: "example-org/example-repo"},
+		{name: "owner repo case variant", locator: "Example-Org/Example-Repo"},
 		{name: "remote url", locator: "https://github.com/example-org/example-repo.git"},
+		{name: "remote url case variant", locator: "https://github.com/Example-Org/Example-Repo.git"},
 	}
 
 	for _, tc := range testCases {
