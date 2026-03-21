@@ -549,60 +549,6 @@ func TestSummarizePrivacyScanIssues(t *testing.T) {
 	}
 }
 
-func TestTryAutoRemediateLocalPathPrivacyViolationInDocs(t *testing.T) {
-	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
-	repoParent := filepath.Dir(repoPath)
-
-	if err := os.MkdirAll(filepath.Join(repoPath, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
-	docPath := filepath.Join(repoPath, "docs", "decision_capture.md")
-	if err := os.WriteFile(docPath, []byte("ref LOCALPATHTOKEN\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGitTest(t, repoParent, "-C", repoPath, "add", "docs/decision_capture.md")
-	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add decision note")
-
-	previousPatterns := privatePathPatterns
-	privatePathPatterns = []*regexp.Regexp{regexp.MustCompile(`LOCALPATHTOKEN`)}
-	defer func() {
-		privatePathPatterns = previousPatterns
-	}()
-
-	remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(
-		repoPath,
-		"candidate",
-		NewDeepReviewError("privacy scan failed: local path pattern matched in docs/decision_capture.md"),
-	)
-	if remediationErr != nil {
-		t.Fatalf("auto-remediation failed: %v", remediationErr)
-	}
-	if !remediated {
-		t.Fatalf("expected docs local-path violation to be auto-remediated")
-	}
-	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
-		t.Fatalf("expected privacy scan to pass after remediation, got: %v", err)
-	}
-
-	content, readErr := os.ReadFile(docPath)
-	if readErr != nil {
-		t.Fatal(readErr)
-	}
-	text := string(content)
-	if strings.Contains(text, "LOCALPATHTOKEN") {
-		t.Fatalf("expected local path token to be removed after remediation, got: %s", text)
-	}
-	if !strings.Contains(text, "/path/to/project") {
-		t.Fatalf("expected placeholder path after remediation, got: %s", text)
-	}
-
-	lastMessage := runGitTest(t, repoParent, "-C", repoPath, "log", "-1", "--pretty=%s")
-	if lastMessage != "deepreview: sanitize local paths for privacy scan" {
-		t.Fatalf("unexpected remediation commit message: %q", lastMessage)
-	}
-}
-
 func newPrivacyScanOrchestrator(t *testing.T) (*Orchestrator, string, string) {
 	t.Helper()
 	td := t.TempDir()

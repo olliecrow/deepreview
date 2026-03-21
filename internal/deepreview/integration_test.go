@@ -1055,7 +1055,7 @@ func TestEndToEndPRModeFailsWhenCandidateBranchLosesCandidateTip(t *testing.T) {
 		"FAKE_CODEX_DELIVERY_RESET_TO_MAIN=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
-	output := runCmdExpectFailure(t, root, env,
+	output := runCmd(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1068,17 +1068,17 @@ func TestEndToEndPRModeFailsWhenCandidateBranchLosesCandidateTip(t *testing.T) {
 	if !strings.Contains(output, "delivery prompt must not mutate the candidate branch; route tracked-code fixes back through execute rounds instead") {
 		t.Fatalf("expected delivery mutation failure before publish, got:\n%s", output)
 	}
-	if !strings.Contains(output, "incomplete draft PR not needed: no deliverable repository changes") {
-		t.Fatalf("expected no-op incomplete draft fallback when nothing remains to publish, got:\n%s", output)
+	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected incomplete draft PR to preserve reviewed work, got:\n%s", output)
 	}
-	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
-		t.Fatalf("did not expect gh pr create to run before candidate-tip validation, err=%v", err)
+	if _, err := os.Stat(ghArgsPath); err != nil {
+		t.Fatalf("expected gh pr create to run during incomplete draft recovery, err=%v", err)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
-	if strings.TrimSpace(refsOut) != "" {
-		t.Fatalf("expected no delivery refs after blocked publish, got: %s", refsOut)
+	if !strings.Contains(refsOut, "origin/deepreview/main/") {
+		t.Fatalf("expected delivery ref after incomplete draft recovery, got: %s", refsOut)
 	}
 }
 
@@ -3068,7 +3068,7 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 	}
 }
 
-func TestRunPRModeIncompleteDraftAutoSanitizesDocsBeforePublishing(t *testing.T) {
+func TestRunPRModeIncompleteDraftRejectsPrivacyBlockedDocsWithoutAutoSanitizing(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -3113,7 +3113,7 @@ func TestRunPRModeIncompleteDraftAutoSanitizesDocsBeforePublishing(t *testing.T)
 		"FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE=1",
 		"FAKE_CODEX_DECISION=continue",
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -3123,28 +3123,13 @@ func TestRunPRModeIncompleteDraftAutoSanitizesDocsBeforePublishing(t *testing.T)
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
-		t.Fatalf("expected incomplete draft PR summary output, got: %s", output)
+	if !strings.Contains(output, "privacy scan failed: local path pattern matched in docs/generated.md") {
+		t.Fatalf("expected privacy-blocked incomplete draft failure, got: %s", output)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
-	var deliveryRef string
-	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
-		ref = strings.TrimSpace(ref)
-		if strings.Contains(ref, "origin/deepreview/feature/test/") {
-			deliveryRef = ref
-			break
-		}
-	}
-	if deliveryRef == "" {
-		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
-	}
-	deliveredDoc := runCmd(t, td, nil, "git", "-C", userClone, "show", deliveryRef+":docs/generated.md")
-	if strings.Contains(deliveredDoc, "/Users/") {
-		t.Fatalf("expected incomplete draft delivery doc to be sanitized, got: %s", deliveredDoc)
-	}
-	if !strings.Contains(deliveredDoc, "/path/to/project") {
-		t.Fatalf("expected incomplete draft delivery doc to contain sanitized placeholder, got: %s", deliveredDoc)
+	if strings.TrimSpace(refsOut) != "" {
+		t.Fatalf("did not expect delivery ref after privacy-blocked incomplete draft failure, got: %s", refsOut)
 	}
 }

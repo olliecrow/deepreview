@@ -241,6 +241,50 @@ func TestValidateLocalBranchReadyForRemoteReviewRejectsCaseVariantExplicitGitHub
 	})
 }
 
+func TestValidateLocalBranchReadyForRemoteReviewRejectsMismatchedUpstreamTrackingBranch(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	repo := filepath.Join(td, "repo")
+
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, seed)
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "README.md")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "base")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", "main")
+	mainSHA := strings.TrimSpace(runGitCommand(t, seed, "rev-parse", "HEAD"))
+
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature remote\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "feature.txt")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "feature")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runGitCommand(t, td, "clone", remote, repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", repo, "checkout", "-B", "feature/test", mainSHA)
+	runGitCommand(t, td, "-C", repo, "branch", "--set-upstream-to=origin/main", "feature/test")
+
+	withWorkingDir(t, repo, func() {
+		err := validateLocalBranchReadyForRemoteReview("git", canonicalPath(t, repo), "feature/test")
+		if err == nil {
+			t.Fatalf("expected mismatched-upstream error")
+		}
+		if !strings.Contains(err.Error(), "current branch tracks `origin/main`") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestInferRepoAndBranchExplicitDifferentBranchSkipsCurrentBranchReadinessCheck(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {
