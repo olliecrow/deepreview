@@ -567,7 +567,7 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
-		if err := gitCommitIfPossible("deepreview: prepare delivery branch"); err != nil {
+		if err := gitCommitIfPossible("deepreview: mutate delivery state"); err != nil {
 			return "", err
 		}
 		if mode == "pr" {
