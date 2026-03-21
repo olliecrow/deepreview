@@ -69,24 +69,24 @@ This document defines the canonical runtime and product contract for `deepreview
 - final delivery pushes are allowed only after round execution completes and no blocking verification failures are reported.
 - PR mode has exactly four terminal outcomes: success with complete PR, success with incomplete draft PR, success with no deliverable repository changes (no push/PR), or failure.
 - default delivery mode is `pr` and must not push source branch directly.
-- in delivery, Codex owns final local delivery preparation inside the worktree, while deepreview owns final pre-publication validation, remote push / PR creation, and bounded post-create mergeability validation.
+- in delivery, Codex owns final local merge-readiness assessment inside the worktree, while deepreview owns final pre-publication validation, remote push / PR creation, and bounded post-create mergeability validation.
 - in `pr` mode, run one fresh Codex delivery prompt in a candidate-branch worktree. That prompt must:
   - inspect the candidate diff and prior round artifacts
   - run any final local merge-readiness checks still needed
-  - prepare or refine final local branch state for publication
-  - optionally move work onto the delivery branch locally
-  - when history/range-scoped blockers exist outside the current tip, prefer rebuilding a clean publishable delivery branch locally from the reviewed candidate tree instead of defaulting straight to an incomplete draft PR
+  - validate final local merge-readiness without mutating tracked repository content or branch history
+  - keep the publish target fixed to the reviewed candidate branch
+  - if it detects a blocker that would require tracked-code edits or history cleanup, report that blocker instead of repairing it in delivery
   - report whether local delivery preparation is complete or incomplete
-  - write only local-readiness result fields needed by the orchestrator (for example mode, optional prepared delivery branch, and incomplete status/reason), not push refspecs or PR metadata
-- after the delivery prompt finishes, deepreview must validate the exact ref that will be published before any push or PR creation occurs.
-- post-prompt delivery validation must inspect the actual prepared ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
-- post-prompt delivery validation must also enforce repo-native outbound history policies against the prepared publish range when the repository defines them.
-- a prepared PR delivery ref may be published either by preserving candidate-tip ancestry or by rebuilding clean history on the delivery branch, but only when the rebuilt delivery branch still matches the final reviewed candidate tree exactly and the reviewed candidate branch itself still preserves the original candidate tip.
+  - write only local-readiness result fields needed by the orchestrator (mode and incomplete status/reason); `delivery_branch` remains reserved and must stay unset
+- before and after the delivery prompt, deepreview must validate the reviewed candidate branch itself before any push or PR creation occurs.
+- post-prompt delivery validation must inspect the exact candidate ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
+- post-prompt delivery validation must also enforce repo-native outbound history policies against the candidate publish range when the repository defines them.
+- if candidate publication is blocked by tracked content or branch history, deepreview may run one bounded delivery-recovery cycle that routes the blocker back through the normal candidate-branch execute/review path before retrying delivery.
 - after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
 - incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
 - incomplete draft PR bodies must explicitly state that the PR is incomplete, why delivery did not finish cleanly, and what remains to be done before merge.
-- incomplete delivery/reporting should distinguish current-tip blockers from PR-range/history-only blockers; when the blocker is historical or range-scoped, deepreview should first attempt a verified clean-history rebuild on the delivery branch and report incomplete only if that repair path is still blocked.
+- incomplete delivery/reporting should distinguish current-tip blockers from PR-range/history-only blockers; when the blocker requires tracked-code edits or history cleanup, deepreview should first attempt one bounded candidate-branch recovery cycle and report incomplete only if that recovery path is still blocked.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.

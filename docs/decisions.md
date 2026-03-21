@@ -220,15 +220,15 @@ References:
 `docs/spec.md`, `docs/architecture.md`
 
 Decision:
-Allow delivery-stage clean-history rebuilds only on the dedicated delivery branch when a PR-range/history-scoped blocker prevents publishing the reviewed candidate branch directly.
+Keep delivery read-only for tracked repository content and route publishability repairs back through the normal candidate-branch execute/review path.
 Context:
-Some publication blockers live in outbound history rather than the current tip, for example repo-native push-range policy checks that fail on earlier commits even after the current tip has been sanitized and locally verified.
+Some publication blockers live in outbound history rather than the current tip, for example repo-native push-range policy checks that fail on earlier commits even after the current tip has been sanitized and locally verified. Allowing delivery to mutate a separate publish branch creates a trust gap between "what deepreview reviewed" and "what deepreview published."
 Rationale:
-Letting Codex rebuild a clean delivery branch from the final reviewed candidate tree keeps delivery autonomous for a real class of blockers without weakening the reviewed-state safety guarantees. The candidate branch stays as the audited review record, while the delivery branch becomes a publishable equivalent with clean history.
+The simplest trustworthy rule is: the branch deepreview publishes must be the branch deepreview reviewed. Delivery therefore stays read-only for tracked repository content. When publication is blocked by tracked content or history, deepreview should run one bounded recovery cycle on the candidate branch, verify that repaired candidate normally, and only then publish it.
 Trade-offs:
-Adds one more delivery-path shape and requires explicit validation that the rebuilt branch matches the reviewed candidate tree exactly. Deepreview still does not allow speculative history surgery on the candidate branch itself.
+Adds one bounded recovery path after the normal round loop and may require candidate-branch history cleanup inside execute. This is still simpler than allowing delivery-time branch divergence and easier to reason about operationally.
 Enforcement:
-The delivery prompt explicitly prefers verified clean-history rebuilds on `DELIVERY_BRANCH`; orchestrator validation requires the reviewed candidate branch to preserve the original candidate tip and allows rebuilt publish refs only when they match the final candidate tree exactly; pre-publication validation also reruns the repo-native push-range policy against the prepared ref.
+The delivery prompt forbids tracked-content mutation and keeps `delivery_branch` unset. The orchestrator prevalidates candidate publishability, routes recoverable blockers back through one bounded candidate-branch recovery cycle, rejects any delivery prompt that mutates the candidate branch or selects a different publish ref, and publishes only the reviewed candidate branch after post-prompt validation passes.
 References:
 `prompts/delivery/01-deliver.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`
 

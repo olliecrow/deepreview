@@ -213,7 +213,7 @@ What this command does:
      A first `+"`stop`"+` still forces one confirmation round.
      A second consecutive `+"`stop`"+` ends the loop, even if that round also changed the repository.
   5) Delivers once at the end:
-     - mode=pr (default): runs one fresh Codex delivery stage for final local delivery preparation, then deepreview pushes, opens the PR, and performs bounded post-create mergeability validation
+     - mode=pr (default): runs one fresh Codex delivery stage for final local merge-readiness assessment, routes any remaining tracked-content/history blocker back through one bounded candidate-branch recovery cycle, then deepreview pushes, opens the PR, and performs bounded post-create mergeability validation
      - mode=yolo: pushes directly to source branch
 
 Usage:
@@ -992,9 +992,10 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintln(out, "5. delivery stage")
 	if cfg.Mode == ModePR {
 		fmt.Fprintln(out, "   - validate delivery files")
+		fmt.Fprintln(out, "   - if the candidate branch is not yet publishable, run one bounded recovery cycle on the candidate branch")
 		fmt.Fprintln(out, "   - run one fresh Codex delivery stage")
-		fmt.Fprintln(out, "   - finalize local branch state for publication")
-		fmt.Fprintln(out, "   - push the delivery branch, open the PR, and wait briefly for mergeability to settle")
+		fmt.Fprintln(out, "   - confirm merge-readiness without mutating tracked repository content")
+		fmt.Fprintln(out, "   - push the reviewed candidate branch to the deepreview PR branch, open the PR, and wait briefly for mergeability to settle")
 	} else {
 		fmt.Fprintln(out, "   - validate delivery files")
 		fmt.Fprintln(out, "   - run one fresh Codex delivery stage and push the source branch after final verification")
