@@ -186,7 +186,11 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 			if remote == "" {
 				return RepoIdentity{}, NewDeepReviewError("local repo input must have remote.origin.url configured: %s", repoPath)
 			}
-			if localCloneSource, ok := localCloneSource(remote, repoPath); ok {
+			localCloneSource, ok, err := authoritativeLocalCloneSource(config.GitBin, remote, repoPath)
+			if err != nil {
+				return RepoIdentity{}, err
+			}
+			if ok {
 				return RepoIdentity{
 					SourceType:  RepoSourceFilesystem,
 					Name:        filesystemRepoDisplayName(localCloneSource),
@@ -263,6 +267,24 @@ func localCloneSource(remote, repoPath string) (string, bool) {
 	return "", false
 }
 
+func authoritativeLocalCloneSource(gitBin, remote, repoPath string) (string, bool, error) {
+	if cloneSource, ok := localCloneSource(remote, repoPath); ok {
+		return cloneSource, true, nil
+	}
+
+	originBase, err := repoOriginBasePath(gitBin, repoPath)
+	if err != nil {
+		return "", false, err
+	}
+	if strings.TrimSpace(originBase) == "" || samePath(originBase, repoPath) {
+		return "", false, nil
+	}
+	if cloneSource, ok := localCloneSource(remote, originBase); ok {
+		return cloneSource, true, nil
+	}
+	return "", false, nil
+}
+
 func validateDeliveryModeRepoIdentity(mode string, repoIdentity RepoIdentity) error {
 	if strings.TrimSpace(mode) != ModePR {
 		return nil
@@ -317,13 +339,13 @@ const (
 func parseOwnerRepo(text string) (string, string, bool) {
 	trimmed := strings.TrimSpace(text)
 	if m := githubSCPLikeRemoteRe.FindStringSubmatch(trimmed); m != nil {
-		return SanitizeSegment(m[1]), SanitizeSegment(m[2]), true
+		return canonicalOwnerRepoSegments(m[1], m[2])
 	}
 	if owner, name, ok := parseGitHubOwnerRepoURL(trimmed); ok {
 		return owner, name, true
 	}
 	if m := ownerRepoSlugRe.FindStringSubmatch(trimmed); m != nil {
-		return SanitizeSegment(m[1]), SanitizeSegment(m[2]), true
+		return canonicalOwnerRepoSegments(m[1], m[2])
 	}
 	return "", "", false
 }
@@ -359,7 +381,7 @@ func parseGitHubOwnerRepoPath(path string) (string, string, bool) {
 	if !ownerRepoSegmentValid(owner) || !ownerRepoSegmentValid(name) {
 		return "", "", false
 	}
-	return SanitizeSegment(owner), SanitizeSegment(name), true
+	return canonicalOwnerRepoSegments(owner, name)
 }
 
 func ownerRepoSegmentValid(text string) bool {
@@ -386,6 +408,38 @@ func tryReadRemoteURL(gitBin, repoPath string) (string, error) {
 		return "", nil
 	}
 	return strings.TrimSpace(completed.Stdout), nil
+}
+
+func canonicalOwnerRepoSegments(owner, name string) (string, string, bool) {
+	trimmedOwner := strings.TrimSpace(owner)
+	trimmedName := strings.TrimSpace(name)
+	if trimmedOwner == "." || trimmedOwner == ".." || trimmedName == "." || trimmedName == ".." {
+		return "", "", false
+	}
+	return SanitizeSegment(trimmedOwner), SanitizeSegment(trimmedName), true
+}
+
+func repoOriginBasePath(gitBin, repoPath string) (string, error) {
+	completed, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--git-common-dir"}, "", "", false, 0)
+	if err != nil {
+		return "", err
+	}
+	if completed.ReturnCode != 0 {
+		return "", nil
+	}
+
+	commonDir := strings.TrimSpace(completed.Stdout)
+	if commonDir == "" {
+		return "", nil
+	}
+	if !filepath.IsAbs(commonDir) {
+		commonDir = filepath.Join(repoPath, commonDir)
+	}
+	commonDir = filepath.Clean(commonDir)
+	if filepath.Base(commonDir) == ".git" {
+		return filepath.Dir(commonDir), nil
+	}
+	return commonDir, nil
 }
 
 func (o *Orchestrator) Run() (retErr error) {
@@ -2436,89 +2490,6 @@ func hasNewExactMatch(baseMatches, headMatches []string) bool {
 	return false
 }
 
-const localPathScanFailurePrefix = "privacy scan failed: local path pattern matched in "
-
-func (o *Orchestrator) tryAutoRemediateLocalPathPrivacyViolation(repoPath, candidateBranch string, scanErr error) (bool, error) {
-	relPath, ok := extractLocalPathScanFailurePath(scanErr)
-	if !ok {
-		return false, nil
-	}
-	if !isAutoSanitizableDocPath(relPath) {
-		return false, nil
-	}
-	if _, err := Git(repoPath, o.config.GitBin, true, "checkout", candidateBranch); err != nil {
-		return false, err
-	}
-	targetPath := filepath.Join(repoPath, relPath)
-	content, err := os.ReadFile(targetPath)
-	if err != nil {
-		if !os.IsNotExist(err) {
-			return false, err
-		}
-		content, err = FileContentAtRef(repoPath, o.config.GitBin, candidateBranch, relPath)
-		if err != nil {
-			return false, err
-		}
-	}
-	sanitized := replaceLocalPathsWithPlaceholder(string(content))
-	if sanitized == string(content) {
-		return false, nil
-	}
-	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-		return false, err
-	}
-	if err := os.WriteFile(targetPath, []byte(sanitized), 0o644); err != nil {
-		return false, err
-	}
-	if err := CommitAllChanges(repoPath, o.config.GitBin, "deepreview: sanitize local paths for privacy scan", o.commitIdentity); err != nil {
-		return false, err
-	}
-	if err := CleanupUntrackedOperationalArtifacts(repoPath, o.config.GitBin); err != nil {
-		return false, err
-	}
-	if err := o.validateNoManagedOperationalArtifactChanges("origin/"+o.config.SourceBranch, candidateBranch); err != nil {
-		return false, err
-	}
-	return true, nil
-}
-
-func extractLocalPathScanFailurePath(scanErr error) (string, bool) {
-	if scanErr == nil {
-		return "", false
-	}
-	message := strings.TrimSpace(scanErr.Error())
-	if !strings.HasPrefix(message, localPathScanFailurePrefix) {
-		return "", false
-	}
-	relPath := strings.TrimSpace(strings.TrimPrefix(message, localPathScanFailurePrefix))
-	if relPath == "" {
-		return "", false
-	}
-	return relPath, true
-}
-
-func isAutoSanitizableDocPath(relPath string) bool {
-	normalized := filepath.ToSlash(strings.TrimSpace(relPath))
-	if !strings.HasPrefix(normalized, "docs/") {
-		return false
-	}
-	ext := strings.ToLower(filepath.Ext(normalized))
-	switch ext {
-	case ".md", ".markdown", ".txt", ".rst", ".adoc":
-		return true
-	default:
-		return false
-	}
-}
-
-func replaceLocalPathsWithPlaceholder(text string) string {
-	sanitized := text
-	for _, pattern := range privatePathPatterns {
-		sanitized = pattern.ReplaceAllString(sanitized, "/path/to/project")
-	}
-	return sanitized
-}
-
 func (o *Orchestrator) autoCommitWorktreeChangesIfNeeded(repoPath, message string) error {
 	changed, err := HasUncommittedChanges(repoPath, o.config.GitBin)
 	if err != nil {
@@ -2941,6 +2912,19 @@ func (o *Orchestrator) reviewedCandidateHeadForPublish(candidateBranch string) (
 	return RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 }
 
+func (o *Orchestrator) restoreCandidateBranchToReviewedHead(candidateBranch, candidateHead string) error {
+	trimmedBranch := strings.TrimSpace(candidateBranch)
+	trimmedHead := strings.TrimSpace(candidateHead)
+	if trimmedBranch == "" || trimmedHead == "" {
+		return nil
+	}
+	currentHead, err := RevParse(o.managedRepoPath, o.config.GitBin, trimmedBranch)
+	if err == nil && currentHead == trimmedHead {
+		return nil
+	}
+	return SetBranchToRef(o.managedRepoPath, o.config.GitBin, trimmedBranch, trimmedHead)
+}
+
 func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
 	deadline := time.Now().Add(mergeReadyPRValidationWindow)
 	reportedPending := false
@@ -3050,6 +3034,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	if err != nil {
 		return DeliveryResult{}, err
 	}
+	o.reviewedCandidateHead = candidateHead
 	deliveryDir := filepath.Join(o.runRoot, "delivery")
 	deliveryWorktree := filepath.Join(deliveryDir, "worktree")
 	if err := os.MkdirAll(deliveryDir, 0o755); err != nil {
@@ -3153,6 +3138,9 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return DeliveryResult{}, err
 	}
 	if candidateHeadAfterPrompt != candidateHead {
+		if restoreErr := o.restoreCandidateBranchToReviewedHead(candidateBranch, candidateHead); restoreErr != nil {
+			return DeliveryResult{}, restoreErr
+		}
 		return DeliveryResult{}, NewDeepReviewError(
 			"delivery prompt must not mutate the candidate branch; route tracked-code fixes back through execute rounds instead",
 		)
@@ -3346,6 +3334,10 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 		return false, err
 	}
+	if err := o.restoreCandidateBranchToReviewedHead(candidateBranch, candidateHead); err != nil {
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
+	}
 	changedFiles, err := o.validateDeliveryFiles(candidateBranch)
 	if err != nil {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
@@ -3357,20 +3349,8 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 	}
 	changedFiles, err = o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
 	if err != nil {
-		remediated, remediationErr := o.tryAutoRemediateLocalPathPrivacyViolation(o.managedRepoPath, candidateBranch, err)
-		if remediationErr != nil {
-			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(remediationErr))
-			return false, remediationErr
-		}
-		if !remediated {
-			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-			return false, err
-		}
-		changedFiles, err = o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
-		if err != nil {
-			o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
-			return false, err
-		}
+		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
+		return false, err
 	}
 	if len(changedFiles) == 0 {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")

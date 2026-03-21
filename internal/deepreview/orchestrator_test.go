@@ -115,6 +115,40 @@ func TestResolveRepoIdentityCanonicalizesRelativeFilesystemOriginRemote(t *testi
 	}
 }
 
+func TestResolveRepoIdentityCanonicalizesRelativeFilesystemOriginRemoteForLinkedWorktree(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	linked := filepath.Join(td, "nested", "linked-worktree")
+	if err := os.MkdirAll(filepath.Dir(linked), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", repo)
+	runGitTest(t, td, "-C", repo, "config", "user.email", testPlaceholderEmail("test"))
+	runGitTest(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitTest(t, td, "-C", repo, "remote", "add", "origin", "../remote.git")
+	runGitTest(t, td, "-C", repo, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", repo, "add", "README.md")
+	runGitTest(t, td, "-C", repo, "commit", "-m", "base")
+	runGitTest(t, td, "-C", repo, "worktree", "add", "--detach", linked, "HEAD")
+
+	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, linked)
+	if err != nil {
+		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	}
+	if identity.SourceType != RepoSourceFilesystem {
+		t.Fatalf("expected filesystem repo source type, got: %s", identity.SourceType)
+	}
+	if canonicalPath(t, identity.CloneSource) != canonicalPath(t, remote) {
+		t.Fatalf("expected canonical relative clone source %s, got %s", canonicalPath(t, remote), identity.CloneSource)
+	}
+}
+
 func TestNewOrchestratorRejectsPRModeForFilesystemOriginRemote(t *testing.T) {
 	td := t.TempDir()
 	remote := filepath.Join(td, "remote.git")
@@ -410,6 +444,9 @@ func TestParseOwnerRepoRejectsSuffixOnlyNonGitHubRemotes(t *testing.T) {
 	cases := []string{
 		"ssh://mirror.local/github.com/example-org/example-repo.git",
 		"file:///tmp/github.com/example-org/example-repo.git",
+		"../remote.git",
+		"./remote.git",
+		"owner/..",
 	}
 
 	for _, input := range cases {

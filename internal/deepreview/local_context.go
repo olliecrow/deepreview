@@ -126,7 +126,11 @@ func detectLocalRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
 		Path:      topLevel,
 		RemoteURL: remoteURL,
 	}
-	if cloneSource, ok := localCloneSource(remoteURL, topLevel); ok {
+	cloneSource, ok, err := authoritativeLocalCloneSource(gitBin, remoteURL, topLevel)
+	if err != nil {
+		return nil, err
+	}
+	if ok {
 		state.SourceType = RepoSourceFilesystem
 		state.CloneSource = cloneSource
 		state.Name = filesystemRepoDisplayName(cloneSource)
@@ -314,6 +318,16 @@ func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {
 	if upstreamResult.ReturnCode == 0 {
 		upstreamRef := strings.TrimSpace(upstreamResult.Stdout)
 		if upstreamRef != "" {
+			expected := "origin/" + branch
+			if upstreamRef != expected {
+				return "", NewDeepReviewError(
+					"unable to verify push state for `%s`: current branch tracks `%s`, but deepreview requires `%s`; push with `git push -u origin %s` first",
+					branch,
+					upstreamRef,
+					expected,
+					branch,
+				)
+			}
 			return upstreamRef, nil
 		}
 	}
