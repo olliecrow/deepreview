@@ -115,7 +115,7 @@ func TestResolveRepoIdentityCanonicalizesRelativeFilesystemOriginRemote(t *testi
 	}
 }
 
-func TestResolveRepoIdentityCanonicalizesRelativeFilesystemOriginRemoteForLinkedWorktree(t *testing.T) {
+func TestResolveRepoIdentityRejectsRelativeFilesystemOriginRemoteForLinkedWorktree(t *testing.T) {
 	td := t.TempDir()
 	remote := filepath.Join(td, "remote.git")
 	repo := filepath.Join(td, "repo")
@@ -137,15 +137,12 @@ func TestResolveRepoIdentityCanonicalizesRelativeFilesystemOriginRemoteForLinked
 	runGitTest(t, td, "-C", repo, "commit", "-m", "base")
 	runGitTest(t, td, "-C", repo, "worktree", "add", "--detach", linked, "HEAD")
 
-	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, linked)
-	if err != nil {
-		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	_, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, linked)
+	if err == nil {
+		t.Fatal("expected linked worktree with unresolved relative origin remote to be rejected")
 	}
-	if identity.SourceType != RepoSourceFilesystem {
-		t.Fatalf("expected filesystem repo source type, got: %s", identity.SourceType)
-	}
-	if canonicalPath(t, identity.CloneSource) != canonicalPath(t, remote) {
-		t.Fatalf("expected canonical relative clone source %s, got %s", canonicalPath(t, remote), identity.CloneSource)
+	if !strings.Contains(err.Error(), "supported GitHub or local filesystem origin remote") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -289,7 +286,52 @@ func TestValidatePreparedDeliveryRefRejectsRewrittenCandidateBranch(t *testing.T
 	if err == nil {
 		t.Fatalf("expected rewritten candidate branch to be rejected")
 	}
-	if !strings.Contains(err.Error(), "lost the reviewed candidate tip") {
+	if !strings.Contains(err.Error(), "no longer matches the reviewed candidate tip") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestValidatePreparedDeliveryRefRejectsFastForwardedCandidateBranch(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "init", "-b", "main", repo)
+	runGitTest(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitTest(t, td, "-C", repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", repo, "add", "README.md")
+	runGitTest(t, td, "-C", repo, "commit", "-m", "seed")
+
+	runGitTest(t, td, "-C", repo, "checkout", "-b", "candidate")
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", repo, "add", "feature.txt")
+	runGitTest(t, td, "-C", repo, "commit", "-m", "feature")
+	candidateHead := runGitTest(t, td, "-C", repo, "rev-parse", "HEAD")
+
+	if err := os.WriteFile(filepath.Join(repo, "feature.txt"), []byte("feature\nextra\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", repo, "add", "feature.txt")
+	runGitTest(t, td, "-C", repo, "commit", "-m", "extra")
+
+	o := &Orchestrator{
+		managedRepoPath: repo,
+		config: ReviewConfig{
+			GitBin: "git",
+		},
+	}
+
+	err := o.validatePreparedDeliveryRef(candidateHead, "candidate", "candidate")
+	if err == nil {
+		t.Fatalf("expected fast-forwarded candidate branch to be rejected")
+	}
+	if !strings.Contains(err.Error(), "no longer matches the reviewed candidate tip") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
