@@ -186,10 +186,7 @@ func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error)
 			if remote == "" {
 				return RepoIdentity{}, NewDeepReviewError("local repo input must have remote.origin.url configured: %s", repoPath)
 			}
-			localCloneSource, ok, err := authoritativeLocalCloneSource(config.GitBin, remote, repoPath)
-			if err != nil {
-				return RepoIdentity{}, err
-			}
+			localCloneSource, ok := localCloneSource(remote, repoPath)
 			if ok {
 				return RepoIdentity{
 					SourceType:  RepoSourceFilesystem,
@@ -265,13 +262,6 @@ func localCloneSource(remote, repoPath string) (string, bool) {
 		return "", false
 	}
 	return "", false
-}
-
-func authoritativeLocalCloneSource(gitBin, remote, repoPath string) (string, bool, error) {
-	if cloneSource, ok := localCloneSource(remote, repoPath); ok {
-		return cloneSource, true, nil
-	}
-	return "", false, nil
 }
 
 func validateDeliveryModeRepoIdentity(mode string, repoIdentity RepoIdentity) error {
