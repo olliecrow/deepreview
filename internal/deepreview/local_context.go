@@ -311,34 +311,35 @@ func remoteRefSHA(gitBin, repoPath, upstreamRef string) (string, error) {
 }
 
 func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {
+	expected := "origin/" + branch
+	currentUpstream := ""
 	upstreamResult, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"}, "", "", false, 0)
 	if err != nil {
 		return "", err
 	}
 	if upstreamResult.ReturnCode == 0 {
-		upstreamRef := strings.TrimSpace(upstreamResult.Stdout)
-		if upstreamRef != "" {
-			expected := "origin/" + branch
-			if upstreamRef != expected {
-				return "", NewDeepReviewError(
-					"unable to verify push state for `%s`: current branch tracks `%s`, but deepreview requires `%s`; push with `git push -u origin %s` first",
-					branch,
-					upstreamRef,
-					expected,
-					branch,
-				)
-			}
-			return upstreamRef, nil
+		currentUpstream = strings.TrimSpace(upstreamResult.Stdout)
+		if currentUpstream == expected {
+			return currentUpstream, nil
 		}
 	}
 
-	fallback := "origin/" + branch
-	fallbackResult, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--verify", "--quiet", fallback}, "", "", false, 0)
+	fallbackResult, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--verify", "--quiet", expected}, "", "", false, 0)
 	if err != nil {
 		return "", err
 	}
 	if fallbackResult.ReturnCode == 0 {
-		return fallback, nil
+		return expected, nil
+	}
+
+	if currentUpstream != "" {
+		return "", NewDeepReviewError(
+			"unable to verify push state for `%s`: current branch tracks `%s`, but deepreview requires `%s`; push with `git push -u origin %s` first",
+			branch,
+			currentUpstream,
+			expected,
+			branch,
+		)
 	}
 
 	return "", NewDeepReviewError(

@@ -271,17 +271,6 @@ func authoritativeLocalCloneSource(gitBin, remote, repoPath string) (string, boo
 	if cloneSource, ok := localCloneSource(remote, repoPath); ok {
 		return cloneSource, true, nil
 	}
-
-	originBase, err := repoOriginBasePath(gitBin, repoPath)
-	if err != nil {
-		return "", false, err
-	}
-	if strings.TrimSpace(originBase) == "" || samePath(originBase, repoPath) {
-		return "", false, nil
-	}
-	if cloneSource, ok := localCloneSource(remote, originBase); ok {
-		return cloneSource, true, nil
-	}
 	return "", false, nil
 }
 
@@ -417,29 +406,6 @@ func canonicalOwnerRepoSegments(owner, name string) (string, string, bool) {
 		return "", "", false
 	}
 	return SanitizeSegment(trimmedOwner), SanitizeSegment(trimmedName), true
-}
-
-func repoOriginBasePath(gitBin, repoPath string) (string, error) {
-	completed, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--git-common-dir"}, "", "", false, 0)
-	if err != nil {
-		return "", err
-	}
-	if completed.ReturnCode != 0 {
-		return "", nil
-	}
-
-	commonDir := strings.TrimSpace(completed.Stdout)
-	if commonDir == "" {
-		return "", nil
-	}
-	if !filepath.IsAbs(commonDir) {
-		commonDir = filepath.Join(repoPath, commonDir)
-	}
-	commonDir = filepath.Clean(commonDir)
-	if filepath.Base(commonDir) == ".git" {
-		return filepath.Dir(commonDir), nil
-	}
-	return commonDir, nil
 }
 
 func (o *Orchestrator) Run() (retErr error) {
@@ -2652,13 +2618,13 @@ func (o *Orchestrator) validatePreparedDeliveryRef(candidateHead, candidateBranc
 	if trimmedCandidateBranch == "" {
 		return NewDeepReviewError("delivery candidate branch is required")
 	}
-	candidateContainsOriginal, err := RefContainsCommit(o.managedRepoPath, o.config.GitBin, candidateHead, trimmedCandidateBranch)
+	currentCandidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, trimmedCandidateBranch)
 	if err != nil {
 		return err
 	}
-	if !candidateContainsOriginal {
+	if strings.TrimSpace(currentCandidateHead) != strings.TrimSpace(candidateHead) {
 		return NewDeepReviewError(
-			"delivery candidate branch lost the reviewed candidate tip; rerun recovery on the candidate branch instead of preparing a different publish ref: %s",
+			"delivery candidate branch no longer matches the reviewed candidate tip; rerun recovery on the candidate branch instead of preparing a different publish ref: %s",
 			trimmedCandidateBranch,
 		)
 	}

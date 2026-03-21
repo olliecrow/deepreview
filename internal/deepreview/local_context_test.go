@@ -277,9 +277,89 @@ func TestValidateLocalBranchReadyForRemoteReviewRejectsMismatchedUpstreamTrackin
 	withWorkingDir(t, repo, func() {
 		err := validateLocalBranchReadyForRemoteReview("git", canonicalPath(t, repo), "feature/test")
 		if err == nil {
-			t.Fatalf("expected mismatched-upstream error")
+			t.Fatalf("expected out-of-sync origin error")
 		}
-		if !strings.Contains(err.Error(), "current branch tracks `origin/main`") {
+		if !strings.Contains(err.Error(), "not synchronized") {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+func TestValidateLocalBranchReadyForRemoteReviewAllowsSyncedNonOriginTrackingBranch(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	repo := filepath.Join(td, "repo")
+
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, seed)
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "README.md")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "base")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runGitCommand(t, td, "clone", remote, repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", repo, "checkout", "feature/test")
+	runGitCommand(t, td, "-C", repo, "remote", "add", "fork", remote)
+	runGitCommand(t, td, "-C", repo, "fetch", "fork")
+	runGitCommand(t, td, "-C", repo, "branch", "--set-upstream-to=fork/feature/test", "feature/test")
+
+	withWorkingDir(t, repo, func() {
+		if err := validateLocalBranchReadyForRemoteReview("git", canonicalPath(t, repo), "feature/test"); err != nil {
+			t.Fatalf("expected synced origin branch to be accepted even when tracking fork, got: %v", err)
+		}
+	})
+}
+
+func TestValidateLocalBranchReadyForRemoteReviewRejectsNonOriginTrackingBranchWhenOriginMissing(t *testing.T) {
+	td := t.TempDir()
+	origin := filepath.Join(td, "origin.git")
+	fork := filepath.Join(td, "fork.git")
+	seed := filepath.Join(td, "seed")
+	repo := filepath.Join(td, "repo")
+
+	runGitCommand(t, td, "init", "--bare", origin)
+	runGitCommand(t, td, "init", "--bare", fork)
+	runGitCommand(t, td, "clone", origin, seed)
+	runGitCommand(t, td, "-C", seed, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", seed, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "README.md")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "base")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "origin", "main")
+	runGitCommand(t, td, "-C", seed, "remote", "add", "fork", fork)
+	runGitCommand(t, td, "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", seed, "add", "feature.txt")
+	runGitCommand(t, td, "-C", seed, "commit", "-m", "feature")
+	runGitCommand(t, td, "-C", seed, "push", "-u", "fork", "feature/test")
+
+	runGitCommand(t, td, "clone", origin, repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", testPlaceholderEmail("test"))
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", repo, "remote", "add", "fork", fork)
+	runGitCommand(t, td, "-C", repo, "fetch", "fork")
+	runGitCommand(t, td, "-C", repo, "checkout", "-B", "feature/test", "fork/feature/test")
+	runGitCommand(t, td, "-C", repo, "branch", "--set-upstream-to=fork/feature/test", "feature/test")
+
+	withWorkingDir(t, repo, func() {
+		err := validateLocalBranchReadyForRemoteReview("git", canonicalPath(t, repo), "feature/test")
+		if err == nil {
+			t.Fatalf("expected missing origin branch to be rejected")
+		}
+		if !strings.Contains(err.Error(), "deepreview requires `origin/feature/test`") {
 			t.Fatalf("unexpected error: %v", err)
 		}
 	})
