@@ -67,17 +67,18 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 4. Final delivery (single delivery stage):
 - require completed round execution and no blocking execute-stage verification failures
+- validate the current candidate branch for publishability before delivery; if tracked-content or history blockers remain, run one bounded recovery cycle on the candidate branch before retrying delivery
 - create a fresh delivery worktree and a fresh Codex context
-- run one Codex delivery prompt that owns final local repo mutation work:
+- run one Codex delivery prompt that owns final local merge-readiness assessment:
   - inspect candidate diff/history and prior verification evidence
   - run any remaining local merge-readiness checks
-  - optionally move work onto the delivery branch locally
-  - when publication is blocked by branch-history state outside the current tip, prefer rebuilding a clean publishable delivery branch from the reviewed candidate tree instead of stopping immediately
+  - do not mutate tracked repository content, candidate branch history, or publish refs
+  - if a remaining blocker would require tracked-code edits or history cleanup, report it instead of repairing it in delivery
   - report whether local delivery preparation is complete or incomplete
-  - write only local-readiness result fields for the orchestrator (mode, optional prepared delivery branch, incomplete status/reason), not push refspecs or PR metadata
-- the orchestrator validates the prepared ref, re-runs repo-native outbound-history policy checks against the prepared publish range, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
-- clean-history repair is allowed only on the dedicated delivery branch; the reviewed candidate branch must continue to preserve the original candidate tip, and any rebuilt delivery branch must match the final reviewed candidate tree exactly before publication
-- in `yolo` mode, the orchestrator pushes the prepared source-branch ref instead of creating a PR
+  - write only local-readiness result fields for the orchestrator (mode, incomplete status/reason); `delivery_branch` stays reserved and unset
+- the orchestrator validates the candidate ref, re-runs repo-native outbound-history policy checks against the candidate publish range, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
+- recovery for publishability blockers happens only through the normal candidate-branch execute/review path, so the branch that gets published is still the branch that was reviewed
+- in `yolo` mode, the orchestrator pushes the candidate/source-branch ref instead of creating a PR
 - the orchestrator still stays out of repo-specific local mutation logic except for worktree lifecycle, prompt launching/resume, artifact validation, remote publication, and terminal classification
 
 5. Finalization:

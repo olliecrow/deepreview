@@ -1065,8 +1065,8 @@ func TestEndToEndPRModeFailsWhenCandidateBranchLosesCandidateTip(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery candidate branch lost the reviewed candidate tip; rebuild clean history on a separate delivery branch instead") {
-		t.Fatalf("expected candidate-tip validation failure before publish, got:\n%s", output)
+	if !strings.Contains(output, "delivery prompt must not mutate the candidate branch; route tracked-code fixes back through execute rounds instead") {
+		t.Fatalf("expected delivery mutation failure before publish, got:\n%s", output)
 	}
 	if !strings.Contains(output, "incomplete draft PR not needed: no deliverable repository changes") {
 		t.Fatalf("expected no-op incomplete draft fallback when nothing remains to publish, got:\n%s", output)
@@ -1193,7 +1193,7 @@ func TestEndToEndPRModeScansPreparedDeliveryBranch(t *testing.T) {
 	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
 		t.Fatalf("expected incomplete draft recovery output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "delivery status: incomplete (privacy scan failed: secret-like pattern matched in delivery_branch_secret.txt)") {
+	if !strings.Contains(output, "delivery status: incomplete (delivery prompt must not select a separate publish ref; route tracked-code fixes back through execute rounds instead") {
 		t.Fatalf("expected prepared delivery branch failure to be surfaced, got:\n%s", output)
 	}
 	argsBytes, err := os.ReadFile(ghArgsPath)
@@ -1353,20 +1353,20 @@ func TestEndToEndPRModeUsesPreparedRefPushRangeScript(t *testing.T) {
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery push-range policy failed") {
-		t.Fatalf("expected prepared ref push-range policy to fail publish, got:\n%s", output)
+		t.Fatalf("expected candidate publish-range policy to fail publish, got:\n%s", output)
 	}
 	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
-		t.Fatalf("did not expect gh pr create when prepared ref policy fails, err=%v", err)
+		t.Fatalf("did not expect gh pr create when candidate publish-range policy fails, err=%v", err)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
 	if strings.TrimSpace(refsOut) != "" {
-		t.Fatalf("expected no delivery refs after prepared ref policy failure, got: %s", refsOut)
+		t.Fatalf("expected no delivery refs after candidate publish-range failure, got: %s", refsOut)
 	}
 }
 
-func TestEndToEndPRModeRebuildsCleanDeliveryBranchForHistoryScopedPushRangeBlocker(t *testing.T) {
+func TestEndToEndPRModeRecoversHistoryScopedPushRangeBlockerOnCandidateBranch(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1441,17 +1441,17 @@ func TestEndToEndPRModeRebuildsCleanDeliveryBranchForHistoryScopedPushRangeBlock
 		t.Fatalf("expected successful pr delivery output, got:\n%s", output)
 	}
 	if strings.Contains(output, "Draft PR created:") {
-		t.Fatalf("did not expect draft PR output after clean-history rebuild, got:\n%s", output)
+		t.Fatalf("did not expect draft PR output after candidate recovery, got:\n%s", output)
 	}
 	if strings.Contains(output, "delivery status: incomplete") {
-		t.Fatalf("did not expect incomplete delivery after clean-history rebuild, got:\n%s", output)
+		t.Fatalf("did not expect incomplete delivery after candidate recovery, got:\n%s", output)
 	}
 	argsBytes, err := os.ReadFile(ghArgsPath)
 	if err != nil {
 		t.Fatalf("missing gh args capture: %v", err)
 	}
 	if strings.Contains(string(argsBytes), "--draft") {
-		t.Fatalf("did not expect rebuilt delivery branch to create a draft PR, got:\n%s", string(argsBytes))
+		t.Fatalf("did not expect candidate recovery to create a draft PR, got:\n%s", string(argsBytes))
 	}
 }
 
@@ -2664,8 +2664,8 @@ func TestEndToEndPRModeDeliverySanitizesDocsAndSkipsPRWhenSanitizationRemovesAll
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery skipped: delivery preparation removed all deliverable repository changes") {
-		t.Fatalf("expected delivery skip after local sanitization removed all changes, got: %s", output)
+	if !strings.Contains(output, "delivery skipped: delivery recovery removed all deliverable repository changes") {
+		t.Fatalf("expected delivery skip after candidate recovery removed all changes, got: %s", output)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))

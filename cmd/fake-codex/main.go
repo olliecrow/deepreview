@@ -252,6 +252,14 @@ func gitCommitIfPossible(message string) error {
 	return nil
 }
 
+func currentGitBranch() string {
+	out, err := runGit("branch", "--show-current")
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(out)
+}
+
 func gitPushRefspecIfPossible(refspec string) error {
 	if strings.TrimSpace(refspec) == "" {
 		return fmt.Errorf("empty refspec")
@@ -326,6 +334,7 @@ func handlePrompt(prompt string) (string, error) {
 
 	if strings.Contains(prompt, "prompt 2 of 2") || strings.Contains(prompt, "prompt 2 of 3") {
 		roundNumber := roundNumberFromPrompt(prompt)
+		deliveryRecovery := strings.Contains(prompt, "## Delivery Recovery Mode") || strings.Contains(prompt, "This is a delivery-recovery round")
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
 		if verification == "" {
 			verification = filepath.Join(".", ".deepreview", "artifacts", "round-verification.md")
@@ -406,6 +415,46 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
+		if deliveryRecovery && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE")) != "" {
+			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
+				return "", err
+			}
+		}
+		if deliveryRecovery && strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
+			docPath := filepath.Join(".", "docs", "generated.md")
+			content, err := os.ReadFile(docPath)
+			if err == nil {
+				sourcePath := filepath.ToSlash(filepath.Join(string(os.PathSeparator)+"Users", "fake-user", "private", "project"))
+				sanitized := strings.ReplaceAll(string(content), sourcePath, "/path/to/project")
+				if err := writeText(docPath, sanitized); err != nil {
+					return "", err
+				}
+			}
+		}
+		if deliveryRecovery && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_REBUILD_FROM_CANDIDATE")) != "" {
+			baseRef := regexGet("Publish base ref: `([^`]+)`", prompt)
+			if baseRef == "" {
+				baseRef = regexGet("publishability against `([^`]+)`", prompt)
+			}
+			if baseRef == "" {
+				baseRef = "origin/main"
+			}
+			currentBranch := currentGitBranch()
+			if currentBranch == "" {
+				currentBranch = "HEAD"
+			}
+			if _, err := runGit("reset", "--hard", baseRef); err != nil {
+				return "", err
+			}
+			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
+				return "", err
+			}
+			if currentBranch != "HEAD" {
+				if _, err := runGit("checkout", currentBranch); err != nil {
+					return "", err
+				}
+			}
+		}
 		summary := regexGet("Write round summary to `([^`]+)`", prompt)
 		if summary == "" {
 			summary = regexGet("Round summary output path: `([^`]+)`", prompt)
@@ -464,7 +513,6 @@ func handlePrompt(prompt string) (string, error) {
 
 	if strings.Contains(prompt, "deepreview final delivery stage") {
 		mode := regexGet("Mode: `([^`]+)`", prompt)
-		candidateBranch := regexGet("Candidate branch: `([^`]+)`", prompt)
 		defaultBranch := regexGet("Default branch: `([^`]+)`", prompt)
 		deliveryBranch := regexGet("Delivery branch: `([^`]+)`", prompt)
 		resultPath := regexGet("Output result path: `([^`]+)`", prompt)
@@ -518,31 +566,6 @@ func handlePrompt(prompt string) (string, error) {
 			if _, err := runGit("reset", "--hard", targetRef); err != nil {
 				return "", err
 			}
-		}
-		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE")) != "" {
-			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
-				return "", err
-			}
-			if err := gitCommitIfPossible("deepreview: sanitize candidate delivery state"); err != nil {
-				return "", err
-			}
-		}
-		if mode == "pr" && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_REBUILD_FROM_CANDIDATE")) != "" {
-			sourceBranch := strings.TrimSpace(candidateBranch)
-			if sourceBranch == "" {
-				sourceBranch = "candidate"
-			}
-			targetRef := "origin/" + defaultBranch
-			if strings.TrimSpace(defaultBranch) == "" {
-				targetRef = "origin/main"
-			}
-			if _, err := runGit("checkout", "-B", deliveryBranch, targetRef); err != nil {
-				return "", err
-			}
-			if _, err := runGit("restore", "--source", sourceBranch, "--staged", "--worktree", ":/"); err != nil {
-				return "", err
-			}
-			preparedBranch = deliveryBranch
 		}
 		if err := gitCommitIfPossible("deepreview: prepare delivery branch"); err != nil {
 			return "", err

@@ -57,7 +57,13 @@ const (
 	stageHeartbeatInterval       = 15 * time.Second
 	mergeReadyPRPollInterval     = 1 * time.Second
 	mergeReadyPRValidationWindow = 30 * time.Second
+	deliveryRecoveryRoundBudget  = 2
 )
+
+type executeRoundOptions struct {
+	modeNote            string
+	executeModeOverride string
+}
 
 type pullRequestMergeState struct {
 	URL              string `json:"url"`
@@ -513,6 +519,7 @@ func (o *Orchestrator) Run() (retErr error) {
 			defaultBranch,
 			reviewReports,
 			o.config.MaxRounds,
+			executeRoundOptions{},
 		)
 		if err != nil {
 			return err
@@ -568,6 +575,26 @@ func (o *Orchestrator) Run() (retErr error) {
 			Mode:       o.config.Mode,
 			Skipped:    true,
 			SkipReason: "no deliverable repository changes were produced",
+		}
+		o.lastDelivery = &delivery
+		if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+			return err
+		}
+		o.reporter.StageFinished(deliveryStage, nil, true, delivery.SkipReason)
+		successMessage = "run completed successfully (no deliverable repository changes)"
+		return nil
+	}
+	changedFiles, err = o.recoverCandidateDeliveryReadiness(defaultBranch, candidateBranch, &roundSummaries)
+	if err != nil {
+		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+		return err
+	}
+	if len(changedFiles) == 0 {
+		delivery := DeliveryResult{
+			Mode:       o.config.Mode,
+			Skipped:    true,
+			SkipReason: "delivery recovery removed all deliverable repository changes",
 		}
 		o.lastDelivery = &delivery
 		if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
@@ -1421,6 +1448,7 @@ func (o *Orchestrator) runExecuteStage(
 	roundDir, candidateBranch, candidateHead, defaultBranch string,
 	reviewReports []string,
 	maxRounds int,
+	options executeRoundOptions,
 ) (RoundStatus, string, error) {
 	o.reporter.StageStarted("execute stage", roundPtr(round), "running execute workflow (triage+plan, implement+verify+finalize)")
 	executeDir := filepath.Join(roundDir, "execute")
@@ -1493,8 +1521,8 @@ func (o *Orchestrator) runExecuteStage(
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	roundModeNote := ""
-	roundExecuteModeOverride := ""
+	roundModeNote := strings.TrimSpace(options.modeNote)
+	roundExecuteModeOverride := strings.TrimSpace(options.executeModeOverride)
 
 	variables := map[string]string{
 		"REPO_SLUG":                   o.repoIdentity.Slug(),
@@ -2629,18 +2657,11 @@ func readPromptDeliveryResult(path string, expectedMode string) (promptDeliveryR
 	return result, nil
 }
 
-func (o *Orchestrator) resolvePreparedDeliveryRef(result promptDeliveryResult, candidateBranch string) (string, string, string, error) {
+func (o *Orchestrator) resolvePreparedDeliveryRef(candidateBranch string) (string, string, string, error) {
 	switch o.config.Mode {
 	case ModePR:
-		preparedRef := candidateBranch
-		if branch := strings.TrimSpace(result.DeliveryBranch); branch != "" {
-			if _, err := RevParse(o.managedRepoPath, o.config.GitBin, branch); err != nil {
-				return "", "", "", NewDeepReviewError("delivery prepared branch not found: %s", branch)
-			}
-			preparedRef = branch
-		}
 		deliveryBranch := o.deliveryBranchName()
-		return preparedRef, preparedRef + ":" + deliveryBranch, deliveryBranch, nil
+		return candidateBranch, candidateBranch + ":" + deliveryBranch, deliveryBranch, nil
 	case ModeYolo:
 		return candidateBranch, candidateBranch + ":" + o.config.SourceBranch, o.config.SourceBranch, nil
 	default:
@@ -2651,7 +2672,7 @@ func (o *Orchestrator) resolvePreparedDeliveryRef(result promptDeliveryResult, c
 func (o *Orchestrator) validatePreparedDeliveryRef(candidateHead, candidateBranch, preparedRef string) error {
 	trimmedPreparedRef := strings.TrimSpace(preparedRef)
 	if trimmedPreparedRef == "" {
-		return NewDeepReviewError("delivery prepared ref is required")
+		return NewDeepReviewError("delivery publish ref is required")
 	}
 	if strings.TrimSpace(candidateHead) == "" {
 		return NewDeepReviewError("delivery candidate head is required")
@@ -2666,28 +2687,17 @@ func (o *Orchestrator) validatePreparedDeliveryRef(candidateHead, candidateBranc
 	}
 	if !candidateContainsOriginal {
 		return NewDeepReviewError(
-			"delivery candidate branch lost the reviewed candidate tip; rebuild clean history on a separate delivery branch instead: %s",
+			"delivery candidate branch lost the reviewed candidate tip; rerun recovery on the candidate branch instead of preparing a different publish ref: %s",
 			trimmedCandidateBranch,
 		)
 	}
-	contains, err := RefContainsCommit(o.managedRepoPath, o.config.GitBin, candidateHead, trimmedPreparedRef)
-	if err != nil {
-		return err
+	if trimmedPreparedRef != trimmedCandidateBranch {
+		return NewDeepReviewError(
+			"delivery must publish the reviewed candidate branch directly, not a separate prepared ref: %s",
+			trimmedPreparedRef,
+		)
 	}
-	if contains {
-		return nil
-	}
-	sameTree, err := RefsHaveSameTree(o.managedRepoPath, o.config.GitBin, trimmedCandidateBranch, trimmedPreparedRef)
-	if err != nil {
-		return err
-	}
-	if sameTree {
-		return nil
-	}
-	return NewDeepReviewError(
-		"delivery prepared ref must contain the candidate tip or match the current candidate tree before publish: %s",
-		trimmedPreparedRef,
-	)
+	return nil
 }
 
 func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func(), error) {
@@ -2737,6 +2747,191 @@ func (o *Orchestrator) validatePublishableDeliveryRef(baseRef, candidateHead, ca
 		return nil, err
 	}
 	return changedFiles, nil
+}
+
+func isRecoverableDeliveryBlocker(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.TrimSpace(err.Error())
+	switch {
+	case strings.HasPrefix(message, "delivery blocked:"):
+		return true
+	case strings.HasPrefix(message, "delivery push-range policy failed"):
+		return true
+	case strings.HasPrefix(message, "privacy scan failed:"):
+		return true
+	default:
+		return false
+	}
+}
+
+func deliveryRecoveryModeNote(baseRef, blocker string) string {
+	return strings.TrimSpace(fmt.Sprintf(
+		"## Delivery Recovery Mode\n"+
+			"- This round was triggered by a delivery-readiness blocker after the normal review loop.\n"+
+			"- Delivery is read-only for tracked repository content. Any required publishability fix must happen here on the candidate branch, not in delivery.\n"+
+			"- Focus only on the blocker below and its immediate consequences.\n"+
+			"- Publish base ref: `%s`\n"+
+			"- Delivery blocker: %s\n",
+		strings.TrimSpace(baseRef),
+		sanitizePublicText(trimForDisplay(strings.TrimSpace(blocker), 500)),
+	))
+}
+
+func deliveryRecoveryExecuteOverride(baseRef string) string {
+	return strings.TrimSpace(fmt.Sprintf(
+		"This is a delivery-recovery round focused only on restoring publishability against `%s`.\n\n"+
+			"If delivery readiness is blocked by tracked content or history in the candidate branch, fix that here on the candidate branch. When the blocker is history-scoped and the intended current tree is otherwise correct, you may rebuild the candidate branch itself onto the correct base and replay the intended final tree there, provided that:\n"+
+			"- the candidate branch remains the single branch that will later be published\n"+
+			"- the rebuilt candidate state is fully verified in this round\n"+
+			"- you do not create or rely on a separate delivery-only branch\n",
+		strings.TrimSpace(baseRef),
+	))
+}
+
+func deliveryConfirmationModeNote(baseRef string) string {
+	return strings.TrimSpace(fmt.Sprintf(
+		"## Delivery Confirmation Mode\n"+
+			"- This is an automatic final audit round after a delivery-recovery change.\n"+
+			"- Prioritize verifying that the candidate branch is now publishable against `%s` and that recovery did not introduce unrelated churn.\n",
+		strings.TrimSpace(baseRef),
+	))
+}
+
+func deliveryConfirmationExecuteOverride() string {
+	return "This is an automatic final audit round. Prefer verification, review, and narrowly scoped follow-up over new broad changes."
+}
+
+func buildDeliveryRecoveryReviewReport(path, baseRef, blocker string) error {
+	body := strings.TrimSpace(fmt.Sprintf(
+		"# Delivery Recovery Review\n\n"+
+			"## Verdict\n"+
+			"- material_findings_found: yes\n"+
+			"- merge_readiness: needs_fixes\n\n"+
+			"## Material Findings\n"+
+			"### delivery publishability blocker\n"+
+			"- Category: delivery-readiness\n"+
+			"- Impact: material\n"+
+			"- Location: candidate branch vs `%s`\n"+
+			"- Why it matters: deepreview must publish the exact reviewed candidate branch, and the current candidate branch is not yet publishable.\n"+
+			"- Evidence: %s\n"+
+			"- Recommendation: fix only this publishability blocker on the candidate branch, verify it locally, and keep delivery read-only for tracked repository content.\n"+
+			"- Confidence: high\n\n"+
+			"## Verification ideas\n"+
+			"- rerun repo-native push-range/privacy checks against `%s..candidate`\n"+
+			"- rerun targeted tests and checks for the touched files\n",
+		strings.TrimSpace(baseRef),
+		sanitizePublicText(trimForDisplay(strings.TrimSpace(blocker), 500)),
+		strings.TrimSpace(baseRef),
+	)) + "\n"
+	return os.WriteFile(path, []byte(body), 0o644)
+}
+
+func (o *Orchestrator) runDeliveryRecoveryCycle(defaultBranch, candidateBranch string, roundSummaries *[]string, blocker error) ([]string, error) {
+	baseRef := "origin/" + o.config.SourceBranch
+	initialRound := len(*roundSummaries) + 1
+	totalRounds := initialRound + deliveryRecoveryRoundBudget - 1
+	if reporterWithMaxRounds, ok := o.reporter.(MaxRoundsAwareProgressReporter); ok {
+		reporterWithMaxRounds.SetMaxRounds(totalRounds)
+	}
+	o.reporter.StageProgress(
+		"delivery",
+		fmt.Sprintf(
+			"candidate branch is not yet publishable; running one bounded delivery-recovery cycle (%s)",
+			sanitizePublicText(trimForDisplay(strings.TrimSpace(blocker.Error()), 220)),
+		),
+		nil,
+	)
+
+	recoveryRoundDir := filepath.Join(o.runRoot, fmt.Sprintf("round-%02d", initialRound))
+	if err := os.MkdirAll(recoveryRoundDir, 0o755); err != nil {
+		return nil, err
+	}
+	recoveryReviewPath := filepath.Join(recoveryRoundDir, "review-01.md")
+	if err := buildDeliveryRecoveryReviewReport(recoveryReviewPath, baseRef, blocker.Error()); err != nil {
+		return nil, err
+	}
+	candidateHeadBefore, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return nil, err
+	}
+	_, recoverySummaryPath, err := o.runExecuteStage(
+		initialRound,
+		recoveryRoundDir,
+		candidateBranch,
+		candidateHeadBefore,
+		defaultBranch,
+		[]string{recoveryReviewPath},
+		totalRounds,
+		executeRoundOptions{
+			modeNote:            deliveryRecoveryModeNote(baseRef, blocker.Error()),
+			executeModeOverride: deliveryRecoveryExecuteOverride(baseRef),
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	*roundSummaries = append(*roundSummaries, recoverySummaryPath)
+
+	confirmationRound := initialRound + 1
+	confirmationRoundDir := filepath.Join(o.runRoot, fmt.Sprintf("round-%02d", confirmationRound))
+	if err := os.MkdirAll(confirmationRoundDir, 0o755); err != nil {
+		return nil, err
+	}
+	candidateHeadBefore, err = RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return nil, err
+	}
+	reviewReports, err := o.runReviewStage(confirmationRound, confirmationRoundDir, candidateHeadBefore, defaultBranch)
+	if err != nil {
+		return nil, err
+	}
+	confirmationStatus, confirmationSummaryPath, err := o.runExecuteStage(
+		confirmationRound,
+		confirmationRoundDir,
+		candidateBranch,
+		candidateHeadBefore,
+		defaultBranch,
+		reviewReports,
+		totalRounds,
+		executeRoundOptions{
+			modeNote:            deliveryConfirmationModeNote(baseRef),
+			executeModeOverride: deliveryConfirmationExecuteOverride(),
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	*roundSummaries = append(*roundSummaries, confirmationSummaryPath)
+	if confirmationStatus.Decision == "continue" {
+		return nil, NewDeepReviewError(
+			"delivery recovery confirmation round still requires further work; rerun deepreview with a higher --max-rounds if more recovery is needed",
+		)
+	}
+
+	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return nil, err
+	}
+	o.reviewedCandidateHead = candidateHead
+	return o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
+}
+
+func (o *Orchestrator) recoverCandidateDeliveryReadiness(defaultBranch, candidateBranch string, roundSummaries *[]string) ([]string, error) {
+	baseRef := "origin/" + o.config.SourceBranch
+	candidateHead, err := o.reviewedCandidateHeadForPublish(candidateBranch)
+	if err != nil {
+		return nil, err
+	}
+	validatedChangedFiles, err := o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
+	if err == nil {
+		return validatedChangedFiles, nil
+	}
+	if !isRecoverableDeliveryBlocker(err) {
+		return nil, err
+	}
+	return o.runDeliveryRecoveryCycle(defaultBranch, candidateBranch, roundSummaries, err)
 }
 
 func (o *Orchestrator) reviewedCandidateHeadForPublish(candidateBranch string) (string, error) {
@@ -2933,6 +3128,12 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	if err != nil {
 		return DeliveryResult{}, err
 	}
+	if strings.TrimSpace(result.DeliveryBranch) != "" {
+		return DeliveryResult{}, NewDeepReviewError(
+			"delivery prompt must not select a separate publish ref; route tracked-code fixes back through execute rounds instead: %s",
+			result.DeliveryBranch,
+		)
+	}
 
 	if err := os.RemoveAll(filepath.Join(deliveryWorktree, ".deepreview")); err != nil {
 		return DeliveryResult{}, err
@@ -2947,9 +3148,18 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	if changed {
 		return DeliveryResult{}, NewDeepReviewError("delivery worktree has uncommitted changes after prompt completion: %s", deliveryWorktree)
 	}
+	candidateHeadAfterPrompt, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return DeliveryResult{}, err
+	}
+	if candidateHeadAfterPrompt != candidateHead {
+		return DeliveryResult{}, NewDeepReviewError(
+			"delivery prompt must not mutate the candidate branch; route tracked-code fixes back through execute rounds instead",
+		)
+	}
 
 	baseRef := "origin/" + o.config.SourceBranch
-	preparedRef, pushRefspec, commitsBranch, err := o.resolvePreparedDeliveryRef(result, candidateBranch)
+	preparedRef, pushRefspec, commitsBranch, err := o.resolvePreparedDeliveryRef(candidateBranch)
 	if err != nil {
 		return DeliveryResult{}, err
 	}
