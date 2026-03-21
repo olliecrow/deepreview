@@ -126,10 +126,7 @@ func detectLocalRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
 		Path:      topLevel,
 		RemoteURL: remoteURL,
 	}
-	cloneSource, ok, err := authoritativeLocalCloneSource(gitBin, remoteURL, topLevel)
-	if err != nil {
-		return nil, err
-	}
+	cloneSource, ok := localCloneSource(remoteURL, topLevel)
 	if ok {
 		state.SourceType = RepoSourceFilesystem
 		state.CloneSource = cloneSource

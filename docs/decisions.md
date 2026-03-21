@@ -703,17 +703,17 @@ References:
 `internal/deepreview/types.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
 
 Decision:
-In PR mode, pre-delivery privacy handling uses a bounded remediation loop (maximum 3 attempts) and proceeds with PR delivery after bounded attempts.
+Do not auto-remediate privacy blockers during delivery; treat them as normal candidate-branch publishability blockers instead.
 Context:
-Hard-failing delivery on first privacy scan miss caused repeated runs to complete review/execute work but fail at the final gate, creating avoidable delivery dead-ends.
+Older delivery logic used a dedicated privacy-remediation loop and docs-only auto-sanitization inside delivery-adjacent worktrees. That created a second mutation path late in the run and let delivery behavior drift away from the simpler candidate-only publication model.
 Rationale:
-Treating privacy as a bounded fix loop keeps privacy hygiene proactive while preserving delivery momentum, while requiring clean post-attempt scans and a clean remediation worktree after deepreview auto-commits simple residual edits prevents a single inaccurate `stop` from bypassing the gate without forcing Codex to manage every last `git commit` detail itself.
+Privacy is still a hard publication gate, but tracked-content fixes belong on the reviewed candidate branch through the normal execute/review path. Keeping delivery read-only for tracked content makes the trust model simpler: the branch deepreview publishes is the branch deepreview reviewed.
 Trade-offs:
-Residual privacy findings may still exist when bounded attempts are exhausted; this approach prioritizes bounded autonomy and delivery continuity over hard-stop guarantees at this gate.
+Runs that reach delivery with unresolved privacy blockers can now fail or go incomplete instead of being auto-sanitized late. That is stricter, but it avoids hidden delivery-only mutations and keeps the publication path easier to reason about.
 Enforcement:
-PR-mode delivery runs one Codex branch-preparation pass and then a Codex-guided privacy remediation attempt loop (`max=3`) in candidate-branch worktrees before push/PR actions; attempts may stop early only after post-attempt commit-message and changed-file scans pass and the remediation worktree is clean after deepreview auto-commits simple residual edits, and delivery proceeds by policy after bounded attempts. Built-in docs-only local-path sanitization runs against that candidate worktree so non-default source branches cannot be remediated against the wrong checked-out branch.
+Delivery stays read-only for tracked repository content, publishability checks still include privacy/policy validation, and any tracked-content or history blocker must route back through the bounded candidate-branch recovery cycle rather than a special delivery-only remediation loop.
 References:
-`internal/deepreview/orchestrator.go`, `prompts/delivery/privacy-fix.md`, `internal/deepreview/integration_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`, `docs/architecture.md`, `README.md`
 
 Decision:
 Support only macOS and Linux host operating systems.
@@ -740,19 +740,6 @@ Enforcement:
 Review command captures interrupts, cancels run context, and force-terminates active command/process trees immediately with `SIGKILL`; run roots are created eagerly once arguments resolve so interrupted runs still have a stable artifact location; interrupt exit prints the failure summary surface before returning exit code `130`; review-stage teardown waits for worker goroutines plus active command shutdown before removing worktrees; and interrupt finalization performs a last transient-worktree scrub under the run root so interrupted runs do not report cleanup complete while review worktrees still exist. Tests verify cancellation classification, command teardown behavior, interrupt failure-summary output, and interrupt-triggered cleanup/source-branch non-mutation.
 References:
 `internal/deepreview/cli.go`, `internal/deepreview/process.go`, `internal/deepreview/tui.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/gitops.go`
-
-Decision:
-Write privacy remediation status inside the remediation worktree, then persist it into run artifacts after the worker exits.
-Context:
-Deepreview keeps prompt-written artifacts worktree-local during execution. Writing `privacy-status.json` directly into the run artifact directory couples prompt behavior to orchestrator-owned paths and makes delivery staging less consistent.
-Rationale:
-Keeping the worker-written status file inside the worktree preserves one simple rule for prompt outputs while still preserving the status artifact under the run directory for diagnostics and tests. The worktree path must also remain reserved deepreview space so repo-owned `.tmp/` content cannot accidentally deliver worker status files.
-Trade-offs:
-This adds one post-run copy step for the status artifact and reserves `.tmp/deepreview/` from repository delivery even when a repo tracks `.tmp/`.
-Enforcement:
-Privacy remediation prompts receive a worktree-local `OUTPUT_STATUS_PATH`; orchestrator copies the resulting JSON into the attempt artifact directory before consuming it; `.tmp/deepreview/` is treated as internal deepreview artifact space for excludes and delivery validation; and integration coverage requires the worker path to stay within the remediation worktree without becoming deliverable.
-References:
-`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `cmd/fake-codex/main.go`
 
 Decision:
 Evaluate outbound push diffs against added lines only.
@@ -950,17 +937,30 @@ References:
 `internal/deepreview/cli.go`, `internal/deepreview/local_context.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/spec.md`
 
 Decision:
-Apply strict privacy guardrails across outward-facing deepreview surfaces, with bounded pre-delivery remediation in PR mode.
+Apply strict privacy guardrails across outward-facing deepreview surfaces while keeping local terminal output literal.
 Context:
 Runs can generate or relay text into PR titles/descriptions, summaries, logs, and commit messages across both public and private repositories; these surfaces must never leak personal information or secrets.
 Rationale:
-Centralized sanitization plus pre-delivery scans provide consistent protection while preserving normal execution flow when content is safe.
+Centralized sanitization plus publish-time scans provide consistent protection where deepreview exposes text publicly, while literal local CLI/TUI output remains more useful for the operator running the tool.
 Trade-offs:
-Conservative pattern-based blocking can reject some edge-case content that resembles sensitive data, while bounded PR-mode remediation can still allow residual findings after max attempts.
+Conservative pattern-based blocking can reject some edge-case content that resembles sensitive data, and unresolved tracked-content/privacy blockers now fail or go incomplete instead of being auto-remediated late in delivery.
 Enforcement:
-Runtime sanitizes PR/summary delivery content, validates generated public text before delivery writes, and in PR mode runs bounded scans/remediation over changed files and delivery commit messages before push/PR creation. Local CLI/TUI/text progress output remains literal for operator visibility and debugging.
+Runtime sanitizes PR/summary delivery content, validates generated public text before delivery writes, enforces changed-file and commit-message privacy checks before push/PR creation, and leaves local CLI/TUI/text progress output literal for operator visibility and debugging.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/privacy_test.go`, `docs/spec.md`
+
+Decision:
+Treat `origin/<source-branch>` as the authoritative readiness reference, and require exact reviewed-tip equality before delivery publish.
+Context:
+Recent delivery/readiness fixes closed three related edge cases: a branch could be locally synced with `origin/<branch>` but track another remote such as `fork/*`; linked worktrees with unresolved relative filesystem origins could be canonicalized inconsistently; and delivery validation previously accepted fast-forwarded candidate branches because it only checked ancestry containment.
+Rationale:
+The safety question for local readiness is whether the branch deepreview intends to review matches `origin/<source-branch>`, not whether `@{u}` happens to point there. Likewise, the safety question for delivery publication is whether the current candidate tip is exactly the reviewed tip, not whether the reviewed commit is merely an ancestor. Rejecting unresolved linked-worktree relative origins is simpler and safer than trying to reinterpret Git's remote semantics differently across worktree shapes.
+Trade-offs:
+Branches tracking a non-`origin` remote still need `origin/<source-branch>` to exist and match `HEAD`, and linked worktrees whose relative filesystem origins do not resolve from the active worktree path are rejected early rather than partially supported.
+Enforcement:
+Readiness resolution now prefers `origin/<branch>` when it exists, even if `@{u}` points elsewhere; linked-worktree relative filesystem origins that cannot be resolved from the active worktree path are rejected as unsupported local repo inputs; and delivery publish validation compares the candidate branch's current tip directly to the reviewed SHA instead of accepting fast-forward containment. Targeted and end-to-end tests cover all three cases.
+References:
+`internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/integration_test.go`, `README.md`, `docs/spec.md`
 
 Decision:
 Keep unsupported-command CLI error output literal to preserve local operator context.
