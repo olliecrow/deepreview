@@ -3159,25 +3159,23 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	}
 
 	baseRef := "origin/" + o.config.SourceBranch
-	preparedRef, pushRefspec, commitsBranch, err := o.resolvePreparedDeliveryRef(candidateBranch)
+	publishRef, pushRefspec, commitsBranch, err := o.resolvePreparedDeliveryRef(candidateBranch)
 	if err != nil {
 		return DeliveryResult{}, err
 	}
-	// The delivery prompt can still refine local branch state, but deepreview
-	// validates the exact ref to be published before any push or PR creation.
-	deliveryChangedFiles, err := o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, preparedRef)
+	// Delivery is read-only for tracked repository content, so deepreview
+	// should still validate the exact candidate ref that will be published.
+	deliveryChangedFiles, err := o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, publishRef)
 	if err != nil {
 		return DeliveryResult{}, err
 	}
 	if len(deliveryChangedFiles) == 0 {
-		return DeliveryResult{
-			Mode:       o.config.Mode,
-			Skipped:    true,
-			SkipReason: "delivery preparation removed all deliverable repository changes",
-		}, nil
+		return DeliveryResult{}, NewDeepReviewError(
+			"internal delivery state invalid: read-only delivery stage cannot remove deliverable repository changes",
+		)
 	}
 	if o.config.Mode == ModePR {
-		delivery, err := o.deliverPR(defaultBranch, preparedRef, summaries, deliveryChangedFiles, prDeliveryOptions{
+		delivery, err := o.deliverPR(defaultBranch, publishRef, summaries, deliveryChangedFiles, prDeliveryOptions{
 			draft:            result.Incomplete,
 			incomplete:       result.Incomplete,
 			incompleteReason: result.IncompleteReason,

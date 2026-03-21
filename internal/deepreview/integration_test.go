@@ -1194,7 +1194,7 @@ func TestEndToEndPRModeScansPreparedDeliveryBranch(t *testing.T) {
 		t.Fatalf("expected incomplete draft recovery output, got:\n%s", output)
 	}
 	if !strings.Contains(output, "delivery status: incomplete (delivery prompt must not select a separate publish ref; route tracked-code fixes back through execute rounds instead") {
-		t.Fatalf("expected prepared delivery branch failure to be surfaced, got:\n%s", output)
+		t.Fatalf("expected separate publish-ref failure to be surfaced, got:\n%s", output)
 	}
 	argsBytes, err := os.ReadFile(ghArgsPath)
 	if err != nil {
@@ -1289,7 +1289,7 @@ func TestEndToEndPRModeDoesNotFallbackPublishHistoryBlockedCandidateBranch(t *te
 	}
 }
 
-func TestEndToEndPRModeUsesPreparedRefPushRangeScript(t *testing.T) {
+func TestEndToEndPRModeUsesCandidatePublishRangeScript(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
