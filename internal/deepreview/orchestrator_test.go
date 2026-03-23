@@ -1303,6 +1303,148 @@ func TestReadPromptDeliveryResultDoesNotRequirePushMetadata(t *testing.T) {
 	}
 }
 
+func TestWriteFinalSummaryAlsoWritesRunHealthArtifacts(t *testing.T) {
+	runRoot := t.TempDir()
+	roundDir := filepath.Join(runRoot, "round-01")
+	if err := os.MkdirAll(filepath.Join(runRoot, "delivery"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "review-01.md"), []byte("# review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-summary.md"), []byte("# round summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-status.json"), []byte("{\"decision\":\"stop\",\"reason\":\"done\",\"confidence\":0.9}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round.json"), []byte("{\"round\":1,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"done\",\"confidence\":0.9}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "pr-title.txt"), []byte("deepreview: sample\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "pr-body.md"), []byte("## summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "delivery", "delivery-result.json"), []byte("{\"mode\":\"pr\",\"incomplete\":false}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "delivery", "deliver.stderr.log"), []byte("2026-03-23T14:10:28Z  WARN sample warning\n2026-03-23T14:10:29Z ERROR sample error\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{
+		config:  ReviewConfig{RunID: "run-1"},
+		runRoot: runRoot,
+	}
+	delivery := DeliveryResult{
+		Mode:          ModePR,
+		PushedRefspec: "candidate:deepreview/main/run-1",
+		PRURL:         "https://example.com/pr/1",
+	}
+	summaries := []string{filepath.Join(roundDir, "round-summary.md")}
+
+	if err := o.writeFinalSummary("main", "candidate", delivery, summaries); err != nil {
+		t.Fatalf("writeFinalSummary failed: %v", err)
+	}
+
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runRoot, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing final-summary.md: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "## run health") {
+		t.Fatalf("expected run health section in final summary, got:\n%s", finalSummary)
+	}
+	if !strings.Contains(finalSummary, "- stderr signal counts: warnings=`1`, errors=`1`") {
+		t.Fatalf("expected stderr signal counts in final summary, got:\n%s", finalSummary)
+	}
+
+	healthJSON, err := os.ReadFile(filepath.Join(runRoot, runHealthJSONName))
+	if err != nil {
+		t.Fatalf("missing run-health.json: %v", err)
+	}
+	var health runHealthReport
+	if err := json.Unmarshal(healthJSON, &health); err != nil {
+		t.Fatalf("parse run-health.json: %v", err)
+	}
+	if health.CompletedRounds != 1 {
+		t.Fatalf("expected completed rounds 1, got %d", health.CompletedRounds)
+	}
+	if health.Stderr.WarningLines != 1 || health.Stderr.ErrorLines != 1 {
+		t.Fatalf("unexpected stderr counts: %+v", health.Stderr)
+	}
+	if !health.Artifacts.DeliveryResultPresent || !health.Artifacts.PRTitlePresent || !health.Artifacts.PRBodyPresent {
+		t.Fatalf("expected delivery artifacts to be present, got %+v", health.Artifacts)
+	}
+
+	healthMD, err := os.ReadFile(filepath.Join(runRoot, runHealthMDName))
+	if err != nil {
+		t.Fatalf("missing run-health.md: %v", err)
+	}
+	if !strings.Contains(string(healthMD), "## stderr overview") {
+		t.Fatalf("expected stderr overview in run-health.md, got:\n%s", string(healthMD))
+	}
+}
+
+func TestEnsureTerminalFinalSummaryBackfillsRunHealthArtifactsWhenSummaryAlreadyExists(t *testing.T) {
+	runRoot := t.TempDir()
+	roundDir := filepath.Join(runRoot, "round-01")
+	if err := os.MkdirAll(filepath.Join(runRoot, "delivery"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "final-summary.md"), []byte("# final summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "review-01.md"), []byte("# review\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-summary.md"), []byte("# round summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-status.json"), []byte("{\"decision\":\"stop\",\"reason\":\"done\",\"confidence\":0.9}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round.json"), []byte("{\"round\":1,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"done\",\"confidence\":0.9}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "delivery", "delivery-result.json"), []byte("{\"mode\":\"pr\",\"incomplete\":false}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runRoot, "delivery", "deliver.stderr.log"), []byte("WARN sample warning\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{
+		config:  ReviewConfig{RunID: "run-1"},
+		runRoot: runRoot,
+		lastDelivery: &DeliveryResult{
+			Mode: ModePR,
+		},
+	}
+
+	if err := o.ensureTerminalFinalSummary("main", "candidate", nil); err != nil {
+		t.Fatalf("ensureTerminalFinalSummary failed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(runRoot, runHealthJSONName)); err != nil {
+		t.Fatalf("expected backfilled run-health.json, err=%v", err)
+	}
+	healthMD, err := os.ReadFile(filepath.Join(runRoot, runHealthMDName))
+	if err != nil {
+		t.Fatalf("expected backfilled run-health.md, err=%v", err)
+	}
+	if !strings.Contains(string(healthMD), "- stderr logs: `1` total, `1` non-empty") {
+		t.Fatalf("expected stderr summary in backfilled run-health.md, got:\n%s", string(healthMD))
+	}
+}
+
 func TestBasePRTitleFromChangesUsesTopAreaAndFileCount(t *testing.T) {
 	title := basePRTitleFromChanges([]string{"cmd/a.go", "cmd/b.go", "internal/x.go"})
 	if title != "deepreview: cmd updates (3 files)" {

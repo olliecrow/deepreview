@@ -1134,6 +1134,7 @@ func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, conf
 	}
 	_, _ = fmt.Fprintln(out, "inspect these paths to review what deepreview produced:")
 	_, _ = fmt.Fprintf(out, "run artifacts: %s\n", runRoot)
+	_, _ = fmt.Fprintf(out, "run health: %s\n", filepath.Join(runRoot, runHealthMDName))
 	_, _ = fmt.Fprintf(out, "logs: %s\n", logsPath)
 	_, _ = fmt.Fprintf(out, "reviews: %s\n", filepath.Join(runRoot, "round-*", "review-*.md"))
 	_, _ = fmt.Fprintf(out, "round artifacts: %s\n", filepath.Join(runRoot, "round-*", "round-*.md"))
@@ -1157,9 +1158,11 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 	managedRepoPath := strings.TrimSpace(orchestrator.ManagedRepoPath())
 	reviewSnapshot := readCompletionReviewSnapshot(runRoot)
 	finalSummaryPath := filepath.Join(runRoot, "final-summary.md")
+	runHealthPath := filepath.Join(runRoot, runHealthMDName)
 	printArtifactPaths := func() {
 		_, _ = fmt.Fprintf(os.Stdout, "run artifacts: %s\n", runRoot)
 		_, _ = fmt.Fprintf(os.Stdout, "final summary: %s\n", finalSummaryPath)
+		_, _ = fmt.Fprintf(os.Stdout, "run health: %s\n", runHealthPath)
 	}
 
 	_, _ = fmt.Fprintf(os.Stdout, "deepreview completed: run `%s`\n", config.RunID)

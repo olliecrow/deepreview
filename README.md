@@ -20,15 +20,16 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 3. Each independent review worker must complete and write its review markdown report; deepreview monitors all Codex workers for activity and restarts stalled workers with bounded retries to avoid pipeline stalls.
 4. The execute stage runs two prompts in one Codex thread: first triage/plan, which investigates proposed changes one by one and accepts only high-confidence material work, then implement/verify/finalize/commit.
 5. Canonical round artifacts and logs are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside the active worktree first, and deepreview copies the canonical artifacts back into the run directory.
-6. If execute says `continue`, deepreview always runs another review round.
-7. If execute says `stop` once, deepreview still runs one confirmation round.
-8. If execute says `stop` for two consecutive rounds, deepreview stops the loop, even if the second stop round also changed code.
-9. In `pr` mode (default), it runs one fresh Codex delivery stage to confirm merge-ready local state without mutating tracked repository content. If publication is blocked by tracked content or branch history, deepreview routes that blocker back through one bounded recovery cycle on the candidate branch, then deepreview pushes and opens one pull request back into your source branch.
-10. If the run made tangible repository changes but did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
-11. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
-12. In yolo mode, it pushes directly to your source branch.
-13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
-14. In PR mode, deepreview performs bounded post-create mergeability validation after PR creation; it does not currently run a remote fix/retry/edit loop after the PR is opened.
+6. Each completed run also writes a canonical run-health summary under `~/deepreview/runs/<run-id>/run-health.{md,json}` so operators can inspect artifact coverage and stderr noise without replaying raw logs.
+7. If execute says `continue`, deepreview always runs another review round.
+8. If execute says `stop` once, deepreview still runs one confirmation round.
+9. If execute says `stop` for two consecutive rounds, deepreview stops the loop, even if the second stop round also changed code.
+10. In `pr` mode (default), it runs one fresh Codex delivery stage to confirm merge-ready local state without mutating tracked repository content. If publication is blocked by tracked content or branch history, deepreview routes that blocker back through one bounded recovery cycle on the candidate branch, then deepreview pushes and opens one pull request back into your source branch.
+11. If the run made tangible repository changes but did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
+12. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
+13. In yolo mode, it pushes directly to your source branch.
+14. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
+15. In PR mode, deepreview performs bounded post-create mergeability validation after PR creation; it does not currently run a remote fix/retry/edit loop after the PR is opened.
 
 ## Requirements
 
