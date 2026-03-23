@@ -82,6 +82,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - post-prompt delivery validation must inspect the exact candidate ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
 - post-prompt delivery validation must also enforce repo-native outbound history policies against the candidate publish range when the repository defines them.
 - if candidate publication is blocked by tracked content or branch history, deepreview may run one bounded delivery-recovery cycle that routes the blocker back through the normal candidate-branch execute/review path before retrying delivery.
+- that bounded recovery cycle consists of one focused execute round to repair the publishability blocker followed by one confirmation round to verify the repaired candidate before delivery resumes.
 - after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview should publish a draft PR to preserve the candidate branch state only when the candidate still passes final publishability validation; if publishability remains blocked, fail without push or PR creation.
 - incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
