@@ -158,6 +158,7 @@ Helper command behavior:
 ## Artifact contract
 Each run must produce:
 - run metadata and final summary
+- run-health summary artifacts (`run-health.json` and `run-health.md`) that describe canonical artifact coverage plus observational stderr/log noise metrics without changing delivery classification
 - per-round review/execute logs while active
 - `review-<worker-id>.md` independent review outputs for each active round
 - per-round execute outputs (triage decisions, change plan, verification report, round summary, round status flag, authoritative round record)

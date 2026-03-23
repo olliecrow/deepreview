@@ -83,7 +83,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 5. Finalization:
 - if TUI mode was active, exit TUI immediately on completion and clear terminal screen before summary output
-- emit final summary and alignment evidence pointers; successful terminal states backfill the root `final-summary.md` if an earlier path failed to write it
+- emit final summary, run-health artifacts, and alignment evidence pointers; successful terminal states backfill the root `final-summary.md` if an earlier path failed to write it
 - on interrupt, emit the same failure-summary surface used for other self-serve failures, then scrub lingering transient run-root worktrees before reporting cleanup complete
 - ensure no stale transient worktrees/artifacts remain
 
