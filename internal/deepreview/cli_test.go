@@ -836,6 +836,7 @@ func TestPrintFailureArtifactSummary(t *testing.T) {
 		"run exited before delivery; no push or PR was created.\n",
 		"inspect these paths to review what deepreview produced:\n",
 		"run artifacts: ",
+		"run health: ",
 		"logs: ",
 		"reviews: ",
 		"round artifacts: ",
@@ -919,6 +920,52 @@ func TestPrintFailureArtifactSummaryMentionsExistingDeliveryArtifacts(t *testing
 	}
 	if strings.Contains(text, "run exited before delivery; no push or PR was created.") {
 		t.Fatalf("expected delivery-aware failure summary, got:\n%s", text)
+	}
+}
+
+func TestPrintCompletionSummaryMentionsRunHealthArtifact(t *testing.T) {
+	runRoot := t.TempDir()
+	roundDir := filepath.Join(runRoot, "round-01")
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round.json"), []byte("{\"round\":1,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"done\",\"confidence\":0.9}}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	orchestrator := &Orchestrator{
+		runRoot: runRoot,
+		lastDelivery: &DeliveryResult{
+			Mode:  ModePR,
+			PRURL: "https://example.com/owner/repo/pull/123",
+		},
+	}
+	config := ReviewConfig{
+		RunID:        "20260323T114331Z-d36ba590",
+		Repo:         "owner/repo",
+		SourceBranch: "main",
+		Mode:         ModePR,
+	}
+
+	code, stdout, stderr := captureCommandOutput(t, func() int {
+		printCompletionSummary(orchestrator, config)
+		return 0
+	})
+	if code != 0 {
+		t.Fatalf("expected zero code, got %d", code)
+	}
+	if stderr != "" {
+		t.Fatalf("expected no stderr, got:\n%s", stderr)
+	}
+	for _, want := range []string{
+		"deepreview completed: run `20260323T114331Z-d36ba590`\n",
+		"run artifacts: " + runRoot + "\n",
+		"final summary: " + filepath.Join(runRoot, "final-summary.md") + "\n",
+		"run health: " + filepath.Join(runRoot, runHealthMDName) + "\n",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("expected completion summary to include %q, got:\n%s", want, stdout)
+		}
 	}
 }
 
