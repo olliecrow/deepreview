@@ -1158,7 +1158,7 @@ func TestBuildIncompletePRBodyMentionsIncompleteStatus(t *testing.T) {
 	}
 
 	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
-	body := o.buildIncompletePRBody([]string{filepath.Join(roundDir, "round-summary.md")}, []string{"internal/foo.go"}, "automatic audit found more work")
+	body := o.buildIncompletePRBody([]string{filepath.Join(roundDir, "round-summary.md")}, []string{"internal/foo.go"}, "delivery recovery confirmation round found more work")
 	if !strings.Contains(body, "[INCOMPLETE]") {
 		t.Fatalf("expected incomplete marker in body, got:\n%s", body)
 	}

@@ -68,6 +68,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 4. Final delivery (single delivery stage):
 - require completed round execution and no blocking execute-stage verification failures
 - validate the current candidate branch for publishability before delivery; if tracked-content or history blockers remain, run one bounded recovery cycle on the candidate branch before retrying delivery
+- that bounded recovery cycle uses one focused execute round to repair the publishability blocker and then one confirmation round to verify the repaired candidate normally before delivery resumes
 - create a fresh delivery worktree and a fresh Codex context
 - run one Codex delivery prompt that owns final local merge-readiness assessment:
   - inspect candidate diff/history and prior verification evidence

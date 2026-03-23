@@ -246,6 +246,19 @@ References:
 `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 
 Decision:
+Describe the bounded post-delivery recovery follow-up as a delivery recovery confirmation round, not as an automatic audit round.
+Context:
+Deepreview still uses one bounded confirmation pass after a delivery-recovery execute round so the repaired candidate branch is re-reviewed and re-validated before publication. Calling that confirmation pass an "automatic final audit round" conflicts with the separate decision that removed the old audit-only round-control mode.
+Rationale:
+The behavior is intentional, but the old label is misleading. Renaming it to "delivery recovery confirmation round" preserves the bounded recovery design while making it clear this is a narrow publishability follow-up, not the removed general audit mode.
+Trade-offs:
+Adds a bit more wording, but removes a confusing overloaded term from prompts, errors, and tests.
+Enforcement:
+Delivery-recovery execute overrides and notes use confirmation-round wording, and docs describe the bounded recovery cycle as one repair round plus one confirmation round.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`, `docs/architecture.md`
+
+Decision:
 Track PR delivery branch push state separately from PR creation success so incomplete-draft recovery can reuse an already-pushed branch.
 Context:
 In `pr` mode, a run can successfully push the delivery branch and then fail before `gh pr create` returns a PR URL. Treating "push happened" as equivalent to "delivery completed" blocks the documented incomplete-draft recovery path and can leave a remote branch with no PR.
