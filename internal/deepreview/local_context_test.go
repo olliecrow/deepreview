@@ -454,6 +454,27 @@ func TestInferRepoAndBranchFromProvidedLocalRepoPath(t *testing.T) {
 	})
 }
 
+func TestInferRepoAndBranchFromProvidedFilesystemLocalRepoPath(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	td := t.TempDir()
+	withWorkingDir(t, td, func() {
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", repo, "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		repoAbs, err := filepath.Abs(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolvedRepo != repoAbs {
+			t.Fatalf("expected repo %s, got %s", repoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/test" {
+			t.Fatalf("expected branch feature/test, got %s", resolvedBranch)
+		}
+	})
+}
+
 func TestInferRepoAndBranchFallsBackToOldPWDFromSourceRoot(t *testing.T) {
 	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/test")

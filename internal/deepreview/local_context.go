@@ -393,11 +393,12 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 	if err != nil {
 		return "", "", err
 	}
+	explicitRepoProvided := strings.TrimSpace(repo) != ""
 	if cwdState != nil && cwdState.SourceType != RepoSourceGitHub {
 		cwdState = nil
 	}
 
-	if strings.TrimSpace(repo) == "" {
+	if !explicitRepoProvided {
 		if cwdState == nil {
 			return "", "", NewDeepReviewError("repo locator not provided and current directory is not a valid GitHub repo with an origin remote")
 		}
@@ -414,12 +415,15 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 	if cwdState != nil && repoLocatorMatchesState(resolvedRepo, cwdState) {
 		stateForBranch = cwdState
 	} else {
-		stateForBranch, err = detectGitHubRepoState(gitBin, resolvedRepo)
+		stateForBranch, err = detectLocalRepoState(gitBin, resolvedRepo)
 		if err != nil {
 			return "", "", err
 		}
 	}
 	if stateForBranch == nil {
+		if explicitRepoProvided {
+			return "", "", NewDeepReviewError("--source-branch not provided and unable to infer branch from local repo context; provide --source-branch explicitly")
+		}
 		return "", "", NewDeepReviewError("--source-branch not provided and unable to infer branch from a valid local GitHub repository; provide --source-branch explicitly")
 	}
 
