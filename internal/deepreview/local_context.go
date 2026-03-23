@@ -46,16 +46,20 @@ func samePath(a, b string) bool {
 	return errA == nil && errB == nil && aAbs == bAbs
 }
 
-func resolveImplicitRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
-	if state := resolveCallerCWDRepoState(gitBin, cwdState); state != nil {
-		return state
+func resolveImplicitRepoState(gitBin string, cwdState *LocalGitHubRepoState) (*LocalGitHubRepoState, error) {
+	state, explicitOverride, err := resolveCallerCWDRepoState(gitBin, cwdState)
+	if err != nil {
+		return nil, err
+	}
+	if explicitOverride {
+		return state, nil
 	}
 	if callerContextFallbackAllowed(cwdState) {
 		if state := resolveOldPWDRepoState(gitBin, cwdState); state != nil {
-			return state
+			return state, nil
 		}
 	}
-	return cwdState
+	return cwdState, nil
 }
 
 func callerContextFallbackAllowed(cwdState *LocalGitHubRepoState) bool {
@@ -66,19 +70,29 @@ func callerContextFallbackAllowed(cwdState *LocalGitHubRepoState) bool {
 	return ok && samePath(cwdState.Path, sourceRoot)
 }
 
-func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
+func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) (*LocalGitHubRepoState, bool, error) {
 	callerCWD := strings.TrimSpace(os.Getenv(deepreviewCallerCWDEnv))
 	if callerCWD == "" {
-		return nil
+		return nil, false, nil
 	}
 	state, err := detectLocalRepoState(gitBin, callerCWD)
-	if err != nil || state == nil {
-		return nil
+	if err != nil {
+		return nil, true, NewDeepReviewError(
+			"%s is set but could not be resolved; unset it or point it at the original repo checkout: %s",
+			deepreviewCallerCWDEnv,
+			err.Error(),
+		)
+	}
+	if state == nil {
+		return nil, true, NewDeepReviewError(
+			"%s is set but does not resolve to a valid local repo context; unset it or point it at the original repo checkout",
+			deepreviewCallerCWDEnv,
+		)
 	}
 	if cwdState != nil && samePath(cwdState.Path, state.Path) {
-		return cwdState
+		return cwdState, true, nil
 	}
-	return state
+	return state, true, nil
 }
 
 func resolveOldPWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
@@ -229,7 +243,10 @@ func validateLocalBranchReadyForRemoteReview(gitBin, resolvedRepo, sourceBranch 
 	if err != nil {
 		return err
 	}
-	cwdState = resolveImplicitRepoState(gitBin, cwdState)
+	cwdState, err = resolveImplicitRepoState(gitBin, cwdState)
+	if err != nil {
+		return err
+	}
 	// Share repo/branch inference across command surfaces, and only enforce
 	// readiness when the resolved source branch matches the current local branch
 	// context for the same repository.
@@ -372,12 +389,16 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 	if err != nil {
 		return "", "", err
 	}
-	cwdState = resolveImplicitRepoState(gitBin, cwdState)
+	cwdState, err = resolveImplicitRepoState(gitBin, cwdState)
+	if err != nil {
+		return "", "", err
+	}
+	explicitRepoProvided := strings.TrimSpace(repo) != ""
 	if cwdState != nil && cwdState.SourceType != RepoSourceGitHub {
 		cwdState = nil
 	}
 
-	if strings.TrimSpace(repo) == "" {
+	if !explicitRepoProvided {
 		if cwdState == nil {
 			return "", "", NewDeepReviewError("repo locator not provided and current directory is not a valid GitHub repo with an origin remote")
 		}
@@ -394,12 +415,15 @@ func inferRepoAndBranch(gitBin, repo, sourceBranch string) (resolvedRepo string,
 	if cwdState != nil && repoLocatorMatchesState(resolvedRepo, cwdState) {
 		stateForBranch = cwdState
 	} else {
-		stateForBranch, err = detectGitHubRepoState(gitBin, resolvedRepo)
+		stateForBranch, err = detectLocalRepoState(gitBin, resolvedRepo)
 		if err != nil {
 			return "", "", err
 		}
 	}
 	if stateForBranch == nil {
+		if explicitRepoProvided {
+			return "", "", NewDeepReviewError("--source-branch not provided and unable to infer branch from local repo context; provide --source-branch explicitly")
+		}
 		return "", "", NewDeepReviewError("--source-branch not provided and unable to infer branch from a valid local GitHub repository; provide --source-branch explicitly")
 	}
 

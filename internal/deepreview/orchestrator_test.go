@@ -1227,6 +1227,61 @@ func TestEnsureTerminalFinalSummaryBackfillsMissingRootSummary(t *testing.T) {
 	}
 }
 
+func TestEnsureTerminalFinalSummaryBackfillsMissingRootSummaryForIncompleteYolo(t *testing.T) {
+	runRoot := t.TempDir()
+	roundDir := filepath.Join(runRoot, "round-01")
+	if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-summary.md"), []byte("summary\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round-status.json"), []byte(`{"decision":"stop","reason":"ready","confidence":0.95}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	record := RoundRecord{
+		Round:   1,
+		Summary: "round-summary.md",
+		Status: RoundStatus{
+			Decision: "stop",
+			Reason:   "ready",
+		},
+	}
+	recordBytes, err := json.Marshal(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(roundDir, "round.json"), append(recordBytes, '\n'), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	o := &Orchestrator{
+		config:  ReviewConfig{RunID: "run-1"},
+		runRoot: runRoot,
+		lastDelivery: &DeliveryResult{
+			Mode:             ModeYolo,
+			Incomplete:       true,
+			IncompleteReason: "yolo should not publish",
+		},
+	}
+
+	if err := o.ensureTerminalFinalSummary("main", "candidate", nil); err != nil {
+		t.Fatalf("ensureTerminalFinalSummary failed: %v", err)
+	}
+
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runRoot, "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing backfilled final summary: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "- delivery: `incomplete`") {
+		t.Fatalf("expected incomplete yolo marker, got:\n%s", finalSummary)
+	}
+	if strings.Contains(finalSummary, "- push refspec:") {
+		t.Fatalf("did not expect push refspec for incomplete yolo summary, got:\n%s", finalSummary)
+	}
+}
+
 func TestReadPromptDeliveryResultDoesNotRequirePushMetadata(t *testing.T) {
 	resultPath := filepath.Join(t.TempDir(), "delivery-result.json")
 	if err := os.WriteFile(resultPath, []byte("{\n  \"mode\": \"pr\",\n  \"incomplete\": false\n}\n"), 0o644); err != nil {

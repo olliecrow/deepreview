@@ -39,7 +39,10 @@ func resolveCommitIdentityRepoPath(gitBin, repo string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	cwdState = resolveImplicitRepoState(gitBin, cwdState)
+	cwdState, err = resolveImplicitRepoState(gitBin, cwdState)
+	if err != nil {
+		return "", err
+	}
 	if cwdState != nil && repoLocatorMatchesState(repo, cwdState) {
 		return cwdState.Path, nil
 	}

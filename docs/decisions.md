@@ -241,7 +241,7 @@ The first-stop/second-stop policy already gives a built-in confirmation pass. Re
 Trade-offs:
 Runs that still need another round at the configured limit now fail/incomplete directly instead of getting one extra implicit audit round for free.
 Enforcement:
-Orchestrator round control has no audit-only branch. When another round is still required at `--max-rounds`, `pr` mode publishes an incomplete draft PR when deliverable changes exist and `yolo` mode fails with guidance to rerun using a higher limit.
+Orchestrator round control has no audit-only branch. When another round is still required at `--max-rounds`, `pr` mode publishes an incomplete draft PR only if deliverable changes exist and the candidate still passes final publishability validation; otherwise it fails without push/PR. `yolo` mode fails with guidance to rerun using a higher limit.
 References:
 `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 
@@ -1258,3 +1258,42 @@ Enforcement:
 Current docs, prompts, and code define only `prompts/delivery/01-deliver.md` as the active delivery prompt, and the old prompt files have been removed from the prompt tree.
 References:
 `prompts/delivery/01-deliver.md`, `prompts/README.md`, `docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`
+
+Decision:
+Treat `DEEPREVIEW_CALLER_CWD` as fail-fast when set but invalid.
+Context:
+`DEEPREVIEW_CALLER_CWD` exists to preserve the operator's intended repo context when wrappers change directories before invoking deepreview. Silently ignoring an invalid explicit override lets inference fall through to `OLDPWD` or cwd detection and can retarget a run to the wrong repository.
+Rationale:
+An explicit override is only trustworthy if invalid values stop execution instead of degrading into implicit fallback behavior. Failing fast preserves wrapper intent and avoids running readiness checks or commit-identity lookup against the wrong checkout.
+Trade-offs:
+Misconfigured wrappers now fail loudly instead of appearing to work via fallback inference.
+Enforcement:
+`inferRepoAndBranch`, local readiness validation, and commit-identity resolution reject non-empty invalid `DEEPREVIEW_CALLER_CWD` values and only consider `OLDPWD` when the explicit override is unset.
+References:
+`internal/deepreview/local_context.go`, `internal/deepreview/local_context_test.go`, `internal/deepreview/git_identity.go`, `internal/deepreview/gitops_test.go`, `README.md`, `docs/spec.md`
+
+Decision:
+Evaluate publish-range policy from a trusted base ref, not from the candidate branch being published.
+Context:
+The repo-native push-range policy is the only outbound-history gate that checks path history as well as diff content. Loading that script from the candidate ref lets the candidate weaken or delete the very policy that decides whether publication is allowed.
+Rationale:
+Publication policy should be branch-independent and trusted. Running the trusted base copy of `scripts/security/check-push-range.sh` while still scanning the real `base..candidate` range preserves history-scoped enforcement without letting the candidate branch disable it.
+Trade-offs:
+Branch-specific policy experiments on feature branches no longer influence publishability; only the trusted base policy does.
+Enforcement:
+Delivery push-range checks run from a trusted base worktree and use `PRE_COMMIT_FROM_REF` / `PRE_COMMIT_TO_REF` to evaluate the actual publish range.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `scripts/security/check-push-range.sh`, `docs/architecture.md`
+
+Decision:
+Do not push in `yolo` mode when delivery preparation reports `incomplete`.
+Context:
+The delivery prompt contract already reports `incomplete` for both `pr` and `yolo`, but the yolo publication path dropped that signal and pushed anyway.
+Rationale:
+`yolo` is the highest-risk delivery mode because it publishes directly to the source branch. If the final local delivery check says preparation is incomplete, the only safe behavior is to report the blocker and stop before pushing.
+Trade-offs:
+Some runs that previously pushed despite unresolved blockers now stop locally and require operator follow-up or another round.
+Enforcement:
+The yolo delivery path returns an incomplete no-push result, preserves `IncompleteReason` in CLI/final-summary reporting, and skips push refspec emission when nothing was published.
+References:
+`internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/architecture.md`

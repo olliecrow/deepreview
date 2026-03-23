@@ -194,7 +194,7 @@ Then run:
 dr review
 ```
 
-If your launcher changes directories before invoking deepreview (for example, wrapping `go run` in the deepreview source repo), pass the original caller directory so repo inference stays correct. `DEEPREVIEW_CALLER_CWD` is an explicit override, so deepreview will honor it even if the wrapper launches from another repo or a non-repo directory:
+If your launcher changes directories before invoking deepreview (for example, wrapping `go run` in the deepreview source repo), pass the original caller directory so repo inference stays correct. `DEEPREVIEW_CALLER_CWD` is an explicit override, so deepreview will use it even if the wrapper launches from another repo or a non-repo directory. If it is set to an invalid path or a non-repo directory, deepreview now fails fast instead of silently falling back to `OLDPWD` or the current working directory:
 
 ```bash
 deepreview() {

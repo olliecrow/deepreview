@@ -477,6 +477,89 @@ func TestEndToEndYoloWithFakeCodex(t *testing.T) {
 	}
 }
 
+func TestEndToEndYOLOModeRejectsIncompletePromptResult(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	runCmd(t, td, nil, "git", "clone", remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	before := strings.TrimSpace(runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test"))
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_DELIVERY_INCOMPLETE=1",
+		"FAKE_CODEX_DELIVERY_INCOMPLETE_REASON=yolo should not publish",
+	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "yolo",
+		"--no-tui",
+	)
+	if strings.Contains(output, "changes pushed:") {
+		t.Fatalf("did not expect yolo push output, got: %s", output)
+	}
+	if !strings.Contains(output, "delivery status: incomplete (yolo should not publish)") {
+		t.Fatalf("expected incomplete yolo status output, got: %s", output)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	after := strings.TrimSpace(runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test"))
+	if before != after {
+		t.Fatalf("expected incomplete yolo delivery to avoid pushing")
+	}
+
+	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runsGlob) != 1 {
+		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
+	}
+	finalSummaryBytes, err := os.ReadFile(filepath.Join(runsGlob[0], "final-summary.md"))
+	if err != nil {
+		t.Fatalf("missing final summary: %v", err)
+	}
+	finalSummary := string(finalSummaryBytes)
+	if !strings.Contains(finalSummary, "- delivery: `incomplete`") {
+		t.Fatalf("expected incomplete yolo marker in final summary, got:\n%s", finalSummary)
+	}
+	if strings.Contains(finalSummary, "- push refspec:") {
+		t.Fatalf("did not expect push refspec for incomplete yolo delivery, got:\n%s", finalSummary)
+	}
+}
+
 func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
@@ -1289,7 +1372,7 @@ func TestEndToEndPRModeDoesNotFallbackPublishHistoryBlockedCandidateBranch(t *te
 	}
 }
 
-func TestEndToEndPRModeUsesCandidatePublishRangeScript(t *testing.T) {
+func TestEndToEndPRModeUsesTrustedPublishRangeScript(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1342,6 +1425,85 @@ func TestEndToEndPRModeUsesCandidatePublishRangeScript(t *testing.T) {
 		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
+	output := runCmd(t, root, env,
+		bin,
+		"review",
+		userClone,
+		"--source-branch", "feature/test",
+		"--concurrency", "1",
+		"--max-rounds", "2",
+		"--mode", "pr",
+		"--no-tui",
+	)
+	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+		t.Fatalf("expected trusted base publish-range policy to allow publish, got:\n%s", output)
+	}
+	if _, err := os.Stat(ghArgsPath); err != nil {
+		t.Fatalf("expected gh pr create when trusted base policy passes, err=%v", err)
+	}
+
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	if strings.TrimSpace(refsOut) == "" {
+		t.Fatalf("expected delivery ref after trusted publish-range validation, got: %s", refsOut)
+	}
+}
+
+func TestEndToEndPRModeRejectsCandidateDeletingTrustedPushRangePolicy(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+	workspace := filepath.Join(td, "workspace")
+	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(seed, "scripts", "security"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkSensitiveText, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-sensitive-text.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-sensitive-text.sh"), checkSensitiveText, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	checkPushRange, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-push-range.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-push-range.sh"), checkPushRange, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "scripts/security/check-sensitive-text.sh", "scripts/security/check-push-range.sh")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	runCmd(t, td, nil, "git", "-C", seed, "rm", "scripts/security/check-push-range.sh")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "delete push-range policy")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+
+	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env = append(env,
+		"FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE=1",
+		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
+		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
+	)
 	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
@@ -1353,16 +1515,10 @@ func TestEndToEndPRModeUsesCandidatePublishRangeScript(t *testing.T) {
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery push-range policy failed") {
-		t.Fatalf("expected candidate publish-range policy to fail publish, got:\n%s", output)
+		t.Fatalf("expected trusted base push-range policy to reject candidate bypass after script deletion, got:\n%s", output)
 	}
 	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
-		t.Fatalf("did not expect gh pr create when candidate publish-range policy fails, err=%v", err)
-	}
-
-	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
-	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
-	if strings.TrimSpace(refsOut) != "" {
-		t.Fatalf("expected no delivery refs after candidate publish-range failure, got: %s", refsOut)
+		t.Fatalf("did not expect gh pr create when trusted base policy blocks publish, err=%v", err)
 	}
 }
 
