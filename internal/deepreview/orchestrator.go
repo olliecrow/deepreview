@@ -2495,8 +2495,8 @@ func (o *Orchestrator) deliveryCommitMessageScanBetween(baseRef, headRef string)
 	return nil
 }
 
-func (o *Orchestrator) deliveryPushRangePolicyScanBetween(baseRef, headRef string) error {
-	policyWorktree, cleanup, err := o.addTemporaryPolicyWorktree(headRef)
+func (o *Orchestrator) deliveryPushRangePolicyScanBetween(policyRef, baseRef, headRef string) error {
+	policyWorktree, cleanup, err := o.addTemporaryPolicyWorktree(policyRef)
 	if err != nil {
 		return err
 	}
@@ -2561,6 +2561,14 @@ func markdownBulletList(items []string) string {
 		return "none"
 	}
 	return strings.Join(lines, "\n")
+}
+
+func trustedPublishRangePolicyRef(defaultBranch, baseRef string) string {
+	trimmedDefaultBranch := strings.TrimSpace(defaultBranch)
+	if trimmedDefaultBranch != "" {
+		return "origin/" + trimmedDefaultBranch
+	}
+	return strings.TrimSpace(baseRef)
 }
 
 func readPromptDeliveryResult(path string, expectedMode string) (promptDeliveryResult, error) {
@@ -2642,8 +2650,9 @@ func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func(), e
 	if err := AddDetachedWorktree(o.managedRepoPath, o.config.GitBin, worktreePath, ref); err != nil {
 		return "", nil, err
 	}
-	// Run repo-native push-range policy from the exact ref being published so
-	// branch-specific scripts and helper files travel with that ref.
+	// Run repo-native push-range policy from a trusted base ref so the candidate
+	// branch cannot weaken or remove the policy, while PRE_COMMIT_* still points
+	// at the real publish range being evaluated.
 	cleanup := func() {
 		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktreePath)
 		_ = os.RemoveAll(worktreePath)
@@ -2651,7 +2660,7 @@ func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func(), e
 	return worktreePath, cleanup, nil
 }
 
-func (o *Orchestrator) validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, publishRef string) ([]string, error) {
+func (o *Orchestrator) validatePublishableDeliveryRef(defaultBranch, baseRef, candidateHead, candidateBranch, publishRef string) ([]string, error) {
 	if err := o.validatePreparedDeliveryRef(candidateHead, candidateBranch, publishRef); err != nil {
 		return nil, err
 	}
@@ -2664,7 +2673,7 @@ func (o *Orchestrator) validatePublishableDeliveryRef(baseRef, candidateHead, ca
 	if len(changedFiles) == 0 {
 		return changedFiles, nil
 	}
-	if err := o.deliveryPushRangePolicyScanBetween(baseRef, publishRef); err != nil {
+	if err := o.deliveryPushRangePolicyScanBetween(trustedPublishRangePolicyRef(defaultBranch, baseRef), baseRef, publishRef); err != nil {
 		return nil, err
 	}
 	if err := o.deliveryCommitMessageScanBetween(baseRef, publishRef); err != nil {
@@ -2842,7 +2851,7 @@ func (o *Orchestrator) runDeliveryRecoveryCycle(defaultBranch, candidateBranch s
 		return nil, err
 	}
 	o.reviewedCandidateHead = candidateHead
-	return o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
+	return o.validatePublishableDeliveryRef(defaultBranch, baseRef, candidateHead, candidateBranch, candidateBranch)
 }
 
 func (o *Orchestrator) recoverCandidateDeliveryReadiness(defaultBranch, candidateBranch string, roundSummaries *[]string) ([]string, error) {
@@ -2851,7 +2860,7 @@ func (o *Orchestrator) recoverCandidateDeliveryReadiness(defaultBranch, candidat
 	if err != nil {
 		return nil, err
 	}
-	validatedChangedFiles, err := o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
+	validatedChangedFiles, err := o.validatePublishableDeliveryRef(defaultBranch, baseRef, candidateHead, candidateBranch, candidateBranch)
 	if err == nil {
 		return validatedChangedFiles, nil
 	}
@@ -3109,7 +3118,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	}
 	// Delivery is read-only for tracked repository content, so deepreview
 	// should still validate the exact candidate ref that will be published.
-	deliveryChangedFiles, err := o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, publishRef)
+	deliveryChangedFiles, err := o.validatePublishableDeliveryRef(defaultBranch, baseRef, candidateHead, candidateBranch, publishRef)
 	if err != nil {
 		return DeliveryResult{}, err
 	}
@@ -3132,6 +3141,15 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 				return DeliveryResult{}, err
 			}
 		}
+		return delivery, nil
+	}
+	if result.Incomplete {
+		delivery := DeliveryResult{
+			Mode:             result.Mode,
+			Incomplete:       true,
+			IncompleteReason: result.IncompleteReason,
+		}
+		o.lastDelivery = &delivery
 		return delivery, nil
 	}
 
@@ -3303,7 +3321,7 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR not needed: no deliverable repository changes")
 		return false, nil
 	}
-	changedFiles, err = o.validatePublishableDeliveryRef(baseRef, candidateHead, candidateBranch, candidateBranch)
+	changedFiles, err = o.validatePublishableDeliveryRef(defaultBranch, baseRef, candidateHead, candidateBranch, candidateBranch)
 	if err != nil {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR unavailable: "+progressMessage(err))
 		return false, err
@@ -3660,7 +3678,7 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 		if o.pushCount != 0 {
 			return NewDeepReviewError("invalid delivery push count: expected 0 for skipped delivery, got %d", o.pushCount)
 		}
-	} else if strings.TrimSpace(delivery.PushedRefspec) == "" {
+	} else if !delivery.Incomplete && strings.TrimSpace(delivery.PushedRefspec) == "" {
 		return NewDeepReviewError("invalid delivery state: non-skipped delivery is missing pushed refspec")
 	}
 
@@ -3679,12 +3697,16 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 			fmt.Sprintf("- reason: `%s`", delivery.SkipReason),
 		)
 	} else if delivery.Incomplete {
+		status := "incomplete"
+		if delivery.Mode == ModePR {
+			status = "incomplete-draft"
+		}
 		lines = append(lines,
-			"- delivery: `incomplete-draft`",
+			fmt.Sprintf("- delivery: `%s`", status),
 			fmt.Sprintf("- reason: `%s`", sanitizePublicText(strings.TrimSpace(delivery.IncompleteReason))),
 		)
 	}
-	if !delivery.Skipped {
+	if !delivery.Skipped && strings.TrimSpace(delivery.PushedRefspec) != "" {
 		lines = append(lines, fmt.Sprintf("- push refspec: `%s`", delivery.PushedRefspec))
 	}
 	lines = append(lines, "", "## round artifacts")

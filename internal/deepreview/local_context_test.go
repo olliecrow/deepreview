@@ -454,6 +454,27 @@ func TestInferRepoAndBranchFromProvidedLocalRepoPath(t *testing.T) {
 	})
 }
 
+func TestInferRepoAndBranchFromProvidedFilesystemLocalRepoPath(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	td := t.TempDir()
+	withWorkingDir(t, td, func() {
+		resolvedRepo, resolvedBranch, err := inferRepoAndBranch("git", repo, "")
+		if err != nil {
+			t.Fatalf("inferRepoAndBranch failed: %v", err)
+		}
+		repoAbs, err := filepath.Abs(repo)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resolvedRepo != repoAbs {
+			t.Fatalf("expected repo %s, got %s", repoAbs, resolvedRepo)
+		}
+		if resolvedBranch != "feature/test" {
+			t.Fatalf("expected branch feature/test, got %s", resolvedBranch)
+		}
+	})
+}
+
 func TestInferRepoAndBranchFallsBackToOldPWDFromSourceRoot(t *testing.T) {
 	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/test")
@@ -586,6 +607,60 @@ func TestInferRepoAndBranchPrefersCallerCWDEnv(t *testing.T) {
 		}
 		if resolvedBranch != "feature/caller" {
 			t.Fatalf("expected inferred branch feature/caller, got %s", resolvedBranch)
+		}
+	})
+}
+
+func TestInferRepoAndBranchRejectsInvalidCallerCWDOverride(t *testing.T) {
+	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	sourceRepoAbs := canonicalPath(t, sourceRepo)
+	setSourceRootDetectorForTest(t, func() (string, bool) {
+		return sourceRepoAbs, true
+	})
+	t.Setenv("OLDPWD", callerRepo)
+
+	testCases := []struct {
+		name      string
+		callerCWD string
+	}{
+		{name: "missing path", callerCWD: filepath.Join(t.TempDir(), "missing")},
+		{name: "non repo path", callerCWD: t.TempDir()},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv(deepreviewCallerCWDEnv, tc.callerCWD)
+			withWorkingDir(t, sourceRepo, func() {
+				_, _, err := inferRepoAndBranch("git", "", "")
+				if err == nil {
+					t.Fatalf("expected invalid %s override to fail", deepreviewCallerCWDEnv)
+				}
+				if !strings.Contains(err.Error(), deepreviewCallerCWDEnv) {
+					t.Fatalf("unexpected error: %v", err)
+				}
+			})
+		})
+	}
+}
+
+func TestValidateLocalBranchReadyForRemoteReviewRejectsInvalidCallerCWDOverride(t *testing.T) {
+	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	sourceRepoAbs := canonicalPath(t, sourceRepo)
+	setSourceRootDetectorForTest(t, func() (string, bool) {
+		return sourceRepoAbs, true
+	})
+	t.Setenv("OLDPWD", callerRepo)
+	t.Setenv(deepreviewCallerCWDEnv, filepath.Join(t.TempDir(), "missing"))
+
+	withWorkingDir(t, sourceRepo, func() {
+		err := validateLocalBranchReadyForRemoteReview("git", "example-org/example-repo", "feature/caller")
+		if err == nil {
+			t.Fatalf("expected invalid %s override to fail readiness validation", deepreviewCallerCWDEnv)
+		}
+		if !strings.Contains(err.Error(), deepreviewCallerCWDEnv) {
+			t.Fatalf("unexpected error: %v", err)
 		}
 	})
 }

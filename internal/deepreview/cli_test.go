@@ -767,6 +767,29 @@ func TestRunDryRunCommandRejectsPRModeForFilesystemOriginRemote(t *testing.T) {
 	}
 }
 
+func TestRunDryRunCommandInfersBranchForFilesystemOriginRepoInYoloMode(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", t.TempDir())
+
+	withWorkingDir(t, t.TempDir(), func() {
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDryRunCommand([]string{repo, "--mode", "yolo"})
+		})
+		if code != 0 {
+			t.Fatalf("expected dry-run to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if strings.TrimSpace(stderr) != "" {
+			t.Fatalf("did not expect stderr output, got:\n%s", stderr)
+		}
+		if !strings.Contains(stdout, "source branch: feature/test") {
+			t.Fatalf("expected inferred source branch in dry-run output, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "mode: yolo") {
+			t.Fatalf("expected yolo mode output, got:\n%s", stdout)
+		}
+	})
+}
+
 func TestIsInterruptError(t *testing.T) {
 	if !isInterruptError(context.Canceled) {
 		t.Fatalf("expected context.Canceled to be treated as interrupt")
