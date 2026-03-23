@@ -570,31 +570,20 @@ func handlePrompt(prompt string) (string, error) {
 		if err := gitCommitIfPossible("deepreview: mutate delivery state"); err != nil {
 			return "", err
 		}
-		if mode == "pr" {
-			payload := map[string]any{
-				"mode":       mode,
-				"incomplete": false,
-			}
-			if preparedBranch != "" {
-				payload["delivery_branch"] = preparedBranch
-			}
-			if strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE")) != "" {
-				payload["incomplete"] = true
-				reason := strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE_REASON"))
-				if reason == "" {
-					reason = "fake delivery blocked on mergeability"
-				}
-				payload["incomplete_reason"] = reason
-			}
-			b, _ := json.MarshalIndent(payload, "", "  ")
-			if err := writeText(resultPath, string(b)+"\n"); err != nil {
-				return "", err
-			}
-			return "delivery complete", nil
-		}
 		payload := map[string]any{
 			"mode":       mode,
 			"incomplete": false,
+		}
+		if preparedBranch != "" {
+			payload["delivery_branch"] = preparedBranch
+		}
+		if strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE")) != "" {
+			payload["incomplete"] = true
+			reason := strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_INCOMPLETE_REASON"))
+			if reason == "" {
+				reason = "fake delivery blocked on mergeability"
+			}
+			payload["incomplete_reason"] = reason
 		}
 		b, _ := json.MarshalIndent(payload, "", "  ")
 		if err := writeText(resultPath, string(b)+"\n"); err != nil {

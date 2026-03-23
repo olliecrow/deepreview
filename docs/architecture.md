@@ -76,9 +76,9 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - if a remaining blocker would require tracked-code edits or history cleanup, report it instead of repairing it in delivery
   - report whether local delivery preparation is complete or incomplete
   - write only local-readiness result fields for the orchestrator (mode, incomplete status/reason); `delivery_branch` stays reserved and unset
-- the orchestrator validates the candidate ref, re-runs repo-native outbound-history policy checks against the candidate publish range, pushes it, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
+- the orchestrator validates the candidate ref, re-runs repo-native outbound-history policy checks against the candidate publish range using a trusted policy source, pushes it only when local delivery preparation is complete, creates the PR in `pr` mode, and performs bounded post-create mergeability validation before classifying final success/failure
 - recovery for publishability blockers happens only through the normal candidate-branch execute/review path, so the branch that gets published is still the branch that was reviewed
-- in `yolo` mode, the orchestrator pushes the candidate/source-branch ref instead of creating a PR
+- in `yolo` mode, the orchestrator pushes the candidate/source-branch ref instead of creating a PR, but only when the delivery result is complete; incomplete yolo delivery stays local and reports the blocking reason without pushing
 - the orchestrator still stays out of repo-specific local mutation logic except for worktree lifecycle, prompt launching/resume, artifact validation, remote publication, and terminal classification
 
 5. Finalization:

@@ -486,6 +486,28 @@ func TestResolveCommitIdentityHonorsCallerCWDOutsideSourceRootForRepoLocator(t *
 	})
 }
 
+func TestResolveCommitIdentityRejectsInvalidCallerCWDForRepoLocator(t *testing.T) {
+	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
+	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
+	currentRepoAbs := canonicalPath(t, currentRepo)
+	setSourceRootDetectorForTest(t, func() (string, bool) {
+		return currentRepoAbs, true
+	})
+	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "empty.gitconfig"))
+	t.Setenv("OLDPWD", callerRepo)
+	t.Setenv(deepreviewCallerCWDEnv, filepath.Join(t.TempDir(), "missing"))
+
+	withWorkingDir(t, currentRepo, func() {
+		_, err := ResolveCommitIdentity("git", "example-org/example-repo")
+		if err == nil {
+			t.Fatalf("expected invalid %s override to fail", deepreviewCallerCWDEnv)
+		}
+		if !strings.Contains(err.Error(), deepreviewCallerCWDEnv) {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
 func TestConfigureManagedGitIdentityEnablesPlainGitCommitWithoutSigner(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")
