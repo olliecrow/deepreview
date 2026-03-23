@@ -2736,14 +2736,14 @@ func deliveryRecoveryExecuteOverride(baseRef string) string {
 func deliveryConfirmationModeNote(baseRef string) string {
 	return strings.TrimSpace(fmt.Sprintf(
 		"## Delivery Confirmation Mode\n"+
-			"- This is an automatic final audit round after a delivery-recovery change.\n"+
+			"- This is a delivery recovery confirmation round after a delivery-recovery change.\n"+
 			"- Prioritize verifying that the candidate branch is now publishable against `%s` and that recovery did not introduce unrelated churn.\n",
 		strings.TrimSpace(baseRef),
 	))
 }
 
 func deliveryConfirmationExecuteOverride() string {
-	return "This is an automatic final audit round. Prefer verification, review, and narrowly scoped follow-up over new broad changes."
+	return "This is a delivery recovery confirmation round. Prefer verification, review, and narrowly scoped follow-up over new broad changes."
 }
 
 func buildDeliveryRecoveryReviewReport(path, baseRef, blocker string) error {

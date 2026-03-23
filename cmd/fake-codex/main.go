@@ -374,7 +374,7 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
-		auditOnly := strings.Contains(prompt, "automatic final audit round")
+		auditOnly := strings.Contains(prompt, "automatic final audit round") || strings.Contains(prompt, "delivery recovery confirmation round")
 		if auditOnly {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE")) != "" {
 				if err := writeText(filepath.Join(".", "audit_round_change.txt"), "audit change\n"); err != nil {
