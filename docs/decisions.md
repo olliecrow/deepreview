@@ -241,7 +241,7 @@ The first-stop/second-stop policy already gives a built-in confirmation pass. Re
 Trade-offs:
 Runs that still need another round at the configured limit now fail/incomplete directly instead of getting one extra implicit audit round for free.
 Enforcement:
-Orchestrator round control has no audit-only branch. When another round is still required at `--max-rounds`, `pr` mode publishes an incomplete draft PR when deliverable changes exist and `yolo` mode fails with guidance to rerun using a higher limit.
+Orchestrator round control has no audit-only branch. When another round is still required at `--max-rounds`, `pr` mode publishes an incomplete draft PR only if deliverable changes exist and the candidate still passes final publishability validation; otherwise it fails without push/PR. `yolo` mode fails with guidance to rerun using a higher limit.
 References:
 `internal/deepreview/orchestrator.go`, `docs/spec.md`, `docs/architecture.md`
 

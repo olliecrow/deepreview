@@ -83,7 +83,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - post-prompt delivery validation must also enforce repo-native outbound history policies against the candidate publish range when the repository defines them.
 - if candidate publication is blocked by tracked content or branch history, deepreview may run one bounded delivery-recovery cycle that routes the blocker back through the normal candidate-branch execute/review path before retrying delivery.
 - after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.
-- in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview must still publish a draft PR to preserve the candidate branch state.
+- in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview should publish a draft PR to preserve the candidate branch state only when the candidate still passes final publishability validation; if publishability remains blocked, fail without push or PR creation.
 - incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
 - incomplete draft PR bodies must explicitly state that the PR is incomplete, why delivery did not finish cleanly, and what remains to be done before merge.
 - incomplete delivery/reporting should distinguish current-tip blockers from PR-range/history-only blockers; when the blocker requires tracked-code edits or history cleanup, deepreview should first attempt one bounded candidate-branch recovery cycle and report incomplete only if that recovery path is still blocked.
@@ -185,7 +185,7 @@ Cleanup policy:
 - if execute verification fails, fail the run and do not deliver.
 - if `pr` mode delivery fails after final round succeeds, fail the run and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.
-- if another round is still required after `--max-rounds`, `pr` mode should publish an incomplete draft PR when deliverable repository changes exist; `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
+- if another round is still required after `--max-rounds`, `pr` mode should publish an incomplete draft PR only when deliverable repository changes exist and final publishability validation passes; otherwise it fails without push/PR. `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
 - verification strategy is codex-led: Codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)
