@@ -636,7 +636,14 @@ func (o *Orchestrator) ensureTerminalFinalSummary(defaultBranch, candidateBranch
 	}
 	summaryPath := filepath.Join(o.runRoot, "final-summary.md")
 	if _, err := os.Stat(summaryPath); err == nil {
-		return nil
+		if runHealthArtifactsExist(o.runRoot) {
+			return nil
+		}
+		health, healthErr := collectRunHealth(o.runRoot, o.config.RunID, o.lastDelivery.Mode)
+		if healthErr != nil {
+			return healthErr
+		}
+		return writeRunHealthArtifacts(o.runRoot, health)
 	} else if !os.IsNotExist(err) {
 		return err
 	}
@@ -3734,6 +3741,23 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 		rel := filepath.ToSlash(filepath.Join(filepath.Base(filepath.Dir(path)), "round-status.json"))
 		lines = append(lines, fmt.Sprintf("- `%s`: decision=`%s`, confidence=`%s`, reason=%s", rel, status.Decision, confidence, sanitizePublicText(reason)))
 	}
+	health, err := collectRunHealth(o.runRoot, o.config.RunID, delivery.Mode)
+	if err != nil {
+		return err
+	}
+	lines = append(lines,
+		"",
+		"## run health",
+		fmt.Sprintf("- artifact: `%s`", runHealthMDName),
+		fmt.Sprintf("- stderr logs: `%d` total, `%d` non-empty", health.Artifacts.StderrLogs, health.Stderr.NonEmptyFiles),
+		fmt.Sprintf("- stderr signal counts: warnings=`%d`, errors=`%d`", health.Stderr.WarningLines, health.Stderr.ErrorLines),
+		fmt.Sprintf(
+			"- canonical artifacts: reviews=`%d`, round-summaries=`%d`, round-records=`%d`",
+			health.Artifacts.ReviewReports,
+			health.Artifacts.RoundSummaries,
+			health.Artifacts.RoundRecords,
+		),
+	)
 	if delivery.PRURL != "" {
 		lines = append(lines, "", "## pull request", "- "+delivery.PRURL)
 	}
@@ -3745,7 +3769,10 @@ func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryRe
 	if err := assertPublicTextSafe(finalText, "final summary"); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText), 0o644)
+	if err := os.WriteFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText), 0o644); err != nil {
+		return err
+	}
+	return writeRunHealthArtifacts(o.runRoot, health)
 }
 
 func (o *Orchestrator) discoverCompletedRoundSummaries() ([]string, error) {
