@@ -1297,3 +1297,16 @@ Enforcement:
 The yolo delivery path returns an incomplete no-push result, preserves `IncompleteReason` in CLI/final-summary reporting, and skips push refspec emission when nothing was published.
 References:
 `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`, `internal/deepreview/orchestrator_test.go`, `docs/architecture.md`
+
+Decision:
+Publish canonical run-health artifacts for every completed run, and backfill them when a terminal `final-summary.md` already exists without them.
+Context:
+Final summaries and raw logs expose enough information to reconstruct run cleanliness, but operators have to inspect multiple files to answer basic questions such as whether canonical artifacts were produced and how noisy stderr was. Some terminal paths can also leave a root `final-summary.md` in place before the run-health artifacts exist.
+Rationale:
+Dedicated `run-health.json` and `run-health.md` artifacts provide one observational surface for canonical artifact coverage and stderr-noise signals without changing delivery classification. Backfilling those artifacts whenever a terminal final summary already exists keeps successful terminal states self-serve and consistent.
+Trade-offs:
+Adds two more derived artifacts and some overlap with information that can already be inferred from raw logs and the final summary.
+Enforcement:
+`writeFinalSummary` emits run-health artifacts, `ensureTerminalFinalSummary` backfills them if only the final summary exists, CLI completion/failure summaries surface the markdown path, and orchestrator/CLI tests assert creation and backfill behavior.
+References:
+`internal/deepreview/run_health.go`, `internal/deepreview/orchestrator.go`, `internal/deepreview/cli.go`, `internal/deepreview/orchestrator_test.go`, `internal/deepreview/cli_test.go`, `docs/spec.md`, `docs/architecture.md`
