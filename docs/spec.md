@@ -59,7 +59,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` and `.tmp/deepreview/` remain reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
 - all Codex prompt executions use the operator's normal local Codex configuration and inherited local environment by default; deepreview does not force a separate model, reasoning profile, temp/cache override layer, or other execution wrapper beyond the resolved launcher itself, except that resumed multicodex-backed contexts stay on the profile that created the thread.
 - every Codex prompt must explicitly tell Codex to inspect the locally available skill set and use any relevant skills if present, without assuming a particular skill pack exists.
-- round progression is determined by validated execute-stage round status plus repository change detection.
+- round progression is determined by validated execute-stage round status decisions; repository change detection is informational and must not override the stop/continue policy.
 - if an execute round ends with status `continue`, deepreview must run another review round regardless of repository changes.
 - if an execute round ends with the first consecutive status `stop`, deepreview must run one additional confirmation round regardless of repository changes.
 - if an execute round ends with the second consecutive status `stop`, deepreview stops the round loop even if that round also produced repository changes.
@@ -147,7 +147,7 @@ Helper command behavior:
 - Optional fields:
   - `confidence`: number in `[0.0, 1.0]`
   - `next_focus`: string
-- This file is an execute-stage artifact for traceability; round-loop control combines consecutive status decisions with repository change detection.
+- This file is an execute-stage artifact for traceability; round-loop control is driven by consecutive status decisions, while repository change detection remains informational.
 - Invalid or missing required fields fail the round.
 
 ## Delivery naming contract

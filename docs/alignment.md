@@ -30,7 +30,7 @@ This document maps the user-provided project description to canonical requiremen
 | R-17 | Reuse compatible patterns internally but do not reference external inspiration projects in committed deepreview artifacts. | `docs/spec.md`, `AGENTS.md`, `docs/decisions.md` |
 | R-18 | Keep orchestration simple: avoid unbounded retries; allow only bounded inactivity restarts with explicit caps. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-19 | Run iterative deepreview loops with configurable max rounds (default 5). | `docs/spec.md`, `docs/architecture.md` |
-| R-20 | Round status flag files are required execute artifacts (`continue|stop`) for traceability, and round-loop control combines consecutive status decisions with repository change detection. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
+| R-20 | Round status flag files are required execute artifacts (`continue|stop`) for traceability; round-loop control is driven by consecutive status decisions, while repository change detection remains informational only. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-21 | Do not push in intermediate rounds; allow delivery-stage publication only after rounds are complete. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
 | R-22 | Each round/stage must use fresh isolated worktrees to minimize stale code/context carryover. | `docs/spec.md`, `docs/architecture.md` |
 | R-23 | Aggressive cleanup: remove obsolete worktrees and transient artifacts as soon as they are no longer needed. | `docs/spec.md`, `docs/architecture.md`, `docs/decisions.md` |
