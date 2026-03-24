@@ -40,6 +40,7 @@ This document defines how work is tracked so progress compounds without context 
 ## Durable vs ephemeral routing
 - Durable contracts and architecture belong in `/docs/` (`spec.md`, `architecture.md`, `decisions.md`, `workflows.md`).
 - Unresolved design questions and iterative planning belong in `/plan/current/` (`open-questions.md`, `notes.md`, and task-specific scratch files).
+- If a scratch file stops matching the current codebase or active task, prune or replace it immediately; stale scratch is worse than missing scratch because agents will treat it as live context.
 
 ## Doc update routing
 - Update `README.md` for user-facing onboarding and CLI ergonomics (for example quickstart, help usage, optional shell alias guidance).
@@ -59,6 +60,7 @@ This document defines how work is tracked so progress compounds without context 
 - During execution: write concise notes to `/plan/current/`.
 - At meaningful milestones: consolidate and de-duplicate active notes.
 - Before finishing: promote durable learnings to `/docs/` and trim stale `/plan/` artifacts.
+- Do not use `plan/current/` as archival history. Once a task is superseded or completed, collapse the useful parts into durable docs or delete the scratch.
 
 ## Checkpoint cadence
 - Run docs consolidation frequently during long tasks.

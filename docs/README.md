@@ -15,6 +15,7 @@ Relationship to `/plan/`:
 - `/plan/handoffs/` is used for staged workflow handoffs when needed.
 - Active notes should be routed into `/plan/current/` and promoted into `/docs/` only when they become durable guidance.
 - `/docs/` is long-lived; only stable guidance should live here.
+- Stale scratch should be pruned aggressively. If a `plan/current/` file no longer matches the active task or current codebase, update or delete it instead of letting it masquerade as current guidance.
 
 ## Documentation Map
 - [../README.md](../README.md): user-facing project overview, quickstart, CLI usage, and shell ergonomics.
