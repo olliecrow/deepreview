@@ -310,7 +310,6 @@ var allowedPlaceholderEmailDomains = map[string]struct{}{
 }
 
 const (
-	githubPRBodyMaxChars     = 65536
 	githubPRBodyTargetChars  = 64000
 	githubPRTitleTargetChars = 240
 )
@@ -587,7 +586,7 @@ func (o *Orchestrator) Run() (retErr error) {
 			SkipReason: "no deliverable repository changes were produced",
 		}
 		o.lastDelivery = &delivery
-		if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
+		if err := o.writeFinalSummary(delivery, roundSummaries); err != nil {
 			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 			return err
 		}
@@ -607,7 +606,7 @@ func (o *Orchestrator) Run() (retErr error) {
 			SkipReason: "delivery recovery removed all deliverable repository changes",
 		}
 		o.lastDelivery = &delivery
-		if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
+		if err := o.writeFinalSummary(delivery, roundSummaries); err != nil {
 			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 			return err
 		}
@@ -621,7 +620,7 @@ func (o *Orchestrator) Run() (retErr error) {
 		return err
 	}
 	o.lastDelivery = &delivery
-	if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, roundSummaries); err != nil {
+	if err := o.writeFinalSummary(delivery, roundSummaries); err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 		return err
 	}
@@ -657,7 +656,7 @@ func (o *Orchestrator) ensureTerminalFinalSummary(defaultBranch, candidateBranch
 	if len(summaries) == 0 {
 		return NewDeepReviewError("cannot write final summary: no completed round records are available")
 	}
-	return o.writeFinalSummary(defaultBranch, candidateBranch, *o.lastDelivery, summaries)
+	return o.writeFinalSummary(*o.lastDelivery, summaries)
 }
 
 func (o *Orchestrator) preflight() error {
@@ -3209,7 +3208,7 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 	if err := assertPublicTextSafe(prTitle, "pr title"); err != nil {
 		return DeliveryResult{}, err
 	}
-	prBody := o.buildPRBody(defaultBranch, candidateBranch, summaries, changedFiles, opts)
+	prBody := o.buildPRBody(summaries, changedFiles, opts)
 	prBody = o.capPRBodyForGitHub(prBody, summaries, changedFiles, opts)
 	if err := assertPublicTextSafe(prBody, "pr body"); err != nil {
 		return DeliveryResult{}, err
@@ -3349,7 +3348,7 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 		return false, err
 	}
 	o.lastDelivery = &delivery
-	if err := o.writeFinalSummary(defaultBranch, candidateBranch, delivery, summaries); err != nil {
+	if err := o.writeFinalSummary(delivery, summaries); err != nil {
 		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR final summary failed: "+progressMessage(err))
 		return false, err
 	}
@@ -3475,7 +3474,7 @@ func (o *Orchestrator) buildIncompletePRBody(summaries, changedFiles []string, b
 	return sanitizePublicText(strings.Join(lines, "\n") + "\n")
 }
 
-func (o *Orchestrator) buildPRBody(_ string, _ string, summaries, changedFiles []string, opts prDeliveryOptions) string {
+func (o *Orchestrator) buildPRBody(summaries, changedFiles []string, opts prDeliveryOptions) string {
 	if opts.incomplete {
 		return o.buildIncompletePRBody(summaries, changedFiles, opts.incompleteReason)
 	}
@@ -3680,7 +3679,7 @@ func summarizeChangedFilePreview(changedFiles []string, limit int) (string, int)
 	return strings.Join(parts, ", "), len(unique) - len(preview)
 }
 
-func (o *Orchestrator) writeFinalSummary(_ string, _ string, delivery DeliveryResult, summaries []string) error {
+func (o *Orchestrator) writeFinalSummary(delivery DeliveryResult, summaries []string) error {
 	if delivery.Skipped {
 		if o.pushCount != 0 {
 			return NewDeepReviewError("invalid delivery push count: expected 0 for skipped delivery, got %d", o.pushCount)

@@ -1348,7 +1348,7 @@ func TestWriteFinalSummaryAlsoWritesRunHealthArtifacts(t *testing.T) {
 	}
 	summaries := []string{filepath.Join(roundDir, "round-summary.md")}
 
-	if err := o.writeFinalSummary("main", "candidate", delivery, summaries); err != nil {
+	if err := o.writeFinalSummary(delivery, summaries); err != nil {
 		t.Fatalf("writeFinalSummary failed: %v", err)
 	}
 
