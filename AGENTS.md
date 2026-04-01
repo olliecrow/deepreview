@@ -6,6 +6,11 @@
 - User input may contain variants/typos; normalize intent to `deepreview` in code/docs/output.
 - The tool runs Codex-powered review workflows in isolated worktrees and produces actionable review artifacts.
 
+## Repository Ownership
+- This repository belongs under the personal GitHub account `olliecrow`.
+- Do not move it to a GitHub organization or a different personal account unless Ollie explicitly asks for that change.
+- When docs, remotes, automation, releases, or publishing steps need the owning GitHub account, use `olliecrow`.
+
 ## Open-Source Transition Posture
 - Treat this repository as open-source-ready now, even while private.
 - Never commit secrets, credentials, tokens, private keys, sensitive data, or confidential internal details.
