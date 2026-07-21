@@ -1,7 +1,7 @@
 # deepreview
 
 deepreview is a local CLI for deep branch reviews.
-It runs parallel Codex reviews, consolidates them, executes fixes, verifies outcomes, and keeps looping until Codex produces two consecutive `stop` decisions.
+It runs parallel Codex reviews, validates and executes material fixes, and reviews every changed round before one final delivery.
 
 <img width="1209" height="594" alt="image" src="https://github.com/user-attachments/assets/0fc6b1f5-28e2-4d4e-b061-cc24202e6515" />
 
@@ -21,15 +21,14 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 4. The execute stage runs two prompts in one Codex thread: first triage/plan, which investigates proposed changes one by one and accepts only high-confidence material work, then implement/verify/finalize/commit.
 5. Canonical round artifacts and logs are kept under `~/deepreview/runs/<run-id>/`; Codex stages prompt outputs inside the active worktree first, and deepreview copies the canonical artifacts back into the run directory.
 6. Each completed run also writes a canonical run-health summary under `~/deepreview/runs/<run-id>/run-health.{md,json}` so operators can inspect artifact coverage and stderr noise without replaying raw logs.
-7. If execute says `continue`, deepreview always runs another review round.
-8. If execute says `stop` once, deepreview still runs one confirmation round.
-9. If execute says `stop` for two consecutive rounds, deepreview stops the loop, even if the second stop round also changed code.
-10. In `pr` mode (default), it runs one fresh Codex delivery stage to confirm merge-ready local state without mutating tracked repository content. If publication is blocked by tracked content or branch history, deepreview routes that blocker back through one bounded recovery cycle on the candidate branch, then deepreview pushes and opens one pull request back into your source branch.
-11. If the run made tangible repository changes but did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
-12. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
-13. In yolo mode, it pushes directly to your source branch.
-14. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
-15. In PR mode, deepreview performs bounded post-create mergeability validation after PR creation; it does not currently run a remote fix/retry/edit loop after the PR is opened.
+7. If execute says `continue`, or if execute changed the repository, deepreview runs another review round.
+8. If execute says `stop` and made no repository changes, the review loop ends without a redundant confirmation round.
+9. In `pr` mode (default), it runs one fresh Codex delivery stage to confirm merge-ready local state without mutating tracked repository content. If publication is blocked by tracked content or branch history, deepreview routes that blocker back through one bounded recovery cycle on the candidate branch, then deepreview pushes and opens one pull request back into your source branch.
+10. If the run made tangible repository changes but did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
+11. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
+12. In yolo mode, it pushes directly to your source branch.
+13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
+14. In PR mode, deepreview performs bounded post-create mergeability validation after PR creation; it does not currently run a remote fix/retry/edit loop after the PR is opened.
 
 ## Requirements
 
@@ -245,16 +244,5 @@ Common options.
 - [AGENTS.md](AGENTS.md): repository operating instructions and agent constraints
 - [docs/spec.md](docs/spec.md): canonical runtime and product behavior
 - [docs/architecture.md](docs/architecture.md): pipeline and isolation model
-- [docs/workflows.md](docs/workflows.md): execution and note routing conventions
 - [docs/decisions.md](docs/decisions.md): durable decision rationale
-- [docs/alignment.md](docs/alignment.md): requirement traceability baseline
 - [prompts/README.md](prompts/README.md): prompt template pack and execute queue
-- [docs/project-preferences.md](docs/project-preferences.md): durable project maintenance preferences
-- [docs/untrusted-third-party-repos.md](docs/untrusted-third-party-repos.md): static-analysis-only policy for third-party snapshots
-
-<!-- third-party-policy:start -->
-## Third-Party Code Policy
-This repository allows external-code snapshots for static analysis only. External clones must stay in ephemeral `plan/` locations, be sanitized immediately (`rm -rf .git`, or remove all remotes first if `.git` is temporarily retained), and must never be executed.
-
-See `docs/untrusted-third-party-repos.md`.
-<!-- third-party-policy:end -->

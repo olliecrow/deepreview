@@ -1460,38 +1460,29 @@ func TestBasePRTitleFromChangesHandlesRootOnlyChanges(t *testing.T) {
 }
 
 func TestEvaluateRoundLoopControlContinueAlwaysContinues(t *testing.T) {
-	control := evaluateRoundLoopControl(1, RoundStatus{Decision: "continue", Reason: "more work"}, false, 0)
+	control := evaluateRoundLoopControl(RoundStatus{Decision: "continue", Reason: "more work"}, false, 0)
 	if !control.shouldContinue {
 		t.Fatal("expected continue decision to force another round")
 	}
-	if control.nextStopStreak != 0 {
-		t.Fatalf("expected continue decision to reset stop streak, got %d", control.nextStopStreak)
-	}
 }
 
-func TestEvaluateRoundLoopControlFirstStopStillContinues(t *testing.T) {
-	control := evaluateRoundLoopControl(0, RoundStatus{Decision: "stop", Reason: "looks good"}, true, 3)
+func TestEvaluateRoundLoopControlReviewsRepositoryChanges(t *testing.T) {
+	control := evaluateRoundLoopControl(RoundStatus{Decision: "stop", Reason: "looks good"}, true, 3)
 	if !control.shouldContinue {
-		t.Fatal("expected first stop decision to require a confirmation round")
+		t.Fatal("expected repository changes to require another review round")
 	}
-	if control.nextStopStreak != 1 {
-		t.Fatalf("expected stop streak 1, got %d", control.nextStopStreak)
-	}
-	if !strings.Contains(control.message, "first stop decision") {
-		t.Fatalf("expected first-stop message, got %q", control.message)
+	if !strings.Contains(control.message, "3 repository change(s)") {
+		t.Fatalf("expected change-driven message, got %q", control.message)
 	}
 }
 
-func TestEvaluateRoundLoopControlSecondStopTerminatesEvenWithChanges(t *testing.T) {
-	control := evaluateRoundLoopControl(1, RoundStatus{Decision: "stop", Reason: "still good"}, true, 2)
+func TestEvaluateRoundLoopControlCleanStopTerminates(t *testing.T) {
+	control := evaluateRoundLoopControl(RoundStatus{Decision: "stop", Reason: "looks good"}, false, 0)
 	if control.shouldContinue {
-		t.Fatal("expected second consecutive stop decision to end the loop")
+		t.Fatal("expected clean stop decision to end the loop")
 	}
-	if control.nextStopStreak != 2 {
-		t.Fatalf("expected stop streak 2, got %d", control.nextStopStreak)
-	}
-	if !strings.Contains(control.message, "despite 2 repository change(s)") {
-		t.Fatalf("expected second-stop-with-changes message, got %q", control.message)
+	if !strings.Contains(control.message, "no repository changes") {
+		t.Fatalf("expected clean-stop message, got %q", control.message)
 	}
 }
 

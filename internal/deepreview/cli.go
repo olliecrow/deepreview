@@ -210,8 +210,8 @@ What this command does:
   3) Runs two execute-stage prompts in one fresh Codex thread: triage+plan, then implement+verify+finalize.
   4) Repeats rounds up to max rounds while another round is still required.
      A `+"`continue`"+` decision always forces another round.
-     A first `+"`stop`"+` still forces one confirmation round.
-     A second consecutive `+"`stop`"+` ends the loop, even if that round also changed the repository.
+     Repository changes always force another review round.
+     A `+"`stop`"+` with no repository changes ends the loop.
   5) Delivers once at the end:
      - mode=pr (default): runs one fresh Codex delivery stage for final local merge-readiness assessment, routes any remaining tracked-content/history blocker back through one bounded candidate-branch recovery cycle, then deepreview pushes, opens the PR, and performs bounded post-create mergeability validation
      - mode=yolo: pushes directly to source branch
@@ -254,8 +254,8 @@ Optional flags:
   --max-rounds <int>    (default: %d)
     Maximum review/execute rounds before stopping.
     `+"`continue`"+` always requires another round.
-    A first consecutive `+"`stop`"+` still requires one confirmation round.
-    A second consecutive `+"`stop`"+` ends the loop, even if the second stop round also made repository changes.
+    Repository changes require another review round even when the decision is `+"`stop`"+`.
+    A `+"`stop`"+` with no repository changes ends the loop.
     If another round is still required at max rounds, deepreview fails and asks you to rerun with a higher limit.
 
   --mode <pr|yolo>      (default: %s)
@@ -987,8 +987,8 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	}
 
 	fmt.Fprintln(out, "   - if round status is `continue`, run another review round")
-	fmt.Fprintln(out, "   - if round status is first consecutive `stop`, run one confirmation round")
-	fmt.Fprintln(out, "   - if round status is second consecutive `stop`, stop the round loop")
+	fmt.Fprintln(out, "   - if execute changed the repository, run another review round")
+	fmt.Fprintln(out, "   - if round status is `stop` and execute made no repository changes, stop the round loop")
 	fmt.Fprintln(out, "5. delivery stage")
 	if cfg.Mode == ModePR {
 		fmt.Fprintln(out, "   - validate delivery files")

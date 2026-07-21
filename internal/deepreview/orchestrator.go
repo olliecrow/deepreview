@@ -502,7 +502,6 @@ func (o *Orchestrator) Run() (retErr error) {
 	)
 
 	roundSummaries = make([]string, 0)
-	consecutiveStopDecisions := 0
 
 	for round := 1; round <= o.config.MaxRounds; round++ {
 		roundDir := filepath.Join(o.runRoot, fmt.Sprintf("round-%02d", round))
@@ -545,19 +544,17 @@ func (o *Orchestrator) Run() (retErr error) {
 			return err
 		}
 		changed := len(roundChangedFiles) > 0
-		control := evaluateRoundLoopControl(consecutiveStopDecisions, status, changed, len(roundChangedFiles))
-		consecutiveStopDecisions = control.nextStopStreak
+		control := evaluateRoundLoopControl(status, changed, len(roundChangedFiles))
 		if !control.shouldContinue {
 			o.reporter.StageProgress("execute stage", control.message, roundPtr(round))
 			break
 		}
 		if round >= o.config.MaxRounds {
 			return NewDeepReviewError(
-				"round %d/%d requires another review round (decision `%s`, consecutive stop decisions `%d`, repository changes `%d`); rerun deepreview with a higher --max-rounds",
+				"round %d/%d requires another review round (decision `%s`, repository changes `%d`); rerun deepreview with a higher --max-rounds",
 				round,
 				o.config.MaxRounds,
 				status.Decision,
-				consecutiveStopDecisions,
 				len(roundChangedFiles),
 			)
 		}
@@ -840,12 +837,11 @@ func roundPtr(round int) *int {
 }
 
 type roundLoopControl struct {
-	nextStopStreak int
 	shouldContinue bool
 	message        string
 }
 
-func evaluateRoundLoopControl(previousStopStreak int, status RoundStatus, changed bool, changedCount int) roundLoopControl {
+func evaluateRoundLoopControl(status RoundStatus, changed bool, changedCount int) roundLoopControl {
 	if status.Decision == "continue" {
 		message := "codex requested another round; continuing review loop"
 		if changed {
@@ -855,39 +851,24 @@ func evaluateRoundLoopControl(previousStopStreak int, status RoundStatus, change
 			)
 		}
 		return roundLoopControl{
-			nextStopStreak: 0,
 			shouldContinue: true,
 			message:        message,
 		}
 	}
 
-	stopStreak := previousStopStreak + 1
-	if stopStreak >= 2 {
-		message := "codex produced a second consecutive stop decision; stopping round loop"
-		if changed {
-			message = fmt.Sprintf(
-				"codex produced a second consecutive stop decision; stopping round loop despite %d repository change(s) in this round",
-				changedCount,
-			)
-		}
+	if changed {
 		return roundLoopControl{
-			nextStopStreak: stopStreak,
-			shouldContinue: false,
-			message:        message,
+			shouldContinue: true,
+			message: fmt.Sprintf(
+				"execute produced %d repository change(s); running another review round before delivery",
+				changedCount,
+			),
 		}
 	}
 
-	message := "codex produced the first stop decision; running one confirmation round"
-	if changed {
-		message = fmt.Sprintf(
-			"codex produced the first stop decision, but execute also produced %d repository change(s); running one confirmation round",
-			changedCount,
-		)
-	}
 	return roundLoopControl{
-		nextStopStreak: stopStreak,
-		shouldContinue: true,
-		message:        message,
+		shouldContinue: false,
+		message:        "codex found no further material work and execute made no repository changes; stopping round loop",
 	}
 }
 
