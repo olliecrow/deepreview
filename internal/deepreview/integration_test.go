@@ -2197,8 +2197,8 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
 	}
 	runDir := runsGlob[0]
-	if _, err := os.Stat(filepath.Join(runDir, "round-02", "round-summary.md")); err != nil {
-		t.Fatalf("expected confirmation round artifacts when first stop had no changes, got: %v", err)
+	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect a redundant second round after a clean stop, err=%v", err)
 	}
 	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
 	if err != nil {
@@ -2699,7 +2699,7 @@ func TestEndToEndPRModeDoesNotReuseStaleExecuteStatusArtifactsFromKilledPrompt(t
 	}
 }
 
-func TestEndToEndPRModeCompletesAfterTwoConsecutiveStopDecisionsWithoutChanges(t *testing.T) {
+func TestEndToEndPRModeCompletesAfterOneCleanStopDecision(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -2761,8 +2761,8 @@ func TestEndToEndPRModeCompletesAfterTwoConsecutiveStopDecisionsWithoutChanges(t
 		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
 	}
 	runDir := runsGlob[0]
-	if _, err := os.Stat(filepath.Join(runDir, "round-02", "round-summary.md")); err != nil {
-		t.Fatalf("expected confirmation round artifacts, got: %v", err)
+	if _, err := os.Stat(filepath.Join(runDir, "round-02")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect a redundant second round after a clean stop, err=%v", err)
 	}
 	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
 	if err != nil {
@@ -2845,7 +2845,7 @@ func TestEndToEndPRModeDeliverySanitizesDocsAndSkipsPRWhenSanitizationRemovesAll
 	}
 }
 
-func TestRunStopsAfterSecondStopEvenWhenSecondRoundStillChangesCode(t *testing.T) {
+func TestRunReviewsChangedRoundThenStopsOnCleanRound(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -2881,7 +2881,10 @@ func TestRunStopsAfterSecondStopEvenWhenSecondRoundStillChangesCode(t *testing.T
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
 	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env, "FAKE_CODEX_CHANGE_CONTENT_BY_ROUND=1")
+	env = append(env,
+		"FAKE_CODEX_CHANGE_CONTENT_BY_ROUND=1",
+		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
+	)
 	out := runCmd(t, root, env,
 		bin,
 		"review",
@@ -2905,7 +2908,7 @@ func TestRunStopsAfterSecondStopEvenWhenSecondRoundStillChangesCode(t *testing.T
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 	if before == after {
-		t.Fatalf("expected second-stop flow to complete delivery and update remote source branch")
+		t.Fatalf("expected change-driven review flow to complete delivery and update remote source branch")
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))

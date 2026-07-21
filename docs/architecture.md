@@ -60,9 +60,9 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - Codex writes the round status file inside the execute worktree, and the orchestrator persists the canonical copy at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - the orchestrator writes `~/deepreview/runs/<run-id>/round-<round>/round.json` after successful execute-stage completion; final completion reporting counts only rounds with that authoritative record
 - aggressively remove execute worktree and transient per-round artifacts
-- if execute status is `continue`, reset the stop streak and continue
-- if execute status is the first consecutive `stop`, keep the candidate head and run one confirmation round
-- if execute status is the second consecutive `stop`, stop the round loop even if that round also changed the repository
+- if execute status is `continue`, run another round
+- if execute changed the repository, keep the candidate head and run another round so those changes are independently reviewed
+- if execute status is `stop` and the repository is unchanged, stop the round loop
 - if another round is still required at the configured max, fail and require rerun with a higher `--max-rounds`
 
 4. Final delivery (single delivery stage):
@@ -84,7 +84,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 5. Finalization:
 - if TUI mode was active, exit TUI immediately on completion and clear terminal screen before summary output
-- emit final summary, run-health artifacts, and alignment evidence pointers; successful terminal states backfill the root `final-summary.md` if an earlier path failed to write it
+- emit final summary and run-health artifacts; successful terminal states backfill the root `final-summary.md` if an earlier path failed to write it
 - on interrupt, emit the same failure-summary surface used for other self-serve failures, then scrub lingering transient run-root worktrees before reporting cleanup complete
 - ensure no stale transient worktrees/artifacts remain
 
@@ -122,8 +122,8 @@ deepreview
 │   └── delete execute worktree
 ├── 3. round control
 │   ├── continue => next round
-│   ├── first stop => confirmation round
-│   └── second consecutive stop => exit round loop
+│   ├── continue or repository changes => next round
+│   └── clean stop => exit round loop
 ├── 4. delivery
 │   ├── create fresh delivery worktree
 │   ├── start fresh delivery context
