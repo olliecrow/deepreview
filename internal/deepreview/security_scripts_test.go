@@ -179,6 +179,23 @@ func TestCheckSensitiveTextRejectsMixedPlaceholderAndSensitivePathOnSameLine(t *
 	}
 }
 
+func TestCheckSensitiveTextRejectsSensitiveTextWithoutRipgrep(t *testing.T) {
+	repo := initSecurityScriptRepo(t)
+	target := writeRepoFile(t, repo, "sensitive.txt",
+		"contact "+sensitiveEmailFixture()+" token "+buildSensitiveToken("sk-admin-")+"\n")
+
+	output := runSensitiveTextScriptExpectFailureWithEnv(t, repo, target, []string{"PATH=/usr/bin:/bin"})
+	if !strings.Contains(output, sensitiveEmailFixture()) {
+		t.Fatalf("expected disallowed email in grep fallback output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "sk-admin-") {
+		t.Fatalf("expected disallowed token in grep fallback output, got:\n%s", output)
+	}
+	if strings.Contains(output, "warning:") {
+		t.Fatalf("expected grep-compatible expressions, got:\n%s", output)
+	}
+}
+
 func TestCheckPushRangeRejectsHistoryOnlyMixedPlaceholderEmail(t *testing.T) {
 	repo := initSecurityScriptRepo(t)
 	writeRepoFile(t, repo, "notes.txt", "clean\n")
@@ -320,8 +337,14 @@ func runSecurityScriptExpectFailure(t *testing.T, repo, fromRef, toRef string) s
 
 func runSensitiveTextScriptExpectFailure(t *testing.T, repo, target string) string {
 	t.Helper()
+	return runSensitiveTextScriptExpectFailureWithEnv(t, repo, target, nil)
+}
+
+func runSensitiveTextScriptExpectFailureWithEnv(t *testing.T, repo, target string, env []string) string {
+	t.Helper()
 	cmd := exec.Command("bash", "scripts/security/check-sensitive-text.sh", "--context=direct-text", target)
 	cmd.Dir = repo
+	cmd.Env = append(os.Environ(), env...)
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	cmd.Stdout = &stdout
