@@ -4,8 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"io"
-	"os"
 	"os/exec"
 	"strings"
 	"sync"
@@ -126,45 +124,20 @@ func runCommandInvocation(
 
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
-	stdoutPipe, err := cmd.StdoutPipe()
-	if err != nil {
-		return CompletedProcess{}, err
+	stdoutWriter := &streamCaptureWriter{buffer: &stdout}
+	stderrWriter := &streamCaptureWriter{buffer: &stderr}
+	if callbacks != nil {
+		stdoutWriter.onChunk = callbacks.OnStdoutChunk
+		stderrWriter.onChunk = callbacks.OnStderrChunk
 	}
-	stderrPipe, err := cmd.StderrPipe()
-	if err != nil {
-		return CompletedProcess{}, err
-	}
+	cmd.Stdout = stdoutWriter
+	cmd.Stderr = stderrWriter
 
 	if err := cmd.Start(); err != nil {
 		return CompletedProcess{}, err
 	}
 	registerActiveCommand(cmd)
 	defer unregisterActiveCommand(cmd)
-
-	stdoutDone := make(chan error, 1)
-	stderrDone := make(chan error, 1)
-	go func() {
-		writer := &streamCaptureWriter{
-			buffer:  &stdout,
-			onChunk: nil,
-		}
-		if callbacks != nil {
-			writer.onChunk = callbacks.OnStdoutChunk
-		}
-		_, copyErr := io.Copy(writer, stdoutPipe)
-		stdoutDone <- copyErr
-	}()
-	go func() {
-		writer := &streamCaptureWriter{
-			buffer:  &stderr,
-			onChunk: nil,
-		}
-		if callbacks != nil {
-			writer.onChunk = callbacks.OnStderrChunk
-		}
-		_, copyErr := io.Copy(writer, stderrPipe)
-		stderrDone <- copyErr
-	}()
 
 	waitCh := make(chan error, 1)
 	go func() {
@@ -178,8 +151,6 @@ func runCommandInvocation(
 		terminateCommandProcessTree(cmd)
 		waitErr = <-waitCh
 	}
-	stdoutErr := <-stdoutDone
-	stderrErr := <-stderrDone
 	code := 0
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
@@ -189,13 +160,6 @@ func runCommandInvocation(
 		Stdout:     stdout.String(),
 		Stderr:     stderr.String(),
 		ReturnCode: code,
-	}
-
-	if stdoutErr != nil && !isIgnorableStreamCopyError(stdoutErr) {
-		return completed, stdoutErr
-	}
-	if stderrErr != nil && !isIgnorableStreamCopyError(stderrErr) {
-		return completed, stderrErr
 	}
 
 	if waitErr == nil {
@@ -240,23 +204,6 @@ func (w *streamCaptureWriter) Write(p []byte) (int, error) {
 		w.onChunk(p[:n])
 	}
 	return n, err
-}
-
-func isIgnorableStreamCopyError(err error) bool {
-	if err == nil {
-		return true
-	}
-	if errors.Is(err, os.ErrClosed) {
-		return true
-	}
-	lower := strings.ToLower(strings.TrimSpace(err.Error()))
-	if strings.Contains(lower, "file already closed") {
-		return true
-	}
-	if strings.Contains(lower, "use of closed file") {
-		return true
-	}
-	return false
 }
 
 func registerActiveCommand(cmd *exec.Cmd) {

@@ -3,8 +3,6 @@ package deepreview
 import (
 	"context"
 	"errors"
-	"fmt"
-	"os"
 	"strings"
 	"testing"
 	"time"
@@ -81,30 +79,6 @@ func TestTerminateActiveCommandsStopsInFlightCommand(t *testing.T) {
 		}
 	case <-time.After(3 * time.Second):
 		t.Fatalf("timed out waiting for command termination")
-	}
-}
-
-func TestIsIgnorableStreamCopyError(t *testing.T) {
-	cases := []struct {
-		name string
-		err  error
-		want bool
-	}{
-		{name: "nil", err: nil, want: true},
-		{name: "os err closed", err: os.ErrClosed, want: true},
-		{name: "file already closed text", err: fmt.Errorf("read |0: file already closed"), want: true},
-		{name: "use of closed file text", err: fmt.Errorf("write: use of closed file"), want: true},
-		{name: "other", err: fmt.Errorf("unexpected stream failure"), want: false},
-	}
-
-	for _, tc := range cases {
-		tc := tc
-		t.Run(tc.name, func(t *testing.T) {
-			got := isIgnorableStreamCopyError(tc.err)
-			if got != tc.want {
-				t.Fatalf("isIgnorableStreamCopyError(%v) = %v, want %v", tc.err, got, tc.want)
-			}
-		})
 	}
 }
 
