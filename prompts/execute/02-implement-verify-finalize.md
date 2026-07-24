@@ -10,8 +10,6 @@ This is prompt 2 of 2. On the normal path it follows prompt 1 in the same Codex 
 - Round summary output path: `{{ROUND_SUMMARY_PATH}}`
 - Repository/worktree context and triage context.
 
-{{ROUND_MODE_NOTE}}
-
 ## Mandatory setup
 1. Inspect the locally available Codex skills and use any relevant ones if they exist.
 2. Work deeply, proactively, and autonomously; do not wait for follow-up prompts.
@@ -19,8 +17,6 @@ This is prompt 2 of 2. On the normal path it follows prompt 1 in the same Codex 
 
 ## Task
 Execute the plan end-to-end, verify thoroughly, finalize the round artifacts, and leave the worktree clean with any needed local commit already created.
-
-{{ROUND_EXECUTE_MODE_OVERRIDE}}
 
 Execution requirements:
 1. Apply all approved code/doc changes.

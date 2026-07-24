@@ -132,8 +132,30 @@ func RequireRemoteBranch(repoPath, gitBin, branch string) (string, error) {
 	return sha, nil
 }
 
-func SetBranchToRef(repoPath, gitBin, branch, ref string) error {
-	_, err := RunCommand([]string{gitBin, "-C", repoPath, "update-ref", "refs/heads/" + branch, ref}, "", "", true, 0)
+func CreateBranchAtRef(repoPath, gitBin, branch, ref string) error {
+	_, err := RunCommand([]string{gitBin, "-C", repoPath, "branch", branch, ref}, "", "", true, 0)
+	return err
+}
+
+func FastForwardBranch(repoPath, gitBin, branch, ref string) error {
+	current, err := RevParse(repoPath, gitBin, branch)
+	if err != nil {
+		return err
+	}
+	forward, err := RefContainsCommit(repoPath, gitBin, current, ref)
+	if err != nil {
+		return err
+	}
+	if !forward {
+		return NewDeepReviewError("branch %s cannot advance to non-descendant ref %s", branch, ref)
+	}
+	_, err = RunCommand(
+		[]string{gitBin, "-C", repoPath, "update-ref", "refs/heads/" + branch, ref, current},
+		"",
+		"",
+		true,
+		0,
+	)
 	return err
 }
 
@@ -181,28 +203,6 @@ func AddDetachedWorktree(repoPath, gitBin, worktreePath, ref string) error {
 	return err
 }
 
-func AddBranchWorktree(repoPath, gitBin, worktreePath, branch, ref string) error {
-	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
-		return err
-	}
-	_, err := RunCommand([]string{gitBin, "-C", repoPath, "worktree", "add", "-B", branch, worktreePath, ref}, "", "", true, 0)
-	return err
-}
-
-func ResetWorktreeToRef(worktreePath, gitBin, ref string) error {
-	trimmedRef := strings.TrimSpace(ref)
-	if trimmedRef == "" {
-		return NewDeepReviewError("reset worktree target ref is required")
-	}
-	if _, err := RunCommand([]string{gitBin, "-C", worktreePath, "reset", "--hard", trimmedRef}, "", "", true, 0); err != nil {
-		return err
-	}
-	if _, err := RunCommand([]string{gitBin, "-C", worktreePath, "clean", "-fdx"}, "", "", true, 0); err != nil {
-		return err
-	}
-	return EnsureWorktreeOperationalExcludes(worktreePath, gitBin)
-}
-
 func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 	if _, err := os.Stat(worktreePath); err != nil {
 		if os.IsNotExist(err) {
@@ -224,16 +224,23 @@ func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
 			true,
 			0,
 		)
-		if removeErr != nil {
-			lastErr = removeErr
-		}
-		if err := os.RemoveAll(worktreePath); err != nil && !os.IsNotExist(err) {
-			lastErr = err
-		}
-		if err := pruneStaleWorktree(repoPath, gitBin, worktreePath); err == nil {
+		removeAllErr := os.RemoveAll(worktreePath)
+		pruneErr := pruneStaleWorktree(repoPath, gitBin, worktreePath)
+		_, statErr := os.Stat(worktreePath)
+		if pruneErr == nil && os.IsNotExist(statErr) {
 			return nil
-		} else {
-			lastErr = err
+		}
+		switch {
+		case pruneErr != nil:
+			lastErr = pruneErr
+		case removeAllErr != nil && !os.IsNotExist(removeAllErr):
+			lastErr = removeAllErr
+		case removeErr != nil:
+			lastErr = removeErr
+		case statErr != nil:
+			lastErr = statErr
+		default:
+			lastErr = NewDeepReviewError("worktree path still exists after cleanup: %s", worktreePath)
 		}
 		if time.Now().After(deadline) {
 			return lastErr

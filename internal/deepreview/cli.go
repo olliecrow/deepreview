@@ -36,12 +36,11 @@ const (
 )
 
 func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
-	normalizedArgs := normalizeLegacyArgs(args)
 	var repoFromPrefix string
-	flagArgs := normalizedArgs
-	if len(normalizedArgs) > 0 && normalizedArgs[0] != "" && normalizedArgs[0][0] != '-' {
-		repoFromPrefix = normalizedArgs[0]
-		flagArgs = normalizedArgs[1:]
+	flagArgs := args
+	if len(args) > 0 && args[0] != "" && args[0][0] != '-' {
+		repoFromPrefix = args[0]
+		flagArgs = args[1:]
 	}
 
 	fs := flag.NewFlagSet("review", flag.ContinueOnError)
@@ -135,20 +134,6 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 	return ParsedArgs{Config: cfg, NoTUI: *noTUI}, nil
 }
 
-func normalizeLegacyArgs(args []string) []string {
-	if len(args) == 0 {
-		return args
-	}
-	normalized := make([]string, len(args))
-	copy(normalized, args)
-	for i, arg := range normalized {
-		if arg == "--YOLO" {
-			normalized[i] = "--yolo"
-		}
-	}
-	return normalized
-}
-
 func envOrDefault(key, fallback string) string {
 	if v := os.Getenv(key); v != "" {
 		return v
@@ -213,7 +198,7 @@ What this command does:
      Repository changes always force another review round.
      A `+"`stop`"+` with no repository changes ends the loop.
   5) Delivers once at the end:
-     - mode=pr (default): runs one fresh Codex delivery stage for final local merge-readiness assessment, routes any remaining tracked-content/history blocker back through one bounded candidate-branch recovery cycle, then deepreview pushes, opens the PR, and performs bounded post-create mergeability validation
+     - mode=pr (default): runs one fresh Codex delivery stage for final local merge-readiness assessment, validates the exact reviewed history, then deepreview pushes, opens the PR, and performs bounded post-create mergeability validation
      - mode=yolo: pushes directly to source branch
 
 Usage:
@@ -266,7 +251,6 @@ Optional flags:
 
   --yolo                (default: false)
     Alias for --mode yolo. If set, it overrides --mode.
-    Legacy alias --YOLO is also accepted.
 
   --no-tui              (default: false)
     Force structured text progress logs (disables full-screen terminal user interface).
@@ -991,10 +975,9 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintln(out, "   - if round status is `stop` and execute made no repository changes, stop the round loop")
 	fmt.Fprintln(out, "5. delivery stage")
 	if cfg.Mode == ModePR {
-		fmt.Fprintln(out, "   - validate delivery files")
-		fmt.Fprintln(out, "   - if the candidate branch is not yet publishable, run one bounded recovery cycle on the candidate branch")
+		fmt.Fprintln(out, "   - validate every outgoing commit and delivery file")
 		fmt.Fprintln(out, "   - run one fresh Codex delivery stage")
-		fmt.Fprintln(out, "   - confirm merge-readiness without mutating tracked repository content")
+		fmt.Fprintln(out, "   - confirm merge-readiness without mutating tracked repository content or history")
 		fmt.Fprintln(out, "   - push the reviewed candidate branch to the deepreview PR branch, open the PR, and wait briefly for mergeability to settle")
 	} else {
 		fmt.Fprintln(out, "   - validate delivery files")

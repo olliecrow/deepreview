@@ -14,6 +14,7 @@
 - A `continue` decision requires another round. A `stop` with repository changes requires those changes to be reviewed in another round. A `stop` with no repository changes ends the loop.
 - Never push during review or execute rounds. Delivery publishes the reviewed candidate branch once: PR mode by default, direct source-branch push only in explicit yolo mode.
 - Delivery may not mutate tracked content or branch history. Keep public delivery text privacy-guarded while retaining literal local diagnostics.
+- Keep candidate history forward-only. Never rebase, reset, squash, amend, rebuild, filter, or force-push it; unsafe outgoing history blocks delivery.
 - Preserve bounded worker inactivity recovery, interrupt cleanup, synthetic test fixtures, and the macOS/Linux-only support boundary.
 
 ## Development

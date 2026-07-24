@@ -90,10 +90,6 @@ func gitConfigIdentityGet(gitBin, repoPath string, extraArgs []string) (CommitId
 	return CommitIdentity{Name: name, Email: email}, true, nil
 }
 
-func gitConfigGet(gitBin, repoPath, key string) (string, error) {
-	return gitConfigGetWithArgs(gitBin, nil, repoPath, key)
-}
-
 func gitConfigGetWithArgs(gitBin string, extraArgs []string, repoPath, key string) (string, error) {
 	command := []string{gitBin}
 	if strings.TrimSpace(repoPath) != "" {

@@ -16,11 +16,11 @@ References:
 `AGENTS.md`, `docs/spec.md`, `README.md`, `internal/deepreview/cli_test.go`
 
 Decision:
-Treat the repository as open-source-ready and block sensitive material on public-facing surfaces.
+Treat the public repository and every publication path as public-safe surfaces.
 Context:
-deepreview is intended to become open source, and it generates delivery text that may leave the local machine.
+deepreview is open source, and it generates commits and delivery text that leave the local machine.
 Rationale:
-Applying public-ready hygiene early reduces later cleanup risk and keeps runtime behavior aligned with eventual publication.
+Scanning tracked content, outgoing history, and public metadata reduces disclosure risk and keeps runtime behavior aligned with the repository's actual exposure.
 Trade-offs:
 Privacy and secret checks can reject content that would be acceptable in a purely local tool.
 Enforcement:
@@ -76,7 +76,7 @@ Fresh worktrees and fresh stage contexts keep each round isolated while still le
 Trade-offs:
 Prompt retries and stage boundaries need explicit artifact preservation rules.
 Enforcement:
-The orchestrator resets mutable retries to a clean baseline and only preserves outputs from successfully completed earlier prompts.
+The orchestrator recreates detached retry worktrees from a clean baseline and only preserves outputs from successfully completed earlier prompts.
 References:
 `docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/orchestrator_test.go`
 
@@ -198,15 +198,15 @@ References:
 `docs/spec.md`, `docs/architecture.md`, `prompts/delivery/01-deliver.md`, `internal/deepreview/orchestrator.go`
 
 Decision:
-If the reviewed candidate branch is not publishable, use one bounded candidate-branch recovery cycle before final delivery.
+Fail publication when the reviewed candidate branch or any outgoing commit is not publishable.
 Context:
-Some delivery blockers are real publishability issues that still belong on the candidate branch.
+Current tracked content can be safe while an earlier outgoing commit still contains sensitive material or blocked operational artifacts.
 Rationale:
-Routing repair through the normal reviewed branch keeps trust intact while still allowing one bounded autonomous recovery path.
+Forward-only failure preserves the exact reviewed lineage and avoids hiding unsafe history through rebases, resets, squashes, amendments, or branch rebuilds.
 Trade-offs:
-Recovery adds one repair round and one confirmation round, but avoids delivery-time branch divergence.
+An unsafe intermediate commit requires a new clean run from the source branch instead of autonomous history repair.
 Enforcement:
-The orchestrator runs at most one bounded delivery-recovery cycle and then re-validates publishability against the candidate branch.
+The orchestrator scans every outgoing commit, fails before push on any blocker, and never rewrites candidate history.
 References:
 `docs/spec.md`, `docs/architecture.md`, `internal/deepreview/orchestrator.go`, `internal/deepreview/integration_test.go`
 

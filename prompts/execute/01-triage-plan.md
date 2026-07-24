@@ -15,8 +15,6 @@ This is prompt 1 of 2. Stay in this same Codex chat context for prompt 2.
 - Triage output path: `{{ROUND_TRIAGE_PATH}}`
 - Plan output path: `{{ROUND_PLAN_PATH}}`
 
-{{ROUND_MODE_NOTE}}
-
 ## Mandatory setup
 1. Inspect the locally available Codex skills and use any relevant ones if they exist.
 2. Work deeply, proactively, and autonomously; do not wait for follow-up prompts.

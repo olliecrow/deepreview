@@ -7,7 +7,7 @@ It runs parallel Codex reviews, validates and executes material fixes, and revie
 
 ## Current status
 
-This project is actively maintained and intended for real repository review loops.
+This is a public, actively maintained project intended for real repository review loops.
 
 ## What this project is trying to achieve
 
@@ -23,8 +23,8 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 6. Each completed run also writes a canonical run-health summary under `~/deepreview/runs/<run-id>/run-health.{md,json}` so operators can inspect artifact coverage and stderr noise without replaying raw logs.
 7. If execute says `continue`, or if execute changed the repository, deepreview runs another review round.
 8. If execute says `stop` and made no repository changes, the review loop ends without a redundant confirmation round.
-9. In `pr` mode (default), it runs one fresh Codex delivery stage to confirm merge-ready local state without mutating tracked repository content. If publication is blocked by tracked content or branch history, deepreview routes that blocker back through one bounded recovery cycle on the candidate branch, then deepreview pushes and opens one pull request back into your source branch.
-10. If the run made tangible repository changes but did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
+9. In `pr` mode (default), it runs one fresh Codex delivery stage to confirm merge-ready local state without mutating tracked repository content or history. deepreview then validates every outgoing commit and either opens one pull request back into your source branch or fails before publication.
+10. If completed execute rounds made validated repository changes but the run did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
 11. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 12. In yolo mode, it pushes directly to your source branch.
 13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
@@ -63,6 +63,8 @@ Optional launcher:
 - yolo mode is available, and it is off by default.
 - Internal `.deepreview/*` artifacts are blocked from delivery commits and pull requests.
 - Public delivery surfaces are privacy-guarded (PR title/body and delivery summaries are redacted/guarded before final delivery is accepted).
+- Every outgoing commit is checked before publication, including sensitive content or operational artifacts added and removed in later commits.
+- Candidate history is forward-only. deepreview does not rebase, reset, squash, amend, rebuild, or force-push it; an unsafe outgoing commit blocks delivery.
 - Local terminal output is intentionally unredacted so operators can see literal paths and command errors while running deepreview.
 - You can cancel at any time with `Ctrl+C`; deepreview prints an interrupt failure summary, cleans up locks/worktrees, and then exits.
 

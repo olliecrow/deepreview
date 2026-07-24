@@ -15,7 +15,7 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - Require execute prompt 1 to confirm proposed changes item by item before accepting implementation work.
 - Keep execution no-regret and high-conviction: defer low-confidence items and reject low-value churn.
 - Require end-to-end plan and execute behavior, including local verification and docs/decision upkeep.
-- In PR mode, let one fresh delivery prompt own final local merge-readiness and branch preparation, while deepreview owns publication, PR creation, and bounded post-create mergeability checks.
+- In PR mode, let one fresh delivery prompt assess final local merge-readiness without changing tracked content or history, while deepreview owns validation, publication, PR creation, and bounded post-create mergeability checks.
 - Prefer Codex reading on-disk review artifacts directly instead of receiving large injected summary blocks.
 
 ## Layout
@@ -30,4 +30,3 @@ This directory contains file-based, unversioned prompt templates for deepreview.
 - If any template variable is unresolved at render time, fail fast.
 - Execute prompts run sequentially in the same Codex chat context for that execute worktree on the normal path; inactivity retries restart fresh and rely on the written round artifacts.
 - Execute prompt 1 receives review artifact paths plus a compact manifest.
-- Legacy empty prompt directories (`fanout`, `synthesis`) are intentionally removed.
