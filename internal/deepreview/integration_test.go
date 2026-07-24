@@ -353,7 +353,16 @@ func cloneUserRepoWithGitHubOrigin(t *testing.T, td, remote, userClone string) s
 }
 
 func baseEnv(root, workspace, codexBin, ghBin string) []string {
-	env := append([]string{}, os.Environ()...)
+	env := make([]string, 0, len(os.Environ())+16)
+	for _, entry := range os.Environ() {
+		if entry == "GIT_CONFIG_COUNT" ||
+			strings.HasPrefix(entry, "GIT_CONFIG_COUNT=") ||
+			strings.HasPrefix(entry, "GIT_CONFIG_KEY_") ||
+			strings.HasPrefix(entry, "GIT_CONFIG_VALUE_") {
+			continue
+		}
+		env = append(env, entry)
+	}
 	pathPrefix := filepath.Dir(codexBin)
 	currentPath := os.Getenv("PATH")
 	if currentPath != "" {
@@ -369,6 +378,11 @@ func baseEnv(root, workspace, codexBin, ghBin string) []string {
 		"GIT_AUTHOR_EMAIL=deepreview@example.com",
 		"GIT_COMMITTER_NAME=DeepReview Bot",
 		"GIT_COMMITTER_EMAIL=deepreview@example.com",
+		"GIT_CONFIG_COUNT=2",
+		"GIT_CONFIG_KEY_0=user.name",
+		"GIT_CONFIG_VALUE_0=DeepReview Bot",
+		"GIT_CONFIG_KEY_1=user.email",
+		"GIT_CONFIG_VALUE_1=deepreview@example.com",
 	)
 	return env
 }
