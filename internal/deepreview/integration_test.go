@@ -731,7 +731,7 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	if !strings.Contains(logs, "delivery / merge-ready publish inactive for") {
 		t.Fatalf("expected delivery inactivity restart evidence in logs, got:\n%s", logs)
 	}
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected pr created summary output, got: %s", output)
 	}
 	if !strings.Contains(output, "delivery commits: https://github.com/example-org/example-repo/commits/deepreview/feature/test/") {
@@ -927,7 +927,7 @@ func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testi
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected incomplete draft PR recovery output, got: %s", output)
 	}
 	if !strings.Contains(output, "delivery status: incomplete (gh pr create did not return a pull request URL)") {
@@ -1011,7 +1011,7 @@ func TestEndToEndPRModeSupportsIncompletePromptResult(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected incomplete draft PR summary output, got: %s", output)
 	}
 	if !strings.Contains(output, "delivery status: incomplete (waiting on mergeability signal)") {
@@ -1106,7 +1106,7 @@ func TestEndToEndPRModeFailsBeforePublishingSecretChange(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeFailsWhenCandidateBranchLosesCandidateTip(t *testing.T) {
+func TestEndToEndPRModeRejectsDeliveryMutationAndPublishesReviewedDraft(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1148,10 +1148,10 @@ func TestEndToEndPRModeFailsWhenCandidateBranchLosesCandidateTip(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "delivery prompt must not mutate the candidate branch; route tracked-code fixes back through execute rounds instead") {
+	if !strings.Contains(output, "delivery prompt must not mutate tracked content or history; resolve the blocker before a new run instead") {
 		t.Fatalf("expected delivery mutation failure before publish, got:\n%s", output)
 	}
-	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected incomplete draft PR to preserve reviewed work, got:\n%s", output)
 	}
 	if _, err := os.Stat(ghArgsPath); err != nil {
@@ -1223,7 +1223,7 @@ func TestEndToEndYoloFailsBeforePublishingSecretChange(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeScansPreparedDeliveryBranch(t *testing.T) {
+func TestEndToEndPRModeRejectsSeparatePreparedDeliveryBranch(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -1273,10 +1273,10 @@ func TestEndToEndPRModeScansPreparedDeliveryBranch(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected incomplete draft recovery output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "delivery status: incomplete (delivery prompt must not select a separate publish ref; route tracked-code fixes back through execute rounds instead") {
+	if !strings.Contains(output, "delivery status: incomplete (delivery prompt must not select a separate publish ref; resolve the blocker before a new run instead") {
 		t.Fatalf("expected separate publish-ref failure to be surfaced, got:\n%s", output)
 	}
 	argsBytes, err := os.ReadFile(ghArgsPath)
@@ -1345,7 +1345,6 @@ func TestEndToEndPRModeDoesNotFallbackPublishHistoryBlockedCandidateBranch(t *te
 	env = append(env,
 		"FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE=1",
 		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
-		"FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
 	output := runCmdExpectFailure(t, root, env,
@@ -1435,7 +1434,7 @@ func TestEndToEndPRModeUsesTrustedPublishRangeScript(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected trusted base publish-range policy to allow publish, got:\n%s", output)
 	}
 	if _, err := os.Stat(ghArgsPath); err != nil {
@@ -1522,95 +1521,6 @@ func TestEndToEndPRModeRejectsCandidateDeletingTrustedPushRangePolicy(t *testing
 	}
 }
 
-func TestEndToEndPRModeRecoversHistoryScopedPushRangeBlockerOnCandidateBranch(t *testing.T) {
-	root := repoRoot(t)
-	bin := buildBinary(t, root)
-	fakeCodex, fakeGH := buildFakeBinaries(t, root)
-
-	td := t.TempDir()
-	remote := filepath.Join(td, "remote.git")
-	seed := filepath.Join(td, "seed")
-	userClone := filepath.Join(td, "user")
-	workspace := filepath.Join(td, "workspace")
-	ghArgsPath := filepath.Join(td, "gh-create-args.txt")
-
-	runCmd(t, td, nil, "git", "init", "--bare", remote)
-	runCmd(t, td, nil, "git", "clone", remote, seed)
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(seed, "scripts", "security"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	checkSensitiveText, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-sensitive-text.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-sensitive-text.sh"), checkSensitiveText, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	checkPushRange, err := os.ReadFile(filepath.Join(root, "scripts", "security", "check-push-range.sh"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "scripts", "security", "check-push-range.sh"), checkPushRange, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
-	runCmd(t, td, nil, "git", "-C", seed, "add", "scripts/security/check-sensitive-text.sh", "scripts/security/check-push-range.sh")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
-
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
-	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
-
-	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
-	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
-
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env,
-		"FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE=1",
-		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
-		"FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE=1",
-		"FAKE_CODEX_DELIVERY_REBUILD_FROM_CANDIDATE=1",
-		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
-	)
-	output := runCmd(t, root, env,
-		bin,
-		"review",
-		userClone,
-		"--source-branch", "feature/test",
-		"--concurrency", "1",
-		"--max-rounds", "2",
-		"--mode", "pr",
-		"--no-tui",
-	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
-		t.Fatalf("expected successful pr delivery output, got:\n%s", output)
-	}
-	if strings.Contains(output, "Draft PR created:") {
-		t.Fatalf("did not expect draft PR output after candidate recovery, got:\n%s", output)
-	}
-	if strings.Contains(output, "delivery status: incomplete") {
-		t.Fatalf("did not expect incomplete delivery after candidate recovery, got:\n%s", output)
-	}
-	argsBytes, err := os.ReadFile(ghArgsPath)
-	if err != nil {
-		t.Fatalf("missing gh args capture: %v", err)
-	}
-	if strings.Contains(string(argsBytes), "--draft") {
-		t.Fatalf("did not expect candidate recovery to create a draft PR, got:\n%s", string(argsBytes))
-	}
-}
-
 func TestEndToEndPRModeReportsExistingPRAfterMergeabilityFailure(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
@@ -1658,9 +1568,9 @@ func TestEndToEndPRModeReportsExistingPRAfterMergeabilityFailure(t *testing.T) {
 		"--no-tui",
 	)
 	for _, want := range []string{
-		"pull request is not mergeable yet (CONFLICTING): https://example.com/olliecrow/test/pull/123",
+		"pull request is not mergeable yet (CONFLICTING): https://example.com/example/test/pull/123",
 		"run failed after delivery artifacts were created.",
-		"latest PR: https://example.com/olliecrow/test/pull/123",
+		"latest PR: https://example.com/example/test/pull/123",
 		"latest delivery commits: https://github.com/example-org/example-repo/commits/deepreview/feature/test/",
 	} {
 		if !strings.Contains(output, want) {
@@ -1742,7 +1652,7 @@ func TestEndToEndPRModeWaitsForTransientMergeabilityState(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected successful pr delivery output, got: %s", output)
 	}
 
@@ -1861,92 +1771,6 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 	if before != after {
 		t.Fatalf("source branch should remain unchanged after interrupt")
-	}
-}
-
-func TestEndToEndPRModeAutoSanitizesCandidateBranchDocsWithoutMutatingDefaultBranch(t *testing.T) {
-	root := repoRoot(t)
-	bin := buildBinary(t, root)
-	fakeCodex, fakeGH := buildFakeBinaries(t, root)
-
-	td := t.TempDir()
-	remote := filepath.Join(td, "remote.git")
-	seed := filepath.Join(td, "seed")
-	userClone := filepath.Join(td, "user")
-	workspace := filepath.Join(td, "workspace")
-
-	runCmd(t, td, nil, "git", "init", "--bare", remote)
-	runCmd(t, td, nil, "git", "clone", remote, seed)
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(seed, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "docs", "generated.md"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "docs/generated.md")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
-
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
-	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
-
-	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
-	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
-
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env, "FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE=1")
-	output := runCmd(t, root, env,
-		bin,
-		"review",
-		userClone,
-		"--source-branch", "feature/test",
-		"--concurrency", "1",
-		"--max-rounds", "2",
-		"--mode", "pr",
-		"--no-tui",
-	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
-		t.Fatalf("expected pr delivery output, got: %s", output)
-	}
-
-	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
-	mainDoc := runCmd(t, td, nil, "git", "-C", userClone, "show", "origin/main:docs/generated.md")
-	if strings.Contains(mainDoc, "/Users/") {
-		t.Fatalf("default branch doc must not be mutated by delivery-stage sanitization: %s", mainDoc)
-	}
-	if strings.TrimSpace(mainDoc) != "base" {
-		t.Fatalf("expected default branch doc to remain unchanged, got: %q", mainDoc)
-	}
-
-	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
-	var deliveryRef string
-	for _, ref := range strings.Split(strings.TrimSpace(refsOut), "\n") {
-		ref = strings.TrimSpace(ref)
-		if strings.Contains(ref, "origin/deepreview/feature/test/") {
-			deliveryRef = ref
-			break
-		}
-	}
-	if deliveryRef == "" {
-		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
-	}
-	deliveredDoc := runCmd(t, td, nil, "git", "-C", userClone, "show", deliveryRef+":docs/generated.md")
-	if strings.Contains(deliveredDoc, "/Users/") {
-		t.Fatalf("expected candidate doc to be sanitized before delivery, got: %s", deliveredDoc)
-	}
-	if !strings.Contains(deliveredDoc, "/path/to/project") {
-		t.Fatalf("expected candidate doc to contain sanitized placeholder, got: %s", deliveredDoc)
 	}
 }
 
@@ -2259,7 +2083,7 @@ func TestEndToEndPRModeAllowsNewTrackedFilesUnderRepoOwnedOperationalPath(t *tes
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected pr delivery output, got: %s", output)
 	}
 
@@ -2333,7 +2157,7 @@ func TestEndToEndPRModeReservesDeepreviewTmpArtifactsInsideRepoOwnedTmp(t *testi
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected PR delivery output, got: %s", output)
 	}
 
@@ -2477,7 +2301,7 @@ func TestEndToEndPRModeFailsWhenNoChangesButCodexStillRequestsAnotherRound(t *te
 	}
 }
 
-func TestEndToEndPRModeResetsExecuteWorktreeBeforeRetryAfterStall(t *testing.T) {
+func TestEndToEndPRModeRecreatesExecuteWorktreeBeforeRetryAfterStall(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -2523,7 +2347,7 @@ func TestEndToEndPRModeResetsExecuteWorktreeBeforeRetryAfterStall(t *testing.T) 
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected PR delivery output, got: %s", output)
 	}
 	if !strings.Contains(logs, "execute / implement, verify, finalize inactive for") {
@@ -2776,75 +2600,6 @@ func TestEndToEndPRModeCompletesAfterOneCleanStopDecision(t *testing.T) {
 	}
 }
 
-func TestEndToEndPRModeDeliverySanitizesDocsAndSkipsPRWhenSanitizationRemovesAllChanges(t *testing.T) {
-	root := repoRoot(t)
-	bin := buildBinary(t, root)
-	fakeCodex, fakeGH := buildFakeBinaries(t, root)
-
-	td := t.TempDir()
-	remote := filepath.Join(td, "remote.git")
-	seed := filepath.Join(td, "seed")
-	userClone := filepath.Join(td, "user")
-	workspace := filepath.Join(td, "workspace")
-
-	runCmd(t, td, nil, "git", "init", "--bare", remote)
-	runCmd(t, td, nil, "git", "clone", remote, seed)
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
-	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
-	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
-	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(seed, "docs"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(seed, "docs", "generated.md"), []byte("path /path/to/project\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md", "docs/generated.md")
-	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
-	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
-
-	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
-	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
-
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
-	env = append(env, "FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE=1")
-	output := runCmd(t, root, env,
-		bin,
-		"review",
-		userClone,
-		"--source-branch", "main",
-		"--concurrency", "1",
-		"--max-rounds", "2",
-		"--mode", "pr",
-		"--no-tui",
-	)
-	if !strings.Contains(output, "delivery skipped: delivery recovery removed all deliverable repository changes") {
-		t.Fatalf("expected delivery skip after candidate recovery removed all changes, got: %s", output)
-	}
-
-	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(runsGlob) != 1 {
-		t.Fatalf("expected 1 run dir, got %d", len(runsGlob))
-	}
-	runDir := runsGlob[0]
-	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
-	if err != nil {
-		t.Fatalf("expected final-summary.md after skipped delivery: %v", err)
-	}
-	finalSummary := string(finalSummaryBytes)
-	if !strings.Contains(finalSummary, "- delivery: `skipped`") {
-		t.Fatalf("expected skipped delivery in final summary, got:\n%s", finalSummary)
-	}
-	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); !os.IsNotExist(err) {
-		t.Fatalf("did not expect pr-body.md when delivery is skipped, err=%v", err)
-	}
-}
-
 func TestRunReviewsChangedRoundThenStopsOnCleanRound(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
@@ -2983,7 +2738,7 @@ func TestEndToEndPRModeDiscardsStaleDeliveryCommitBeforeRetry(t *testing.T) {
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected PR delivery output, got: %s", output)
 	}
 	if !strings.Contains(logs, "delivery / merge-ready publish inactive for") {
@@ -3063,7 +2818,7 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
+	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
 		t.Fatalf("expected incomplete draft PR summary output, got: %s", output)
 	}
 	if !strings.Contains(output, "delivery status: incomplete") {
@@ -3132,7 +2887,7 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 	}
 }
 
-func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing.T) {
+func TestRunPRModeDoesNotPublishInvalidExecuteRound(t *testing.T) {
 	root := repoRoot(t)
 	bin := buildBinary(t, root)
 	fakeCodex, fakeGH := buildFakeBinaries(t, root)
@@ -3170,7 +2925,7 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 		"FAKE_CODEX_DECISION=continue",
 		"FAKE_CODEX_WRITE_INVALID_ROUND_STATUS=1",
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectFailure(t, root, env,
 		bin,
 		"review",
 		userClone,
@@ -3180,8 +2935,8 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 		"--mode", "pr",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "Draft PR created: https://example.com/olliecrow/test/pull/123") {
-		t.Fatalf("expected incomplete draft PR summary output, got: %s", output)
+	if !strings.Contains(output, "round status must be a JSON object") {
+		t.Fatalf("expected invalid round status failure, got: %s", output)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -3199,31 +2954,15 @@ func TestRunPRModeIncompleteDraftIgnoresRoundStatusWithoutRoundRecord(t *testing
 		t.Fatalf("missing round-status.json: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(runDir, "round-01", "round.json")); !os.IsNotExist(err) {
-		t.Fatalf("did not expect round.json for failed round recovery path, got err=%v", err)
+		t.Fatalf("did not expect round.json for failed round, got err=%v", err)
 	}
-
-	bodyBytes, err := os.ReadFile(filepath.Join(runDir, "pr-body.md"))
-	if err != nil {
-		t.Fatalf("missing pr-body.md: %v", err)
+	if _, err := os.Stat(filepath.Join(runDir, "pr-body.md")); !os.IsNotExist(err) {
+		t.Fatalf("did not expect PR body for invalid execute round, got err=%v", err)
 	}
-	body := string(bodyBytes)
-	if !strings.Contains(body, "- rounds completed: `0`") {
-		t.Fatalf("expected incomplete body to report zero authoritative rounds, got:\n%s", body)
-	}
-	if strings.Contains(body, "latest decision: `continue`") {
-		t.Fatalf("did not expect latest decision from missing round record, got:\n%s", body)
-	}
-
-	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
-	if err != nil {
-		t.Fatalf("missing final-summary.md: %v", err)
-	}
-	finalSummary := string(finalSummaryBytes)
-	if !strings.Contains(finalSummary, "- rounds: `0`") {
-		t.Fatalf("expected final summary to report zero authoritative rounds, got:\n%s", finalSummary)
-	}
-	if strings.Contains(finalSummary, "round-01/round-status.json") {
-		t.Fatalf("did not expect round decision entry from missing round record, got:\n%s", finalSummary)
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
+	if strings.TrimSpace(refsOut) != "" {
+		t.Fatalf("did not expect delivery ref for invalid execute round, got: %s", refsOut)
 	}
 }
 

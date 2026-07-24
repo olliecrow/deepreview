@@ -2,10 +2,12 @@ package deepreview
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 	"unicode/utf8"
@@ -871,6 +873,69 @@ func TestAcquireRunLockReplacesStaleLock(t *testing.T) {
 	}
 }
 
+func TestAcquireRunLockAllowsOnlyOneConcurrentStaleLockReclaimer(t *testing.T) {
+	td := t.TempDir()
+	const contenders = 16
+	orchestrators := make([]Orchestrator, contenders)
+	for i := range orchestrators {
+		orchestrators[i] = Orchestrator{
+			workspaceRoot: td,
+			repoIdentity:  RepoIdentity{SourceType: RepoSourceGitHub, Owner: "example", Name: "repo"},
+			config:        ReviewConfig{RunID: fmt.Sprintf("run-%d", i), SourceBranch: "feature/a"},
+		}
+	}
+	lockPath := orchestrators[0].runLockFilePath()
+	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	stale := runLockRecord{
+		RunID:        "old-run",
+		PID:          999999,
+		Repo:         "example/repo",
+		SourceBranch: "feature/a",
+		CreatedAt:    time.Now().Add(-24 * time.Hour).UTC().Format(time.RFC3339),
+	}
+	payload, err := json.Marshal(stale)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(lockPath, payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	start := make(chan struct{})
+	results := make([]error, contenders)
+	var wg sync.WaitGroup
+	for i := range orchestrators {
+		wg.Add(1)
+		go func(index int) {
+			defer wg.Done()
+			<-start
+			results[index] = orchestrators[index].acquireRunLock()
+		}(i)
+	}
+	close(start)
+	wg.Wait()
+
+	winner := -1
+	for i, result := range results {
+		if result == nil {
+			if winner != -1 {
+				t.Fatalf("expected one stale-lock reclaimer, got successful runs %d and %d", winner, i)
+			}
+			winner = i
+			continue
+		}
+		if !strings.Contains(result.Error(), "another deepreview run is active") {
+			t.Fatalf("unexpected contender error: %v", result)
+		}
+	}
+	if winner == -1 {
+		t.Fatal("expected one contender to reclaim the stale lock")
+	}
+	orchestrators[winner].releaseRunLock()
+}
+
 func TestAcquireRunLockAllowsDifferentRepos(t *testing.T) {
 	td := t.TempDir()
 	first := Orchestrator{
@@ -1158,7 +1223,7 @@ func TestBuildIncompletePRBodyMentionsIncompleteStatus(t *testing.T) {
 	}
 
 	o := &Orchestrator{config: ReviewConfig{RunID: "run-1"}}
-	body := o.buildIncompletePRBody([]string{filepath.Join(roundDir, "round-summary.md")}, []string{"internal/foo.go"}, "delivery recovery confirmation round found more work")
+	body := o.buildIncompletePRBody([]string{filepath.Join(roundDir, "round-summary.md")}, []string{"internal/foo.go"}, "final delivery assessment found more work")
 	if !strings.Contains(body, "[INCOMPLETE]") {
 		t.Fatalf("expected incomplete marker in body, got:\n%s", body)
 	}
@@ -1483,47 +1548,5 @@ func TestEvaluateRoundLoopControlCleanStopTerminates(t *testing.T) {
 	}
 	if !strings.Contains(control.message, "no repository changes") {
 		t.Fatalf("expected clean-stop message, got %q", control.message)
-	}
-}
-
-func TestAutoCommitWorktreeChangesIfNeededCommitsDirtyWorktree(t *testing.T) {
-	td := t.TempDir()
-	repoPath := filepath.Join(td, "repo")
-	if err := os.MkdirAll(repoPath, 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	runGitTest(t, td, "init", "-b", "main", repoPath)
-	runGitTest(t, td, "-C", repoPath, "config", "user.name", "deepreview-test")
-	runGitTest(t, td, "-C", repoPath, "config", "user.email", testPlaceholderEmail("deepreview-test"))
-	if err := os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("base\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	runGitTest(t, td, "-C", repoPath, "add", "tracked.txt")
-	runGitTest(t, td, "-C", repoPath, "commit", "-m", "seed")
-	if err := os.WriteFile(filepath.Join(repoPath, "tracked.txt"), []byte("updated\n"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	o := &Orchestrator{
-		config: ReviewConfig{GitBin: "git"},
-		commitIdentity: CommitIdentity{
-			Name:  "deepreview-test",
-			Email: testPlaceholderEmail("deepreview-test"),
-		},
-	}
-	if err := o.autoCommitWorktreeChangesIfNeeded(repoPath, "deepreview: auto commit"); err != nil {
-		t.Fatalf("expected dirty worktree to auto-commit, got: %v", err)
-	}
-	dirty, err := HasUncommittedChanges(repoPath, "git")
-	if err != nil {
-		t.Fatalf("status check failed: %v", err)
-	}
-	if dirty {
-		t.Fatal("expected clean worktree after auto-commit")
-	}
-	log := runGitTest(t, td, "-C", repoPath, "log", "--format=%s", "-1")
-	if log != "deepreview: auto commit" {
-		t.Fatalf("unexpected commit message: %s", log)
 	}
 }

@@ -131,6 +131,46 @@ func TestRefContainsCommit(t *testing.T) {
 	}
 }
 
+func TestFastForwardBranchRejectsNonDescendantHistory(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+
+	runGitCommand(t, td, "init", "-b", "main", repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("base\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "base")
+	base := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
+	if err := CreateBranchAtRef(repo, "git", "candidate", base); err != nil {
+		t.Fatalf("create candidate branch: %v", err)
+	}
+
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("forward\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "commit", "-am", "forward")
+	forward := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
+	if err := FastForwardBranch(repo, "git", "candidate", forward); err != nil {
+		t.Fatalf("fast-forward candidate: %v", err)
+	}
+
+	runGitCommand(t, td, "-C", repo, "checkout", "-b", "diverged", base)
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("diverged\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "commit", "-am", "diverged")
+	diverged := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
+	if err := FastForwardBranch(repo, "git", "candidate", diverged); err == nil {
+		t.Fatal("expected non-descendant candidate update to fail")
+	}
+	if got := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "candidate")); got != forward {
+		t.Fatalf("candidate moved after rejected update: got %s want %s", got, forward)
+	}
+}
+
 func TestRefsHaveSameTree(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")

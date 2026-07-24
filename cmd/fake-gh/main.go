@@ -100,7 +100,7 @@ func main() {
 			fmt.Println(custom)
 			return
 		}
-		fmt.Println("https://example.com/olliecrow/test/pull/123")
+		fmt.Println("https://example.com/example/test/pull/123")
 		return
 	}
 	if len(args) >= 2 && args[0] == "pr" && args[1] == "edit" {
@@ -132,7 +132,7 @@ func main() {
 		mergeable := sequenceValue("FAKE_GH_PR_VIEW_MERGEABLE_SEQUENCE", "FAKE_GH_PR_VIEW_MERGEABLE", index, "MERGEABLE")
 		mergeStateStatus := sequenceValue("FAKE_GH_PR_VIEW_MERGE_STATE_STATUS_SEQUENCE", "FAKE_GH_PR_VIEW_MERGE_STATE_STATUS", index, "CLEAN")
 		isDraft := sequenceBoolValue("FAKE_GH_PR_VIEW_IS_DRAFT_SEQUENCE", "FAKE_GH_PR_VIEW_IS_DRAFT", index)
-		fmt.Printf(`{"url":"https://example.com/olliecrow/test/pull/123","state":%q,"isDraft":%t,"mergeable":%q,"mergeStateStatus":%q}`, state, isDraft, mergeable, mergeStateStatus)
+		fmt.Printf(`{"url":"https://example.com/example/test/pull/123","state":%q,"isDraft":%t,"mergeable":%q,"mergeStateStatus":%q}`, state, isDraft, mergeable, mergeStateStatus)
 		return
 	}
 	os.Exit(1)

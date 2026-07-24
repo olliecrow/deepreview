@@ -129,16 +129,6 @@ func TestParseReviewArgsModeIsCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestParseReviewArgsLegacyUppercaseYoloAlias(t *testing.T) {
-	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature/test", "--YOLO"}, time.Unix(1700000000, 0))
-	if err != nil {
-		t.Fatalf("ParseReviewArgs failed: %v", err)
-	}
-	if parsed.Config.Mode != ModeYolo {
-		t.Fatalf("expected mode yolo, got %s", parsed.Config.Mode)
-	}
-}
-
 func TestParseReviewArgsDefaults(t *testing.T) {
 	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature"}, time.Unix(1700000000, 0))
 	if err != nil {

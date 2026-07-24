@@ -9,14 +9,14 @@ This document defines the canonical runtime and product contract for `deepreview
 - **default branch**: repository default branch (for example `main` or `master`).
 - **independent review**: one independent Codex review run in one isolated worktree.
 - **execute stage**: the per-round Codex stage that triages review findings, applies selected changes, verifies them, and records round artifacts in a fresh execute worktree.
-- **delivery stage**: the final Codex stage that prepares local branch state for publication in a fresh delivery context before deepreview performs remote delivery actions.
+- **delivery stage**: the final read-only Codex assessment of local merge readiness before deepreview performs remote delivery actions.
 - **round**: one independent review stage plus one execute stage, ending in local commit/no-push unless it is final delivery.
 - **material improvement**: a high-confidence change that clearly improves correctness, security, maintainability, simplicity, documentation accuracy, or delivery readiness in a meaningful way.
 
 ## Required invariants
 - deepreview documentation and code must not reference external inspiration project names; patterns may be reused without cross-project coupling in artifacts.
 - project/tool naming is always `deepreview` (lowercase, one word).
-- repository posture is open-source-ready even while private.
+- this repository is public, and tracked content, outgoing history, automation, and delivery surfaces must remain publication-safe.
 - no secrets, confidential data, or personal information may be committed.
 - supported host operating systems are macOS and Linux only; Windows compatibility is out of scope and should be removed rather than maintained.
 - deepreview operates only in managed workspace paths under `~/deepreview`.
@@ -41,7 +41,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - independent-review reports must stay focused on high-confidence, material issues or opportunities. Accepted change types may include bug fixes, security/safety fixes, substantial simplifications, high-value refactors, meaningful cleanup, and documentation alignment. Low-value polish, speculative hardening, and style churn are out of scope.
 - independent-review and execute/delivery Codex workers are monitored for activity signals (stdout/stderr output plus filesystem/git-change evidence).
 - if a worker is inactive for the configured timeout, deepreview cancels and restarts that worker up to the configured restart cap.
-- before retrying a mutable git worktree after inactivity (execute prompt retries and mutable delivery worktrees), deepreview resets that worktree to the immutable last clean candidate-branch SHA captured before the attempt and clears staged/untracked leftovers so abandoned attempt state cannot leak forward.
+- before retrying a prompt after inactivity, deepreview discards the detached attempt worktree and recreates it from the immutable baseline SHA; abandoned attempt commits never move the candidate branch.
 - each execute stage runs in a fresh worktree and one fresh Codex context.
 - each delivery stage runs in a fresh worktree and one fresh Codex context.
 - independent-review workers always use fresh contexts isolated from one another.
@@ -54,6 +54,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - execute prompt 1 (triage and plan) treats independent reviews as inputs, not gospel, investigates candidate items individually before acceptance, accepts only independently validated, high-confidence, material items, and produces the round plan for the round.
 - execute stage validates `round-triage.md` and fails the round if any `accept` item is missing explicit impact/confidence tags or is not both `impact: material` and `confidence: high`.
 - execute prompt 2 (implement/verify/finalize) must run end-to-end implementation plus minimum local verification gates (tests, pre-commit checks, locally runnable CI-like checks when available), update relevant docs/decision notes, write complete round artifacts, and ensure changed work is committed locally.
+- execute runs from a detached candidate snapshot; only after its history is proven descendant-only, its worktree is clean, and all required round artifacts validate may deepreview fast-forward the candidate branch.
 - execute retries may preserve only artifacts from earlier successful prompts in the queue: review inputs for all retries, triage/plan only after prompt 1, and never a prior attempt's `round-status.json` or `round-summary.md`. Prompt retries after inactivity restart fresh and must rely on those preserved artifacts instead of prior chat history.
 - Codex prompt workers must write prompt outputs inside their current worktree; deepreview then persists canonical per-round artifacts (`round-summary.md`, `round-status.json`, and related round outputs) under `~/deepreview/runs/<run-id>/round-<round>/`.
 - execute worktrees must install deepreview-managed untracked excludes for local operational directories (for example `.deepreview/`, `.tmp/`, `.codex/`, `.claude/`, common cache dirs) so round-local runtime artifacts do not affect commit/change detection; excludes apply only to paths the source repository does not already track, while `.deepreview/` and `.tmp/deepreview/` remain reserved for deepreview artifacts only, and known nested runtime caches such as `.tmp/go-build-cache/` remain blocked unless the source repository already owns that exact subtree.
@@ -66,6 +67,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - if another round is still required after the configured `--max-rounds` limit, the run fails and should be rerun with a higher `--max-rounds`.
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds.
+- candidate history is forward-only: deepreview must never rebase, reset, squash, amend, rebuild, filter, or force-push candidate history.
 - final delivery pushes are allowed only after round execution completes and no blocking verification failures are reported.
 - PR mode has exactly four terminal outcomes: success with complete PR, success with incomplete draft PR, success with no deliverable repository changes (no push/PR), or failure.
 - default delivery mode is `pr` and must not push source branch directly.
@@ -81,13 +83,14 @@ This document defines the canonical runtime and product contract for `deepreview
 - before and after the delivery prompt, deepreview must validate the reviewed candidate branch itself before any push or PR creation occurs.
 - post-prompt delivery validation must inspect the exact candidate ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
 - post-prompt delivery validation must also enforce repo-native outbound history policies against the candidate publish range when the repository defines them.
-- if candidate publication is blocked by tracked content or branch history, deepreview may run one bounded delivery-recovery cycle that routes the blocker back through the normal candidate-branch execute/review path before retrying delivery.
-- that bounded recovery cycle consists of one focused execute round to repair the publishability blocker followed by one confirmation round to verify the repaired candidate before delivery resumes.
+- final publishability validation must inspect every outgoing commit, including sensitive content and blocked operational artifacts introduced and removed before the current tip.
+- a tracked-content or outgoing-history publication blocker fails delivery before push; deepreview does not rewrite candidate history to repair it.
 - after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.
 - in `pr` mode, if the run exits before normal completion after producing deliverable repository changes, deepreview should publish a draft PR to preserve the candidate branch state only when the candidate still passes final publishability validation; if publishability remains blocked, fail without push or PR creation.
+- incomplete draft publication may preserve only changes from completed execute rounds with valid required artifacts; commits from failed or invalid detached attempts never advance the candidate branch and are not published.
 - incomplete draft PR titles must start with `[INCOMPLETE] ` before the normal `deepreview:` title.
 - incomplete draft PR bodies must explicitly state that the PR is incomplete, why delivery did not finish cleanly, and what remains to be done before merge.
-- incomplete delivery/reporting should distinguish current-tip blockers from PR-range/history-only blockers; when the blocker requires tracked-code edits or history cleanup, deepreview should first attempt one bounded candidate-branch recovery cycle and report incomplete only if that recovery path is still blocked.
+- incomplete delivery/reporting should distinguish current-tip blockers from PR-range/history-only blockers.
 - `yolo` mode is optional opt-in for direct push to source branch.
 - when `yolo` targets the default branch, deepreview runs a push-permission dry-run preflight before round execution.
 - managed repo checkout is replaced with a fresh clone each run to avoid stale state.
@@ -113,7 +116,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - `--concurrency <n>` default `4`
   - `--max-rounds <n>` default `5`
   - `--mode <pr|yolo>` default `pr` (case-insensitive value parsing)
-  - `--yolo` alias for `--mode yolo` (legacy `--YOLO` accepted)
+  - `--yolo` alias for `--mode yolo`
   - full-screen terminal UI is enabled by default when terminal capabilities are valid
   - when TUI is enabled, deepreview exits the UI automatically on completion and prints the text summary immediately
   - before printing the completion summary after a TUI run, deepreview clears the terminal and prints summary text from the top-left cursor position
@@ -137,7 +140,7 @@ Helper command behavior:
   - `status`: valid round-status object
 - A round counts as completed for final reporting only when `round.json` exists and parses successfully.
 - Invalid or missing `round.json` means the round did not complete successfully for reporting purposes.
-- Incomplete-draft recovery and final reporting must derive completed-round counts and latest-decision claims only from valid `round.json` records; if no valid round records exist, report zero completed rounds and omit latest-decision claims.
+- Incomplete-draft publication and final reporting must derive completed-round counts and latest-decision claims only from valid `round.json` records; if no valid round records exist, report zero completed rounds and omit latest-decision claims.
 
 ## Round status artifact contract
 - Canonical status file path: `~/deepreview/runs/<run-id>/round-<round>/round-status.json`
@@ -178,6 +181,7 @@ Cleanup policy:
 - never emit personal information in public delivery surfaces (PR title/body, commit messages, delivery summaries, comments, or committed code/docs).
 - treat committed docs/artifacts as potentially public.
 - in PR mode, delivery/public text and deliverable diffs must pass privacy-hygiene checks before final PR completion.
+- publication scans cover the full outgoing commit range, not only the aggregate current-tip diff.
 - keep local terminal progress/error output literal for operator debugging; privacy redaction is enforced at delivery/public surfaces.
 - fail fast on blocking verification failures.
 
@@ -229,7 +233,7 @@ PR bodies should include these sections in the final generated output:
 - Codex is the primary reasoning engine for review, execute, and delivery decisions.
 - Codex is allowed to inspect git history and recent commits/PR context when useful.
 - Deepreview should avoid over-hardcoding repo-specific heuristics.
-- The orchestrator should stay thin and operational: workspace/worktree management, run locking, stage launching/resume, context reset policy, activity monitoring, artifact validation, and final run classification.
+- The orchestrator should stay thin and operational: workspace/worktree management, run locking, stage launching/resume, context retry policy, activity monitoring, artifact validation, and final run classification.
 - Repo mutation steps beyond that boundary should be Codex-owned whenever practical.
 
 ## Related docs

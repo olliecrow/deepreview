@@ -135,13 +135,6 @@ func requirePathWithinCWD(path, label string) error {
 	return nil
 }
 
-func requirePromptOutputWithinCWD(path, label string) error {
-	if strings.TrimSpace(os.Getenv("FAKE_CODEX_REQUIRE_PROMPT_OUTPUTS_WITHIN_CWD")) == "" || path == "" {
-		return nil
-	}
-	return requirePathWithinCWD(path, label)
-}
-
 func promptWorktreePath(prompt string) string {
 	worktree := regexGet("Worktree path: `([^`]+)`", prompt)
 	if worktree != "" {
@@ -252,29 +245,6 @@ func gitCommitIfPossible(message string) error {
 	return nil
 }
 
-func currentGitBranch() string {
-	out, err := runGit("branch", "--show-current")
-	if err != nil {
-		return ""
-	}
-	return strings.TrimSpace(out)
-}
-
-func gitPushRefspecIfPossible(refspec string) error {
-	if strings.TrimSpace(refspec) == "" {
-		return fmt.Errorf("empty refspec")
-	}
-	_, err := runGit("push", "origin", refspec)
-	return err
-}
-
-func ghBin() string {
-	if candidate := strings.TrimSpace(os.Getenv("DEEPREVIEW_GH_BIN")); candidate != "" {
-		return candidate
-	}
-	return "gh"
-}
-
 func fakeAWSAccessKey() string {
 	return "AKIA" + strings.Repeat("A", 8) + strings.Repeat("B", 8)
 }
@@ -334,7 +304,6 @@ func handlePrompt(prompt string) (string, error) {
 
 	if strings.Contains(prompt, "prompt 2 of 2") || strings.Contains(prompt, "prompt 2 of 3") {
 		roundNumber := roundNumberFromPrompt(prompt)
-		deliveryRecovery := strings.Contains(prompt, "## Delivery Recovery Mode") || strings.Contains(prompt, "This is a delivery-recovery round")
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
 		if verification == "" {
 			verification = filepath.Join(".", ".deepreview", "artifacts", "round-verification.md")
@@ -374,7 +343,7 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
-		auditOnly := strings.Contains(prompt, "automatic final audit round") || strings.Contains(prompt, "delivery recovery confirmation round")
+		auditOnly := strings.Contains(prompt, "automatic final audit round")
 		if auditOnly {
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE")) != "" {
 				if err := writeText(filepath.Join(".", "audit_round_change.txt"), "audit change\n"); err != nil {
@@ -413,46 +382,6 @@ func handlePrompt(prompt string) (string, error) {
 			}
 			if err := writeText(changePath, changeContent); err != nil {
 				return "", err
-			}
-		}
-		if deliveryRecovery && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_SANITIZE_ROUND_FILE")) != "" {
-			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
-				return "", err
-			}
-		}
-		if deliveryRecovery && strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
-			docPath := filepath.Join(".", "docs", "generated.md")
-			content, err := os.ReadFile(docPath)
-			if err == nil {
-				sourcePath := filepath.ToSlash(filepath.Join(string(os.PathSeparator)+"Users", "fake-user", "private", "project"))
-				sanitized := strings.ReplaceAll(string(content), sourcePath, "/path/to/project")
-				if err := writeText(docPath, sanitized); err != nil {
-					return "", err
-				}
-			}
-		}
-		if deliveryRecovery && strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_REBUILD_FROM_CANDIDATE")) != "" {
-			baseRef := regexGet("Publish base ref: `([^`]+)`", prompt)
-			if baseRef == "" {
-				baseRef = regexGet("publishability against `([^`]+)`", prompt)
-			}
-			if baseRef == "" {
-				baseRef = "origin/main"
-			}
-			currentBranch := currentGitBranch()
-			if currentBranch == "" {
-				currentBranch = "HEAD"
-			}
-			if _, err := runGit("reset", "--hard", baseRef); err != nil {
-				return "", err
-			}
-			if err := writeText(filepath.Join(".", "deepreview_test_round.txt"), "round change\n"); err != nil {
-				return "", err
-			}
-			if currentBranch != "HEAD" {
-				if _, err := runGit("checkout", currentBranch); err != nil {
-					return "", err
-				}
 			}
 		}
 		summary := regexGet("Write round summary to `([^`]+)`", prompt)
@@ -522,17 +451,6 @@ func handlePrompt(prompt string) (string, error) {
 		if strings.TrimSpace(os.Getenv("FAKE_CODEX_DELIVERY_WRITE_FILE")) != "" || strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_WRITE_FILE")) != "" {
 			if err := writeText(filepath.Join(".", "delivery-ready.txt"), "delivery\n"); err != nil {
 				return "", err
-			}
-		}
-		if strings.TrimSpace(os.Getenv("FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE")) != "" {
-			docPath := filepath.Join(".", "docs", "generated.md")
-			content, err := os.ReadFile(docPath)
-			if err == nil {
-				sourcePath := filepath.ToSlash(filepath.Join(string(os.PathSeparator)+"Users", "fake-user", "private", "project"))
-				sanitized := strings.ReplaceAll(string(content), sourcePath, "/path/to/project")
-				if err := writeText(docPath, sanitized); err != nil {
-					return "", err
-				}
 			}
 		}
 		if strings.TrimSpace(os.Getenv("FAKE_CODEX_PR_PREP_DELETE_ROUND_FILE")) != "" {

@@ -210,7 +210,7 @@ func TestSecretHygieneScanRejectsPersonalInfoInChangedFiles(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "data.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add data")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for personal info pattern")
 	}
@@ -236,7 +236,7 @@ func TestSecretHygieneScanRejectsSecretPatternInChangedFiles(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add secret pattern")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for secret pattern")
 	}
@@ -256,11 +256,63 @@ func TestSecretHygieneScanRejectsSecretAssignmentInChangedFiles(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add assignment secret")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for secret assignment")
 	}
 	if !strings.Contains(err.Error(), "secret-like pattern") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSecretHygieneScanRejectsSecretRemovedByLaterCommit(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	secretPath := filepath.Join(repoPath, "secret.txt")
+	if err := os.WriteFile(secretPath, []byte(fmt.Sprintf("token = %s\n", testSecretAssignmentValue())), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "temporarily add secret")
+	if err := os.WriteFile(secretPath, []byte("safe\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "remove secret")
+
+	err := o.secretHygieneScan("candidate")
+	if err == nil {
+		t.Fatal("expected privacy scan to inspect every outgoing commit")
+	}
+	if !strings.Contains(err.Error(), "secret-like pattern") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestManagedOperationalArtifactScanRejectsArtifactRemovedByLaterCommit(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	artifactPath := filepath.Join(repoPath, ".tmp", "go-build-cache", "cache.txt")
+	if err := os.MkdirAll(filepath.Dir(artifactPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(artifactPath, []byte("cache\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "-f", ".tmp/go-build-cache/cache.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "temporarily add cache")
+	runGitTest(t, repoParent, "-C", repoPath, "rm", ".tmp/go-build-cache/cache.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "remove cache")
+
+	err := o.validateNoManagedOperationalArtifactChanges("origin/feature/test", "candidate")
+	if err == nil {
+		t.Fatal("expected operational artifact scan to inspect every outgoing commit")
+	}
+	if !strings.Contains(err.Error(), "operational artifacts") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -282,7 +334,7 @@ func TestSecretHygieneScanRejectsSecretPatternInAddedBinaryFile(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add binary secret pattern")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for secret pattern in added binary file")
 	}
@@ -318,7 +370,7 @@ func TestSecretHygieneScanRejectsSecretPatternInModifiedBinaryFile(t *testing.T)
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "modify binary secret pattern")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for secret pattern in modified binary file")
 	}
@@ -354,7 +406,7 @@ func TestSecretHygieneScanIgnoresPreexistingSecretPatternInModifiedBinaryFile(t 
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "append harmless bytes")
 
-	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
+	if err := o.secretHygieneScan("candidate"); err != nil {
 		t.Fatalf("expected preexisting binary secret outside changed bytes to be ignored, got: %v", err)
 	}
 }
@@ -382,7 +434,7 @@ func TestSecretHygieneScanRejectsBoundarySpanningLocalPathInModifiedBinaryFile(t
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "modify binary local path")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for boundary-spanning local path in modified binary file")
 	}
@@ -414,7 +466,7 @@ func TestSecretHygieneScanRejectsBoundarySpanningAKIAPatternInModifiedBinaryFile
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "modify binary boundary-spanning secret")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for boundary-spanning AKIA pattern in modified binary file")
 	}
@@ -434,7 +486,7 @@ func TestSecretHygieneScanAllowsPlaceholderEmailInChangedFiles(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "docs.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "docs")
 
-	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
+	if err := o.secretHygieneScan("candidate"); err != nil {
 		t.Fatalf("expected placeholder email to pass scan, got: %v", err)
 	}
 }
@@ -460,7 +512,7 @@ func TestSecretHygieneScanIgnoresPreexistingSensitiveFixtureOutsideAddedLines(t 
 	runGitTest(t, repoParent, "-C", repoPath, "add", "fixtures.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "edit fixture file")
 
-	if err := o.secretHygieneScan(repoPath, "candidate"); err != nil {
+	if err := o.secretHygieneScan("candidate"); err != nil {
 		t.Fatalf("expected preexisting sensitive fixture outside added lines to be ignored, got: %v", err)
 	}
 }
@@ -486,7 +538,7 @@ func TestSecretHygieneScanRejectsSensitiveLineAddedToExistingFile(t *testing.T) 
 	runGitTest(t, repoParent, "-C", repoPath, "add", "notes.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add sensitive line")
 
-	err := o.secretHygieneScan(repoPath, "candidate")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail for added sensitive line in existing file")
 	}
@@ -506,8 +558,8 @@ func TestSecretHygieneScanFailsClosedWhenAddedLinesReadFails(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "notes.txt")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add notes")
 
-	o.config.GitBin = buildSelectiveGitFailureWrapper(t, "--unified=0 origin/feature/test..candidate -- notes.txt", "forced diff failure")
-	err := o.secretHygieneScan(repoPath, "candidate")
+	o.config.GitBin = buildSelectiveGitFailureWrapper(t, "--unified=0", "forced diff failure")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail closed on added-lines read failure")
 	}
@@ -527,8 +579,8 @@ func TestSecretHygieneScanFailsClosedWhenBinaryContentReadFails(t *testing.T) {
 	runGitTest(t, repoParent, "-C", repoPath, "add", "secret.bin")
 	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add binary file")
 
-	o.config.GitBin = buildSelectiveGitFailureWrapper(t, "show candidate:secret.bin", "forced show failure")
-	err := o.secretHygieneScan(repoPath, "candidate")
+	o.config.GitBin = buildSelectiveGitFailureWrapper(t, ":secret.bin", "forced show failure")
+	err := o.secretHygieneScan("candidate")
 	if err == nil {
 		t.Fatalf("expected privacy scan to fail closed on binary content read failure")
 	}

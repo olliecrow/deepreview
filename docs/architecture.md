@@ -3,7 +3,7 @@
 This document captures the stable architecture of deepreview.
 
 ## Primary objective
-Run deepreview workflows against a remote source branch using isolated worktrees, iterative round-based execution, and one final Codex-owned delivery stage.
+Run deepreview workflows against a remote source branch using isolated worktrees, iterative round-based execution, and one final Codex-assisted delivery stage.
 
 ## CLI command surface
 - `deepreview review` runs the full multi-round orchestration workflow.
@@ -46,12 +46,13 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - pass execute prompt 1 review artifact paths plus a compact manifest; let Codex open full review files directly instead of injecting large review-summary blocks
 - aggressively remove independent-review worktrees; review-stage teardown waits for worker goroutines and active command shutdown before removing worktrees so interrupt cleanup does not leave transient review worktrees behind
 - create fresh execute worktree from current candidate head
+- keep the execute worktree detached until its commits and artifacts validate, then fast-forward the candidate branch to the verified descendant
 - start a fresh Codex context for the execute stage
 - run ordered execute prompt queue in one Codex chat context:
   - prompt 1: triage and plan (reviews are inputs, not gospel; investigate candidate items one by one, accept only high-confidence material items, and produce the round plan)
   - prompt 2: implement, verify, finalize, update docs/decisions, write round artifacts, and create any needed local commit
 - normal execute queue continuity is limited to a healthy prompt chain; if an execute prompt is retried after inactivity, the retry restarts fresh and relies on the preserved round artifacts instead of the stalled thread history
-- when a mutable execute or delivery worktree is retried after inactivity, reset it to the immutable last clean candidate-branch SHA captured before that attempt before rerunning so abandoned edits/commits from the stalled attempt do not survive into later history
+- when an execute or delivery prompt is retried after inactivity, discard its detached attempt worktree and recreate it from the immutable baseline SHA so abandoned edits/commits never move the candidate branch
 - execute retries preserve only artifacts from earlier successful prompts in the same queue; final round status/summary artifacts must be rewritten by the successful prompt-2 attempt
 - execute prompts stage their output files inside reserved worktree-local `.deepreview/artifacts/` paths; after prompt queue completion, the orchestrator validates those staged files, persists canonical copies into the run directory, and then writes the authoritative `round.json` completion record for that round
 - apply the same inactivity watchdog/restart policy to execute and delivery Codex workers
@@ -67,8 +68,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 
 4. Final delivery (single delivery stage):
 - require completed round execution and no blocking execute-stage verification failures
-- validate the current candidate branch for publishability before delivery; if tracked-content or history blockers remain, run one bounded recovery cycle on the candidate branch before retrying delivery
-- that bounded recovery cycle uses one focused execute round to repair the publishability blocker and then one confirmation round to verify the repaired candidate normally before delivery resumes
+- validate the current candidate branch and every outgoing commit for publishability before delivery; tracked-content or history blockers fail before publication
 - create a fresh delivery worktree and a fresh Codex context
 - run one Codex delivery prompt that owns final local merge-readiness assessment:
   - inspect candidate diff/history and prior verification evidence
@@ -77,8 +77,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
   - if a remaining blocker would require tracked-code edits or history cleanup, report it instead of repairing it in delivery
   - report whether local delivery preparation is complete or incomplete
   - write only local-readiness result fields for the orchestrator (mode, incomplete status/reason); `delivery_branch` stays reserved and unset
-- the orchestrator validates the candidate ref, re-runs repo-native outbound-history policy checks against the candidate publish range using a trusted policy source, and only pushes or creates a PR after publishability validation passes; in `pr` mode it publishes a complete PR after complete local preparation or an incomplete draft PR when local preparation is incomplete but the candidate remains publishable, then performs bounded post-create mergeability validation before classifying final success/failure
-- recovery for publishability blockers happens only through the normal candidate-branch execute/review path, so the branch that gets published is still the branch that was reviewed
+- the orchestrator validates the exact candidate ref and every outgoing commit, re-runs repo-native outbound-history policy checks against the candidate publish range using a trusted policy source, and only pushes or creates a PR after publishability validation passes; in `pr` mode it publishes a complete PR after complete local preparation or an incomplete draft PR when local preparation is incomplete but the candidate remains publishable, then performs bounded post-create mergeability validation before classifying final success/failure
 - in `yolo` mode, the orchestrator pushes the candidate/source-branch ref instead of creating a PR, but only when the delivery result is complete; incomplete yolo delivery stays local and reports the blocking reason without pushing
 - the orchestrator still stays out of repo-specific local mutation logic except for worktree lifecycle, prompt launching/resume, artifact validation, remote publication, and terminal classification
 
@@ -94,8 +93,8 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - If an execute prompt in that queue is restarted after inactivity, the retry breaks that continuity and restarts fresh.
 - Delivery starts from a fresh context and never inherits execute chat history.
 - A new round always means a new execute context.
-- Any retry after inactivity on a mutable stage resets both:
-  - the worktree
+- Any retry after inactivity resets both:
+  - the disposable detached worktree
   - the Codex context
 
 ## Exact stage tree
@@ -127,7 +126,7 @@ deepreview
 ├── 4. delivery
 │   ├── create fresh delivery worktree
 │   ├── start fresh delivery context
-│   ├── Codex finalizes local branch state for publication
+│   ├── Codex assesses local merge readiness without mutating tracked state or history
 │   ├── deepreview pushes and creates PR (or yolo push)
 │   ├── deepreview waits briefly for mergeability to settle
 │   ├── validate delivery outcome
@@ -150,6 +149,8 @@ deepreview
 - `pr` mode is the default and must not push source branch directly.
 - `yolo` mode is explicit opt-in.
 - no pushes occur during intermediate rounds.
+- candidate history advances only by forward commits and is never rewritten.
+- publishability checks inspect every outgoing commit, not only the final tree.
 - PR mode performs bounded post-create mergeability validation before it reports terminal delivery success.
 - public delivery surfaces remain privacy-guarded (PR title/body and delivery summaries).
 - local terminal progress/error output is intentionally literal and unredacted for operator debugging.

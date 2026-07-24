@@ -168,17 +168,6 @@ func detectLocalRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
 	return state, nil
 }
 
-func detectGitHubRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
-	state, err := detectLocalRepoState(gitBin, path)
-	if err != nil || state == nil {
-		return state, err
-	}
-	if state.SourceType != RepoSourceGitHub {
-		return nil, nil
-	}
-	return state, nil
-}
-
 func repoLocatorMatchesState(repo string, state *LocalGitHubRepoState) bool {
 	if state == nil {
 		return false
