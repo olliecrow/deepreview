@@ -46,7 +46,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - monitor worker activity (stdout/stderr + filesystem/git-change evidence); cancel and restart inactive workers with bounded retries, keeping a separate Codex log for each attempt
 - collect report artifacts needed for execute prompts by copying worker-written review files from worktree-local paths into the canonical run directory
 - pass execute prompt 1 review artifact paths plus a compact manifest; let Codex open full review files directly instead of injecting large review-summary blocks
-- aggressively remove independent-review worktrees; review-stage teardown waits for worker goroutines and active command shutdown before removing worktrees so interrupt cleanup does not leave transient review worktrees behind
+- aggressively remove independent-review worktrees; review-stage teardown waits for worker goroutines and active command shutdown, then removes only owned linked worktrees inside a 15-second cleanup context so interrupt cleanup does not leave transient review worktrees behind
 - create fresh execute worktree from current candidate head
 - keep the execute worktree detached until its commits and artifacts validate, then fast-forward the candidate branch to the verified descendant
 - start a fresh Codex context for the execute stage
@@ -87,7 +87,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 5. Finalization:
 - if TUI mode was active, exit TUI immediately on completion and clear terminal screen before summary output
 - emit final summary and run-health artifacts; successful terminal states backfill the root `final-summary.md` if an earlier path failed to write it
-- on interrupt, emit the same failure-summary surface used for other self-serve failures, then scrub lingering transient run-root worktrees before reporting cleanup complete
+- on interrupt, emit the same failure-summary surface used for other self-serve failures, then scrub owned run-root worktrees and report cleanup complete only when those paths and their Git registrations are gone
 - ensure no stale transient worktrees/artifacts remain
 
 ## Fresh-context model

@@ -577,9 +577,7 @@ func runReviewCommand(args []string) int {
 	}
 	if err := validateLocalBranchReadyForRemoteReview(parsed.Config.GitBin, parsed.Config.Repo, parsed.Config.SourceBranch); err != nil {
 		if isInterruptError(err) || interruptCount.Load() > 0 {
-			cleanupInterruptedRunArtifacts(filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID))
-			printFailureArtifactSummary(os.Stderr, nil, parsed.Config)
-			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+			reportCanceledRun(nil, parsed.Config, filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID), parsed.Config.GitBin)
 			return 130
 		}
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
@@ -622,9 +620,7 @@ func runReviewCommand(args []string) int {
 	}
 	if err != nil {
 		if isInterruptError(err) || interruptCount.Load() > 0 {
-			cleanupInterruptedRunArtifacts(orchestrator.RunRoot())
-			printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
-			fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+			reportCanceledRun(orchestrator, parsed.Config, orchestrator.RunRoot(), parsed.Config.GitBin)
 			return 130
 		}
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
@@ -634,9 +630,7 @@ func runReviewCommand(args []string) int {
 		return 1
 	}
 	if interruptCount.Load() > 0 {
-		cleanupInterruptedRunArtifacts(orchestrator.RunRoot())
-		printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
-		fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+		reportCanceledRun(orchestrator, parsed.Config, orchestrator.RunRoot(), parsed.Config.GitBin)
 		return 130
 	}
 	if enableTUI {
@@ -1049,36 +1043,107 @@ func shouldPrintFailureArtifactSummary(err error) bool {
 	return err != nil
 }
 
-func cleanupInterruptedRunArtifacts(runRoot string) {
-	if strings.TrimSpace(runRoot) == "" {
+func reportCanceledRun(orchestrator *Orchestrator, config ReviewConfig, runRoot, gitBin string) {
+	cleanupErr := cleanupInterruptedRunArtifacts(runRoot, gitBin)
+	printFailureArtifactSummary(os.Stderr, orchestrator, config)
+	if cleanupErr != nil {
+		fmt.Fprintf(os.Stderr, "deepreview: cleanup incomplete: %s\n", cleanupErr)
 		return
+	}
+	fmt.Fprintln(os.Stderr, "deepreview: run canceled by user; cleanup completed")
+}
+
+func cleanupInterruptedRunArtifacts(runRoot, gitBin string) error {
+	if strings.TrimSpace(runRoot) == "" {
+		return nil
+	}
+	if strings.TrimSpace(gitBin) == "" {
+		gitBin = "git"
 	}
 	_ = os.MkdirAll(runRoot, 0o755)
 	waitForActiveCommandsToExit(15 * time.Second)
-	deadline := time.Now().Add(15 * time.Second)
+	deadline := time.Now().Add(worktreeCleanupBudget)
+	var lastErr error
 	for {
-		worktrees := make([]string, 0)
-		_ = filepath.WalkDir(runRoot, func(path string, d os.DirEntry, err error) error {
-			if err != nil {
-				return nil
+		var cleanupErr error
+		for _, path := range worktreeDirsUnder(runRoot) {
+			repoPath, ownedErr := discoverWorktreeRepository(path)
+			if ownedErr != nil {
+				if _, err := removeEmptyWorktreeDir(runRoot, path); err != nil {
+					cleanupErr = errors.Join(cleanupErr, err)
+				}
+				continue
 			}
-			if d.IsDir() && filepath.Base(path) == "worktree" {
-				worktrees = append(worktrees, path)
-				return filepath.SkipDir
+			if err := RemoveWorktree(repoPath, gitBin, path); err != nil {
+				cleanupErr = errors.Join(cleanupErr, err)
 			}
-			return nil
-		})
-		if len(worktrees) == 0 {
-			return
 		}
-		for _, worktree := range worktrees {
-			_ = os.RemoveAll(worktree)
+		remaining := ownedWorktreeDirsUnder(runRoot)
+		if cleanupErr == nil && len(remaining) == 0 {
+			return nil
+		}
+		if cleanupErr != nil {
+			lastErr = cleanupErr
+		} else {
+			lastErr = NewDeepReviewError("worktree cleanup left residual paths: %s", strings.Join(remaining, ", "))
 		}
 		if time.Now().After(deadline) {
-			return
+			return lastErr
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+}
+
+func worktreeDirsUnder(root string) []string {
+	paths := make([]string, 0)
+	_ = filepath.WalkDir(root, func(path string, entry os.DirEntry, err error) error {
+		if err != nil || path == root {
+			return nil
+		}
+		if entry.IsDir() && filepath.Base(path) == "worktree" {
+			paths = append(paths, path)
+			return filepath.SkipDir
+		}
+		return nil
+	})
+	return paths
+}
+
+func ownedWorktreeDirsUnder(root string) []string {
+	remaining := make([]string, 0)
+	for _, path := range worktreeDirsUnder(root) {
+		if _, err := discoverWorktreeRepository(path); err == nil {
+			remaining = append(remaining, path)
+		}
+	}
+	return remaining
+}
+
+func removeEmptyWorktreeDir(runRoot, path string) (bool, error) {
+	if !pathIsWithinDir(runRoot, path) {
+		return false, NewDeepReviewError("refusing to clean a worktree outside the run root: %s", path)
+	}
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return true, nil
+		}
+		return false, err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return false, nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return false, err
+	}
+	if len(entries) != 0 {
+		return false, nil
+	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return false, err
+	}
+	return true, nil
 }
 
 func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, config ReviewConfig) {

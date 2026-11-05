@@ -1,11 +1,13 @@
 package deepreview
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestFilesystemSafeKeyIsStableDistinctAndPathSafe(t *testing.T) {
@@ -572,5 +574,174 @@ func TestConfigureManagedGitIdentityEnablesPlainGitCommitWithoutSigner(t *testin
 	authorEmail := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "log", "-1", "--format=%ae"))
 	if authorEmail != "loopy-test@example.com" {
 		t.Fatalf("expected author email loopy-test@example.com, got %q", authorEmail)
+	}
+}
+
+func initCommittedRepo(t *testing.T, repo string) {
+	t.Helper()
+	if err := os.MkdirAll(repo, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, repo, "init", "-b", "main")
+	runGitCommand(t, repo, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, repo, "-C", repo, "config", "user.name", "Test User")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, repo, "-C", repo, "add", "README.md")
+	runGitCommand(t, repo, "-C", repo, "commit", "-m", "seed")
+}
+
+func TestRemoveWorktreePrunesMissingDirectory(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	worktree := filepath.Join(td, "worktree")
+	initCommittedRepo(t, repo)
+	if err := AddDetachedWorktree(repo, "git", worktree, "HEAD"); err != nil {
+		t.Fatalf("AddDetachedWorktree failed: %v", err)
+	}
+	if err := os.RemoveAll(worktree); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveWorktree(repo, "git", worktree); err != nil {
+		t.Fatalf("RemoveWorktree failed: %v", err)
+	}
+	list := runGitCommand(t, td, "-C", repo, "worktree", "list", "--porcelain")
+	if strings.Contains(list, worktree) {
+		t.Fatalf("stale worktree registration remained:\n%s", list)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "README.md")); err != nil {
+		t.Fatalf("repository checkout was damaged: %v", err)
+	}
+}
+
+func TestRemoveWorktreeDeletesReadOnlyOwnedFiles(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	worktree := filepath.Join(td, "worktree")
+	sibling := filepath.Join(td, "keep.txt")
+	initCommittedRepo(t, repo)
+	if err := AddDetachedWorktree(repo, "git", worktree, "HEAD"); err != nil {
+		t.Fatalf("AddDetachedWorktree failed: %v", err)
+	}
+	cacheDir := filepath.Join(worktree, "cache")
+	if err := os.MkdirAll(cacheDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(cacheDir, "locked"), []byte("locked\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(cacheDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sibling, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveWorktree(repo, "git", worktree); err != nil {
+		t.Fatalf("RemoveWorktree failed: %v", err)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Fatalf("expected worktree removal, err=%v", err)
+	}
+	if _, err := os.Stat(sibling); err != nil {
+		t.Fatalf("sibling file was removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "README.md")); err != nil {
+		t.Fatalf("repository checkout was damaged: %v", err)
+	}
+}
+
+func TestRemoveWorktreeRejectsUnownedPath(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	unowned := filepath.Join(td, "notes")
+	initCommittedRepo(t, repo)
+	if err := os.MkdirAll(unowned, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(unowned, "keep.txt")
+	if err := os.WriteFile(marker, []byte("keep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := RemoveWorktree(repo, "git", unowned)
+	var notOwned *worktreeNotOwnedError
+	if !errors.As(err, &notOwned) {
+		t.Fatalf("expected ownership refusal, got %v", err)
+	}
+	if _, statErr := os.Stat(marker); statErr != nil {
+		t.Fatalf("unowned path was removed: %v", statErr)
+	}
+}
+
+func TestRemoveWorktreeRejectsRepositoryCheckout(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	initCommittedRepo(t, repo)
+
+	err := RemoveWorktree(repo, "git", repo)
+	var notOwned *worktreeNotOwnedError
+	if !errors.As(err, &notOwned) {
+		t.Fatalf("expected checkout refusal, got %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, "README.md")); statErr != nil {
+		t.Fatalf("repository checkout was damaged: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, ".git")); statErr != nil {
+		t.Fatalf("repository git directory was damaged: %v", statErr)
+	}
+}
+
+func TestRemoveWorktreeBoundsHungGit(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	worktree := filepath.Join(td, "worktree")
+	initCommittedRepo(t, repo)
+	if err := AddDetachedWorktree(repo, "git", worktree, "HEAD"); err != nil {
+		t.Fatalf("AddDetachedWorktree failed: %v", err)
+	}
+	fakeGit := filepath.Join(td, "git")
+	writeShellScript(t, fakeGit, "#!/bin/sh\nexec sleep 60\n")
+
+	started := time.Now()
+	err := RemoveWorktree(repo, fakeGit, worktree)
+	elapsed := time.Since(started)
+	if err == nil {
+		t.Fatal("hung git should not report cleanup success")
+	}
+	if elapsed > worktreeCleanupBudget+commandWaitDelay+4*time.Second {
+		t.Fatalf("cleanup returned in %s", elapsed)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, "README.md")); statErr != nil {
+		t.Fatalf("repository checkout was damaged: %v", statErr)
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, ".git")); statErr != nil {
+		t.Fatalf("repository git directory was damaged: %v", statErr)
+	}
+}
+
+func TestAddDetachedWorktreeFailureLeavesRepositoryIntact(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	worktree := filepath.Join(td, "missing-ref-worktree")
+	initCommittedRepo(t, repo)
+
+	err := AddDetachedWorktree(repo, "git", worktree, "refs/heads/missing-ref")
+	if err == nil {
+		t.Fatal("expected worktree add to fail")
+	}
+	if _, statErr := os.Stat(filepath.Join(repo, "README.md")); statErr != nil {
+		t.Fatalf("repository checkout was damaged: %v", statErr)
+	}
+	info, statErr := os.Stat(worktree)
+	if statErr == nil && info.IsDir() {
+		entries, readErr := os.ReadDir(worktree)
+		if readErr != nil || len(entries) != 0 {
+			t.Fatalf("failed worktree add left content at %s", worktree)
+		}
+	} else if statErr != nil && !os.IsNotExist(statErr) {
+		t.Fatalf("stat failed worktree: %v", statErr)
 	}
 }

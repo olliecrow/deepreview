@@ -1234,7 +1234,7 @@ Self-audit note:
 	}
 }
 
-func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaultBranch string) ([]string, error) {
+func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaultBranch string) (_ []string, err error) {
 	o.reporter.StageStarted("independent review stage", roundPtr(round), "launching independent reviewers in parallel")
 	reviewDir := filepath.Join(roundDir, "review")
 	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
@@ -1286,9 +1286,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		cancelStage()
 		workers.Wait()
 		waitForActiveCommandsToExit(5 * time.Second)
-		for _, worktree := range worktrees {
-			_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktree)
-		}
+		err = errors.Join(err, removeWorktrees(o.managedRepoPath, o.config.GitBin, worktrees))
 	}()
 
 	for workerID := 1; workerID <= o.config.Concurrency; workerID++ {
@@ -1509,7 +1507,7 @@ func (o *Orchestrator) runExecuteStage(
 	roundDir, candidateBranch, candidateHead, defaultBranch string,
 	reviewReports []string,
 	maxRounds int,
-) (RoundStatus, string, error) {
+) (_ RoundStatus, _ string, err error) {
 	o.reporter.StageStarted("execute stage", roundPtr(round), "running execute workflow (triage+plan, implement+verify+finalize)")
 	executeDir := filepath.Join(roundDir, "execute")
 	executeWorktree := filepath.Join(executeDir, "worktree")
@@ -1522,7 +1520,7 @@ func (o *Orchestrator) runExecuteStage(
 		return RoundStatus{}, "", err
 	}
 	defer func() {
-		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, executeWorktree)
+		err = errors.Join(err, RemoveWorktree(o.managedRepoPath, o.config.GitBin, executeWorktree))
 	}()
 	if err := EnsureWorktreeOperationalExcludes(executeWorktree, o.config.GitBin); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
@@ -2471,12 +2469,14 @@ func (o *Orchestrator) deliveryCommitMessageScanBetween(baseRef, headRef string)
 	return nil
 }
 
-func (o *Orchestrator) deliveryPushRangePolicyScanBetween(policyRef, baseRef, headRef string) error {
+func (o *Orchestrator) deliveryPushRangePolicyScanBetween(policyRef, baseRef, headRef string) (err error) {
 	policyWorktree, cleanup, err := o.addTemporaryPolicyWorktree(policyRef)
 	if err != nil {
 		return err
 	}
-	defer cleanup()
+	defer func() {
+		err = errors.Join(err, cleanup())
+	}()
 	scriptPath := filepath.Join(policyWorktree, "scripts", "security", "check-push-range.sh")
 	info, statErr := os.Lstat(scriptPath)
 	if statErr != nil {
@@ -2628,7 +2628,7 @@ func (o *Orchestrator) validatePreparedDeliveryRef(candidateHead, candidateBranc
 	return nil
 }
 
-func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func(), error) {
+func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func() error, error) {
 	worktreeRoot := filepath.Join(o.runRoot, "tmp")
 	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
 		return "", nil, err
@@ -2646,9 +2646,8 @@ func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func(), e
 	// Run repo-native push-range policy from a trusted base ref so the candidate
 	// branch cannot weaken or remove the policy, while PRE_COMMIT_* still points
 	// at the real publish range being evaluated.
-	cleanup := func() {
-		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktreePath)
-		_ = os.RemoveAll(worktreePath)
+	cleanup := func() error {
+		return RemoveWorktree(o.managedRepoPath, o.config.GitBin, worktreePath)
 	}
 	return worktreePath, cleanup, nil
 }
@@ -2792,7 +2791,7 @@ func mergeReadyPRStateIsPending(state pullRequestMergeState) bool {
 	}
 }
 
-func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, summaries, changedFiles []string) (DeliveryResult, error) {
+func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, summaries, changedFiles []string) (_ DeliveryResult, err error) {
 	candidateHead, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 	if err != nil {
 		return DeliveryResult{}, err
@@ -2807,7 +2806,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return DeliveryResult{}, err
 	}
 	defer func() {
-		_ = RemoveWorktree(o.managedRepoPath, o.config.GitBin, deliveryWorktree)
+		err = errors.Join(err, RemoveWorktree(o.managedRepoPath, o.config.GitBin, deliveryWorktree))
 	}()
 	if err := EnsureWorktreeOperationalExcludes(deliveryWorktree, o.config.GitBin); err != nil {
 		return DeliveryResult{}, err

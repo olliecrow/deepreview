@@ -884,20 +884,48 @@ func TestPrintFailureArtifactSummaryWithoutOrchestrator(t *testing.T) {
 	}
 }
 
-func TestCleanupInterruptedRunArtifactsRemovesLingeringWorktrees(t *testing.T) {
-	runRoot := t.TempDir()
-	worktreePath := filepath.Join(runRoot, "round-01", "review", "worker-01", "worktree")
-	if err := os.MkdirAll(worktreePath, 0o755); err != nil {
+func TestCleanupInterruptedRunArtifactsRemovesOwnedWorktreesOnly(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	runRoot := filepath.Join(td, "run")
+	owned := filepath.Join(runRoot, "round-01", "review", "worker-01", "worktree")
+	unowned := filepath.Join(runRoot, "round-01", "notes", "worktree")
+	canonical := filepath.Join(runRoot, "round-01", "round-status.json")
+	initCommittedRepo(t, repo)
+	if err := AddDetachedWorktree(repo, "git", owned, "HEAD"); err != nil {
+		t.Fatalf("AddDetachedWorktree failed: %v", err)
+	}
+	if err := os.MkdirAll(unowned, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(worktreePath, "leftover.txt"), []byte("leftover\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(unowned, "leftover.txt"), []byte("leftover\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(canonical), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(canonical, []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
-	cleanupInterruptedRunArtifacts(runRoot)
-
-	if _, err := os.Stat(worktreePath); !os.IsNotExist(err) {
-		t.Fatalf("expected lingering worktree path to be removed, err=%v", err)
+	if err := cleanupInterruptedRunArtifacts(runRoot, "git"); err != nil {
+		t.Fatalf("cleanup failed: %v", err)
+	}
+	if _, err := os.Stat(owned); !os.IsNotExist(err) {
+		t.Fatalf("expected owned worktree removal, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(unowned, "leftover.txt")); err != nil {
+		t.Fatalf("unowned directory was removed: %v", err)
+	}
+	if _, err := os.Stat(canonical); err != nil {
+		t.Fatalf("canonical artifact was removed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "README.md")); err != nil {
+		t.Fatalf("repository checkout was damaged: %v", err)
+	}
+	list := runGitCommand(t, td, "-C", repo, "worktree", "list", "--porcelain")
+	if strings.Contains(list, owned) {
+		t.Fatalf("owned worktree registration remained:\n%s", list)
 	}
 }
 

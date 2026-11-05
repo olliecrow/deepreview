@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -32,7 +33,19 @@ var worktreeOperationalExcludePatterns = []string{
 const (
 	operationalExcludeBlockStart = "# deepreview operational artifacts: begin"
 	operationalExcludeBlockEnd   = "# deepreview operational artifacts: end"
+	worktreeCleanupBudget        = 15 * time.Second
+	worktreeGitCommandTimeout    = 5 * time.Second
 )
+
+// worktreeNotOwnedError means the path is not a linked worktree of the
+// repository. Cleanup must not delete it and must not retry.
+type worktreeNotOwnedError struct {
+	message string
+}
+
+func (e *worktreeNotOwnedError) Error() string {
+	return e.message
+}
 
 func SanitizeSegment(text string) string {
 	sanitized := sanitizeSegmentRe.ReplaceAllString(text, "-")
@@ -212,73 +225,397 @@ func AddDetachedWorktree(repoPath, gitBin, worktreePath, ref string) error {
 		return err
 	}
 	_, err := RunCommand(managedPreparationArgs(gitBin, "-C", repoPath, "worktree", "add", "--detach", worktreePath, ref), "", "", true, 0)
-	return err
+	if err != nil {
+		return errors.Join(err, removeFailedWorktreeAdd(repoPath, gitBin, worktreePath))
+	}
+	return nil
 }
 
-func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
-	if _, err := os.Stat(worktreePath); err != nil {
+func removeFailedWorktreeAdd(repoPath, gitBin, worktreePath string) error {
+	info, err := os.Lstat(worktreePath)
+	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
-	// Interrupt-driven prompt teardown can lag behind the first cleanup attempt,
-	// so own the full bounded wait here rather than pushing retry loops into
-	// callers.
-	deadline := time.Now().Add(15 * time.Second)
+	if info.Mode()&os.ModeSymlink != 0 {
+		return NewDeepReviewError("refusing to remove symlink left by worktree add: %s", worktreePath)
+	}
+	if ownedErr := assertOwnedLinkedWorktree(repoPath, worktreePath); ownedErr == nil {
+		return RemoveWorktree(repoPath, gitBin, worktreePath)
+	}
+	if !info.IsDir() {
+		return nil
+	}
+	entries, readErr := os.ReadDir(worktreePath)
+	if readErr != nil {
+		return readErr
+	}
+	if len(entries) == 0 {
+		return os.Remove(worktreePath)
+	}
+	return nil
+}
+
+// RemoveWorktree deletes one linked worktree of repoPath.
+// It uses its own 15-second context, not the canceled run context.
+// Each git command stops after 5 seconds. A path is deleted only when its
+// gitdir is inside that repository's .git/worktrees directory and points
+// back at the same path. A missing directory still prunes the registration.
+func RemoveWorktree(repoPath, gitBin, worktreePath string) error {
+	repoPath = filepath.Clean(repoPath)
+	worktreePath = filepath.Clean(worktreePath)
+	if err := refuseUnsafeCleanupPath(repoPath, worktreePath); err != nil {
+		return err
+	}
+	gitDir, err := repositoryGitDirectory(repoPath)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), worktreeCleanupBudget)
+	defer cancel()
+	return removeLinkedWorktree(ctx, repoPath, gitDir, gitBin, worktreePath)
+}
+
+func removeWorktrees(repoPath, gitBin string, paths []string) error {
+	var joined error
+	for _, path := range paths {
+		joined = errors.Join(joined, RemoveWorktree(repoPath, gitBin, path))
+	}
+	return joined
+}
+
+func removeLinkedWorktree(ctx context.Context, repoPath, gitDir, gitBin, worktreePath string) error {
 	var lastErr error
 	for {
-		_, removeErr := RunCommandContext(
-			context.Background(),
-			[]string{gitBin, "-C", repoPath, "worktree", "remove", "--force", worktreePath},
-			"",
-			"",
-			true,
-			0,
-		)
-		removeAllErr := os.RemoveAll(worktreePath)
-		pruneErr := pruneStaleWorktree(repoPath, gitBin, worktreePath)
-		_, statErr := os.Stat(worktreePath)
-		if pruneErr == nil && os.IsNotExist(statErr) {
+		if err := ctx.Err(); err != nil {
+			return cleanupFailure(worktreePath, lastErr, err)
+		}
+		info, statErr := os.Lstat(worktreePath)
+		missing := false
+		if statErr != nil {
+			if !os.IsNotExist(statErr) {
+				lastErr = statErr
+				if !waitForCleanupRetry(ctx) {
+					return cleanupFailure(worktreePath, lastErr, ctx.Err())
+				}
+				continue
+			}
+			missing = true
+		} else if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+			return &worktreeNotOwnedError{message: "refusing to clean a path that is not a worktree directory: " + worktreePath}
+		} else if err := assertOwnedLinkedWorktree(repoPath, worktreePath); err != nil {
+			return err
+		} else {
+			removeErr := runBoundedGit(ctx, managedPreparationArgs(gitBin, "--git-dir", gitDir, "worktree", "remove", "--force", worktreePath)...)
+			if removeErr != nil {
+				lastErr = removeErr
+			}
+			if err := forceRemoveOwnedPath(worktreePath); err != nil {
+				lastErr = err
+			}
+		}
+		pruneErr := runBoundedGit(ctx, managedPreparationArgs(gitBin, "--git-dir", gitDir, "worktree", "prune", "--expire", "now")...)
+		if pruneErr != nil {
+			lastErr = pruneErr
+		}
+		if _, err := os.Lstat(worktreePath); err == nil {
+			lastErr = NewDeepReviewError("worktree path still exists after cleanup: %s", worktreePath)
+		} else if !os.IsNotExist(err) {
+			lastErr = err
+		} else if registered, regErr := worktreeRegistrationExists(ctx, gitDir, gitBin, worktreePath); regErr != nil {
+			lastErr = regErr
+		} else if registered {
+			lastErr = NewDeepReviewError("worktree registration still exists after cleanup: %s", worktreePath)
+		} else if missing || lastErr == nil || pruneErr == nil {
 			return nil
 		}
-		switch {
-		case pruneErr != nil:
-			lastErr = pruneErr
-		case removeAllErr != nil && !os.IsNotExist(removeAllErr):
-			lastErr = removeAllErr
-		case removeErr != nil:
-			lastErr = removeErr
-		case statErr != nil:
-			lastErr = statErr
-		default:
-			lastErr = NewDeepReviewError("worktree path still exists after cleanup: %s", worktreePath)
+		if !waitForCleanupRetry(ctx) {
+			return cleanupFailure(worktreePath, lastErr, ctx.Err())
 		}
-		if time.Now().After(deadline) {
-			return lastErr
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func pruneStaleWorktree(repoPath, gitBin, worktreePath string) error {
-	_, pruneErr := RunCommandContext(
-		context.Background(),
-		[]string{gitBin, "-C", repoPath, "worktree", "prune", "--expire", "now"},
-		"",
-		"",
-		true,
-		0,
-	)
-	if pruneErr != nil {
-		return pruneErr
+func cleanupFailure(worktreePath string, lastErr, ctxErr error) error {
+	residual := NewDeepReviewError("worktree cleanup failed for %s", worktreePath)
+	if ctxErr != nil {
+		residual = NewDeepReviewError("worktree cleanup timed out for %s", worktreePath)
 	}
-	if _, err := os.Stat(worktreePath); os.IsNotExist(err) {
-		return nil
-	} else if err != nil {
+	return errors.Join(residual, lastErr)
+}
+
+func waitForCleanupRetry(ctx context.Context) bool {
+	timer := time.NewTimer(100 * time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
+}
+
+func runBoundedGit(ctx context.Context, command ...string) error {
+	timeout := worktreeGitCommandTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return NewDeepReviewError("worktree cleanup timed out: %s", strings.Join(command, " "))
+	}
+	_, err := RunCommandContext(ctx, command, "", "", true, timeout)
+	return err
+}
+
+func worktreeRegistrationExists(ctx context.Context, gitDir, gitBin, worktreePath string) (bool, error) {
+	timeout := worktreeGitCommandTimeout
+	if deadline, ok := ctx.Deadline(); ok {
+		remaining := time.Until(deadline)
+		if remaining < timeout {
+			timeout = remaining
+		}
+	}
+	if timeout <= 0 {
+		return false, NewDeepReviewError("worktree cleanup timed out before registration check: %s", worktreePath)
+	}
+	completed, err := RunCommandContext(ctx, managedPreparationArgs(gitBin, "--git-dir", gitDir, "worktree", "list", "--porcelain"), "", "", true, timeout)
+	if err != nil {
+		return false, err
+	}
+	want := filepath.Clean(worktreePath)
+	for _, line := range strings.Split(completed.Stdout, "\n") {
+		if !strings.HasPrefix(line, "worktree ") {
+			continue
+		}
+		if filepath.Clean(strings.TrimPrefix(line, "worktree ")) == want {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func refuseUnsafeCleanupPath(repoPath, worktreePath string) error {
+	if worktreePath == "" || worktreePath == "." || worktreePath == string(filepath.Separator) {
+		return &worktreeNotOwnedError{message: "refusing to clean an unsafe worktree path"}
+	}
+	if repoPath == "" || repoPath == "." || repoPath == string(filepath.Separator) {
+		return &worktreeNotOwnedError{message: "refusing to clean a worktree without a repository path"}
+	}
+	if worktreePath == repoPath || pathIsWithinDir(worktreePath, repoPath) || pathIsWithinDir(repoPath, worktreePath) {
+		return &worktreeNotOwnedError{message: "refusing to clean the repository checkout: " + worktreePath}
+	}
+	return nil
+}
+
+func repositoryGitDirectory(repoPath string) (string, error) {
+	gitPath := filepath.Join(repoPath, ".git")
+	info, err := os.Lstat(gitPath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return "", &worktreeNotOwnedError{message: "refusing to follow a symlink .git entry: " + gitPath}
+	}
+	if info.IsDir() {
+		return gitPath, nil
+	}
+	if !info.Mode().IsRegular() {
+		return "", &worktreeNotOwnedError{message: "unsupported .git entry: " + gitPath}
+	}
+	raw, err := os.ReadFile(gitPath)
+	if err != nil {
+		return "", err
+	}
+	pointer, err := parseGitdirPointer(string(raw))
+	if err != nil {
+		return "", err
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(repoPath, pointer)
+	}
+	return filepath.Clean(pointer), nil
+}
+
+func assertOwnedLinkedWorktree(repoPath, worktreePath string) error {
+	if err := refuseUnsafeCleanupPath(repoPath, worktreePath); err != nil {
 		return err
 	}
-	return NewDeepReviewError("worktree path still exists after prune: %s", worktreePath)
+	repoGit, err := repositoryGitDirectory(repoPath)
+	if err != nil {
+		return err
+	}
+	meta, err := linkedWorktreeMetadataDir(worktreePath)
+	if err != nil {
+		return err
+	}
+	worktreesRoot := filepath.Join(repoGit, "worktrees")
+	if !pathIsWithinDir(worktreesRoot, meta) {
+		return &worktreeNotOwnedError{message: "worktree gitdir is outside the repository worktrees directory: " + worktreePath}
+	}
+	resolvedMeta, err := filepath.EvalSymlinks(meta)
+	if err != nil {
+		return err
+	}
+	resolvedRoot, err := filepath.EvalSymlinks(worktreesRoot)
+	if err != nil {
+		return err
+	}
+	if !pathIsWithinDir(resolvedRoot, resolvedMeta) {
+		return &worktreeNotOwnedError{message: "worktree gitdir resolves outside the repository worktrees directory: " + worktreePath}
+	}
+	backRaw, err := os.ReadFile(filepath.Join(meta, "gitdir"))
+	if err != nil {
+		return &worktreeNotOwnedError{message: "worktree metadata is missing its gitdir back-pointer: " + worktreePath}
+	}
+	backPath := strings.TrimSpace(string(backRaw))
+	if !filepath.IsAbs(backPath) {
+		backPath = filepath.Join(meta, backPath)
+	}
+	if filepath.Clean(backPath) != filepath.Clean(filepath.Join(worktreePath, ".git")) {
+		return &worktreeNotOwnedError{message: "worktree gitdir does not point back at the worktree: " + worktreePath}
+	}
+	commonRaw, err := os.ReadFile(filepath.Join(meta, "commondir"))
+	if err != nil {
+		return &worktreeNotOwnedError{message: "worktree metadata is missing commondir: " + worktreePath}
+	}
+	common := strings.TrimSpace(string(commonRaw))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(meta, common)
+	}
+	common = filepath.Clean(common)
+	if common != filepath.Clean(repoGit) {
+		resolvedCommon, commonErr := filepath.EvalSymlinks(common)
+		resolvedRepo, repoErr := filepath.EvalSymlinks(repoGit)
+		if commonErr != nil || repoErr != nil || resolvedCommon != resolvedRepo {
+			return &worktreeNotOwnedError{message: "worktree commondir does not match the repository: " + worktreePath}
+		}
+	}
+	return nil
+}
+
+func linkedWorktreeMetadataDir(worktreePath string) (string, error) {
+	info, err := os.Lstat(worktreePath)
+	if err != nil {
+		return "", err
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
+		return "", &worktreeNotOwnedError{message: "refusing to clean a path that is not a worktree directory: " + worktreePath}
+	}
+	gitFile := filepath.Join(worktreePath, ".git")
+	gitInfo, err := os.Lstat(gitFile)
+	if err != nil {
+		return "", &worktreeNotOwnedError{message: "path is not a linked worktree: " + worktreePath}
+	}
+	if gitInfo.Mode()&os.ModeSymlink != 0 || !gitInfo.Mode().IsRegular() {
+		return "", &worktreeNotOwnedError{message: "refusing to clean a worktree whose .git entry is not a regular file: " + worktreePath}
+	}
+	raw, err := os.ReadFile(gitFile)
+	if err != nil {
+		return "", err
+	}
+	pointer, err := parseGitdirPointer(string(raw))
+	if err != nil {
+		return "", &worktreeNotOwnedError{message: "path is not a linked worktree: " + worktreePath}
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(worktreePath, pointer)
+	}
+	return filepath.Clean(pointer), nil
+}
+
+func parseGitdirPointer(text string) (string, error) {
+	line := strings.TrimSpace(text)
+	if index := strings.IndexByte(line, '\n'); index >= 0 {
+		line = strings.TrimSpace(line[:index])
+	}
+	const prefix = "gitdir:"
+	if !strings.HasPrefix(line, prefix) {
+		return "", NewDeepReviewError("missing gitdir pointer")
+	}
+	pointer := strings.TrimSpace(strings.TrimPrefix(line, prefix))
+	if pointer == "" {
+		return "", NewDeepReviewError("empty gitdir pointer")
+	}
+	return pointer, nil
+}
+
+func discoverWorktreeRepository(worktreePath string) (string, error) {
+	meta, err := linkedWorktreeMetadataDir(worktreePath)
+	if err != nil {
+		return "", err
+	}
+	worktreesDir := filepath.Dir(meta)
+	if filepath.Base(worktreesDir) != "worktrees" {
+		return "", &worktreeNotOwnedError{message: "worktree gitdir is not inside a worktrees directory: " + worktreePath}
+	}
+	gitDir := filepath.Dir(worktreesDir)
+	if filepath.Base(gitDir) != ".git" {
+		return "", &worktreeNotOwnedError{message: "worktree gitdir is not inside a repository .git directory: " + worktreePath}
+	}
+	repoPath := filepath.Dir(gitDir)
+	if err := assertOwnedLinkedWorktree(repoPath, worktreePath); err != nil {
+		return "", err
+	}
+	return repoPath, nil
+}
+
+func pathIsWithinDir(root, target string) bool {
+	root = filepath.Clean(root)
+	target = filepath.Clean(target)
+	if root == "" || target == "" {
+		return false
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == "." || rel == ".." {
+		return false
+	}
+	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
+}
+
+func forceRemoveOwnedPath(path string) error {
+	info, err := os.Lstat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		return NewDeepReviewError("refusing to remove symlink worktree path: %s", path)
+	}
+	_ = makeTreeWritable(path)
+	return os.RemoveAll(path)
+}
+
+func makeTreeWritable(root string) error {
+	info, err := os.Lstat(root)
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		return err
+	}
+	if err := os.Chmod(root, info.Mode().Perm()|0o700); err != nil {
+		return err
+	}
+	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil || path == root {
+			return walkErr
+		}
+		entryInfo, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if entryInfo.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		perm := entryInfo.Mode().Perm() | 0o200
+		if entry.IsDir() {
+			perm |= 0o700
+		}
+		return os.Chmod(path, perm)
+	})
 }
 
 func EnsureWorktreeOperationalExcludes(repoPath, gitBin string) error {
