@@ -1,0 +1,131 @@
+package deepreview
+
+import (
+	"encoding/json"
+	"os"
+	"strings"
+)
+
+type triageDecision struct {
+	NoOp  bool         `json:"no_op"`
+	Items []triageItem `json:"items"`
+}
+
+type triageItem struct {
+	ID          string `json:"id"`
+	Disposition string `json:"disposition"`
+	Impact      string `json:"impact"`
+	Confidence  string `json:"confidence"`
+	Evidence    string `json:"evidence"`
+}
+
+func validateReviewReport(path string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return NewDeepReviewError("independent review report missing: %s", path)
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return NewDeepReviewError("independent review report is empty: %s", path)
+	}
+	if !strings.Contains(text, "material_findings_found: yes") && !strings.Contains(text, "material_findings_found: no") {
+		return NewDeepReviewError("independent review report missing material_findings_found verdict: %s", path)
+	}
+	if !strings.Contains(text, "merge_readiness: ready") && !strings.Contains(text, "merge_readiness: needs_fixes") {
+		return NewDeepReviewError("independent review report missing merge_readiness verdict: %s", path)
+	}
+	return nil
+}
+
+func validateTriageDecisionFile(path string) error {
+	body, err := os.ReadFile(path)
+	if err != nil {
+		return NewDeepReviewError("triage decision missing: %s", path)
+	}
+	if strings.TrimSpace(string(body)) == "" {
+		return NewDeepReviewError("triage decision is empty: %s", path)
+	}
+	var decision triageDecision
+	if err := json.Unmarshal(body, &decision); err != nil {
+		return NewDeepReviewError("triage decision is malformed: %s", path)
+	}
+	if err := validateTriageDecision(decision); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateTriageDecision(decision triageDecision) error {
+	if decision.NoOp {
+		if len(decision.Items) != 0 {
+			return NewDeepReviewError("triage no_op decision must have an empty item list")
+		}
+		return nil
+	}
+	if len(decision.Items) == 0 {
+		return NewDeepReviewError("triage decision has no items and is not an explicit no_op")
+	}
+	seen := map[string]struct{}{}
+	for _, item := range decision.Items {
+		id := strings.TrimSpace(item.ID)
+		if id == "" || strings.Contains(id, "/") || strings.Contains(id, "..") || !triageIDPattern(id) {
+			return NewDeepReviewError("triage item id must be one safe segment")
+		}
+		if _, ok := seen[id]; ok {
+			return NewDeepReviewError("triage item id %s is duplicated", id)
+		}
+		seen[id] = struct{}{}
+		disposition := strings.ToLower(strings.TrimSpace(item.Disposition))
+		switch disposition {
+		case "accept", "reject", "defer":
+		default:
+			return NewDeepReviewError("triage item %s has invalid disposition", id)
+		}
+		if disposition != "accept" {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(item.Impact)) != "material" ||
+			strings.ToLower(strings.TrimSpace(item.Confidence)) != "high" ||
+			strings.TrimSpace(item.Evidence) == "" {
+			return NewDeepReviewError("accepted triage item %s requires impact material, confidence high, and evidence", id)
+		}
+	}
+	return nil
+}
+
+func triageIDPattern(id string) bool {
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z':
+		case r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9':
+		case r == '.' || r == '_' || r == '-':
+		default:
+			return false
+		}
+	}
+	return id != "" && id != "." && id != ".."
+}
+
+func persistValidatedTriageAndPlan(triageSrc, triageDst, triageJSONSrc, triageJSONDst, planSrc, planDst string) error {
+	if err := ensureCanonicalArtifact(triageDst, []string{triageSrc}); err != nil {
+		return NewDeepReviewError("execute prompt 1 triage markdown missing")
+	}
+	if err := ensureCanonicalArtifact(triageJSONDst, []string{triageJSONSrc}); err != nil {
+		return NewDeepReviewError("execute prompt 1 triage decision missing")
+	}
+	if err := ensureCanonicalArtifact(planDst, []string{planSrc}); err != nil {
+		return NewDeepReviewError("execute prompt 1 plan missing")
+	}
+	if err := validateTriageDecisionFile(triageJSONDst); err != nil {
+		return err
+	}
+	body, err := os.ReadFile(planDst)
+	if err != nil {
+		return err
+	}
+	if strings.TrimSpace(string(body)) == "" {
+		return NewDeepReviewError("execute prompt 1 plan is empty")
+	}
+	return nil
+}

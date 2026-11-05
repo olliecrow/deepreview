@@ -141,7 +141,7 @@ deepreview should prefer a small number of no-regret changes over noisy suggesti
 Trade-offs:
 Some real but low-confidence opportunities are intentionally deferred.
 Enforcement:
-Review and execute prompts require item-by-item validation, triage policy rejects non-material/non-high-confidence accepts, and execute remains scoped to accepted items only.
+Review and execute prompts require item-by-item validation. Prompt 1 writes `round-triage.json`, and deepreview validates it before prompt 2. An accepted item needs a stable id, material impact, high confidence, and evidence. An explicit no-op with an empty item list is valid. Execute remains scoped to accepted items only.
 References:
 `docs/spec.md`, `prompts/review/independent-review.md`, `prompts/execute/01-triage-plan.md`, `prompts/execute/02-implement-verify-finalize.md`, `internal/deepreview/orchestrator.go`
 

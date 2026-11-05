@@ -257,6 +257,12 @@ func handlePrompt(prompt string) (string, error) {
 		}
 		if outPath != "" {
 			report := "# Independent Review 1\n\n## Verdict\n- `material_findings_found: no`\n- `merge_readiness: ready`\n- `No high-confidence material findings were found.`\n\n## Material Findings\n\n## Verification ideas\n- no additional checks suggested by fake codex\n"
+			switch strings.TrimSpace(os.Getenv("FAKE_CODEX_REVIEW_FIXTURE")) {
+			case "empty":
+				report = ""
+			case "missing-verdict":
+				report = "# Independent Review 1\n\nNo verdict.\n"
+			}
 			if err := writeText(outPath, report); err != nil {
 				return "", err
 			}
@@ -277,11 +283,32 @@ func handlePrompt(prompt string) (string, error) {
 		}
 		if triage != "" {
 			triageText := "# Round Triage\n\n### sample accepted change\n- source reviewers: 1\n- commonality count: 1\n- disposition: accept\n- impact: material\n- confidence: high\n- evidence summary: fake codex validated a sample change path\n- rationale: used by integration tests\n\n## accepted items\n- sample accepted change\n"
+			decision := "{\"no_op\":false,\"items\":[{\"id\":\"sample-accepted-change\",\"disposition\":\"accept\",\"impact\":\"material\",\"confidence\":\"high\",\"evidence\":\"fake codex validated a sample change path\"}]}\n"
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_SKIP_ACCEPTED_TRIAGE")) != "" {
 				triageText = "# Round Triage\n\nNo execute items selected for this round.\n"
+				decision = "{\"no_op\":true,\"items\":[]}\n"
+			}
+			switch strings.TrimSpace(os.Getenv("FAKE_CODEX_TRIAGE_FIXTURE")) {
+			case "noop":
+				triageText = "# Round Triage\n\nNo execute items selected for this round.\n"
+				decision = "{\"no_op\":true,\"items\":[]}\n"
+			case "malformed":
+				decision = "{\"items\":\n"
+			case "empty":
+				decision = "\n"
+			case "low":
+				decision = "{\"no_op\":false,\"items\":[{\"id\":\"weak-item\",\"disposition\":\"accept\",\"impact\":\"minor\",\"confidence\":\"low\",\"evidence\":\"\"}]}\n"
+			case "missing":
+				decision = ""
 			}
 			if err := writeText(triage, triageText); err != nil {
 				return "", err
+			}
+			if decision != "" {
+				jsonPath := strings.TrimSuffix(triage, ".md") + ".json"
+				if err := writeText(jsonPath, decision); err != nil {
+					return "", err
+				}
 			}
 		}
 		plan := regexGet("Write the plan to `([^`]+)`", prompt)

@@ -697,66 +697,78 @@ func TestPreparePromptRetryRequestClearsContextOnlyWhenConfigured(t *testing.T) 
 	}
 }
 
-func TestTriagePolicyViolationsAcceptRequiresMaterialImpactAndHighConfidence(t *testing.T) {
-	markdown := `# Round Triage
-
-### item A
-- disposition: accept
-- impact: minor
-- confidence: high
-
-### item B
-- disposition: accept
-- impact: material
-- confidence: medium
-
-### item C
-- disposition: reject
-- impact: unclear
-- confidence: low
-`
-	violations := triagePolicyViolations(markdown)
-	if len(violations) != 2 {
-		t.Fatalf("expected 2 violations, got %d: %v", len(violations), violations)
+func TestTriageDecisionRejectsWeakAcceptanceAndAcceptsExplicitNoOp(t *testing.T) {
+	err := validateTriageDecision(triageDecision{
+		Items: []triageItem{{
+			ID:          "weak-item",
+			Disposition: "accept",
+			Impact:      "minor",
+			Confidence:  "low",
+			Evidence:    "",
+		}},
+	})
+	if err == nil || !strings.Contains(err.Error(), "weak-item") {
+		t.Fatalf("expected weak acceptance to fail, got %v", err)
 	}
-	if !strings.Contains(strings.Join(violations, " | "), "item A has disallowed impact \"minor\"") {
-		t.Fatalf("expected impact violation for item A, got: %v", violations)
+
+	if err := validateTriageDecision(triageDecision{NoOp: true}); err != nil {
+		t.Fatalf("expected explicit no_op to pass, got %v", err)
 	}
-	if !strings.Contains(strings.Join(violations, " | "), "item B has disallowed confidence \"medium\"") {
-		t.Fatalf("expected confidence violation for item B, got: %v", violations)
+	if err := validateTriageDecision(triageDecision{
+		NoOp:  true,
+		Items: []triageItem{{ID: "extra", Disposition: "reject"}},
+	}); err == nil {
+		t.Fatal("expected no_op with items to fail")
+	}
+	if err := validateTriageDecision(triageDecision{}); err == nil {
+		t.Fatal("expected empty decision without no_op to fail")
+	}
+	if err := validateTriageDecision(triageDecision{
+		Items: []triageItem{
+			{ID: "same-id", Disposition: "reject"},
+			{ID: "same-id", Disposition: "defer"},
+		},
+	}); err == nil || !strings.Contains(err.Error(), "duplicated") {
+		t.Fatalf("expected duplicate id to fail, got %v", err)
+	}
+	if err := validateTriageDecision(triageDecision{
+		Items: []triageItem{{ID: "nested/path", Disposition: "reject"}},
+	}); err == nil {
+		t.Fatal("expected slash id to fail")
+	}
+	if err := validateTriageDecision(triageDecision{
+		Items: []triageItem{{
+			ID:          "sample-accepted-change",
+			Disposition: "accept",
+			Impact:      "material",
+			Confidence:  "high",
+			Evidence:    "checked the branch",
+		}},
+	}); err != nil {
+		t.Fatalf("expected valid acceptance to pass, got %v", err)
 	}
 }
 
-func TestTriagePolicyViolationsAllowsAcceptedMaterialHighConfidence(t *testing.T) {
-	markdown := `# Round Triage
-
-### fix unsafe branch behavior
-- disposition: accept
-- impact: material
-- confidence: high
-`
-	violations := triagePolicyViolations(markdown)
-	if len(violations) != 0 {
-		t.Fatalf("expected no violations, got: %v", violations)
+func TestReviewReportRequiresNonemptyVerdicts(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "review.md")
+	if err := os.WriteFile(path, []byte(" \n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestTriagePolicyViolationsRequiresTagsForAcceptedItems(t *testing.T) {
-	markdown := `# Round Triage
-
-### missing tags
-- disposition: accept
-`
-	violations := triagePolicyViolations(markdown)
-	if len(violations) != 2 {
-		t.Fatalf("expected 2 violations for missing tags, got %d: %v", len(violations), violations)
+	if err := validateReviewReport(path); err == nil {
+		t.Fatal("expected empty review report to fail")
 	}
-	joined := strings.Join(violations, " | ")
-	if !strings.Contains(joined, "missing tags missing impact tag") {
-		t.Fatalf("expected missing impact tag violation, got: %v", violations)
+	if err := os.WriteFile(path, []byte("# Review\n\nno verdict\n"), 0o644); err != nil {
+		t.Fatal(err)
 	}
-	if !strings.Contains(joined, "missing tags missing confidence tag") {
-		t.Fatalf("expected missing confidence tag violation, got: %v", violations)
+	if err := validateReviewReport(path); err == nil {
+		t.Fatal("expected missing verdicts to fail")
+	}
+	if err := os.WriteFile(path, []byte("`material_findings_found: no`\n`merge_readiness: ready`\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := validateReviewReport(path); err != nil {
+		t.Fatalf("expected complete verdicts to pass, got %v", err)
 	}
 }
 

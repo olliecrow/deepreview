@@ -1922,7 +1922,7 @@ func TestReviewStageDoesNotReuseStaleArtifactsFromKilledWorker(t *testing.T) {
 		"--trust-repo",
 		"--no-tui",
 	)
-	if !strings.Contains(output, "independent review output missing") {
+	if !strings.Contains(output, "independent review report missing") {
 		t.Fatalf("expected review-stage stale artifact rejection, got: %s", output)
 	}
 	if strings.Contains(output, "requires another review round") {
@@ -3077,5 +3077,200 @@ func TestRunPRModeIncompleteDraftRejectsPrivacyBlockedDocsWithoutAutoSanitizing(
 	refsOut := runCmd(t, td, nil, "git", "-C", userClone, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview")
 	if strings.TrimSpace(refsOut) != "" {
 		t.Fatalf("did not expect delivery ref after privacy-blocked incomplete draft failure, got: %s", refsOut)
+	}
+}
+
+func TestInvalidStageOutputsStopBeforePromptTwo(t *testing.T) {
+	root := repoRoot(t)
+	bin := buildBinary(t, root)
+	fakeCodex, fakeGH := buildFakeBinaries(t, root)
+
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	seed := filepath.Join(td, "seed")
+	userClone := filepath.Join(td, "user")
+
+	runCmd(t, td, nil, "git", "init", "--bare", remote)
+	runCmd(t, td, nil, "git", "clone", remote, seed)
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.email", "test@example.com")
+	runCmd(t, td, nil, "git", "-C", seed, "config", "user.name", "Test User")
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(seed, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "README.md")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "seed")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "main")
+
+	runCmd(t, td, nil, "git", "-C", seed, "checkout", "-b", "feature/test")
+	if err := os.WriteFile(filepath.Join(seed, "feature.txt"), []byte("feature\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runCmd(t, td, nil, "git", "-C", seed, "add", "feature.txt")
+	runCmd(t, td, nil, "git", "-C", seed, "commit", "-m", "feature")
+	runCmd(t, td, nil, "git", "-C", seed, "push", "-u", "origin", "feature/test")
+
+	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
+	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
+	sourceSHA := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+
+	cases := []struct {
+		name           string
+		env            []string
+		wantOutput     string
+		wantPrompt1    bool
+		wantTriageJSON bool
+	}{
+		{
+			name:           "malformed triage",
+			env:            []string{"FAKE_CODEX_TRIAGE_FIXTURE=malformed"},
+			wantOutput:     "triage decision is malformed",
+			wantPrompt1:    true,
+			wantTriageJSON: true,
+		},
+		{
+			name:           "weak accept",
+			env:            []string{"FAKE_CODEX_TRIAGE_FIXTURE=low"},
+			wantOutput:     "weak-item",
+			wantPrompt1:    true,
+			wantTriageJSON: true,
+		},
+		{
+			name:        "missing triage",
+			env:         []string{"FAKE_CODEX_TRIAGE_FIXTURE=missing"},
+			wantOutput:  "triage decision missing",
+			wantPrompt1: true,
+		},
+		{
+			name:           "empty triage",
+			env:            []string{"FAKE_CODEX_TRIAGE_FIXTURE=empty"},
+			wantOutput:     "triage decision is empty",
+			wantPrompt1:    true,
+			wantTriageJSON: true,
+		},
+		{
+			name:       "empty review",
+			env:        []string{"FAKE_CODEX_REVIEW_FIXTURE=empty"},
+			wantOutput: "independent review report is empty",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			workspace := t.TempDir()
+			env := append(baseEnv(root, workspace, fakeCodex, fakeGH), tc.env...)
+			before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+			output := runCmdExpectFailure(t, root, env,
+				bin,
+				"review",
+				userClone,
+				"--source-branch", "feature/test",
+				"--concurrency", "1",
+				"--max-rounds", "1",
+				"--mode", "pr",
+				"--trust-repo",
+				"--no-tui",
+			)
+			if !strings.Contains(output, tc.wantOutput) {
+				t.Fatalf("expected %q in output, got: %s", tc.wantOutput, output)
+			}
+			after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+			if before != after {
+				t.Fatalf("source branch moved from %s to %s", before, after)
+			}
+			runDir := singleRunDir(t, workspace)
+			assertNoExecutePromptTwo(t, runDir)
+			prompt1 := filepath.Join(runDir, "round-01", "execute", "prompt-01.stdout.jsonl")
+			if tc.wantPrompt1 {
+				if _, err := os.Stat(prompt1); err != nil {
+					t.Fatalf("expected prompt 1 log: %v", err)
+				}
+			} else if _, err := os.Stat(prompt1); !os.IsNotExist(err) {
+				t.Fatalf("did not expect prompt 1 log, err=%v", err)
+			}
+			triageJSON := filepath.Join(runDir, "round-01", "round-triage.json")
+			if tc.wantTriageJSON {
+				if _, err := os.Stat(triageJSON); err != nil {
+					t.Fatalf("expected canonical triage decision: %v", err)
+				}
+			} else if _, err := os.Stat(triageJSON); !os.IsNotExist(err) {
+				t.Fatalf("did not expect canonical triage decision, err=%v", err)
+			}
+			assertCandidateAtSource(t, workspace, userClone, "feature/test", sourceSHA, runDir)
+		})
+	}
+
+	t.Run("explicit no-op reaches prompt 2", func(t *testing.T) {
+		workspace := t.TempDir()
+		env := append(baseEnv(root, workspace, fakeCodex, fakeGH),
+			"FAKE_CODEX_TRIAGE_FIXTURE=noop",
+			"FAKE_CODEX_SKIP_CODE_CHANGE=1",
+		)
+		output := runCmd(t, root, env,
+			bin,
+			"review",
+			userClone,
+			"--source-branch", "feature/test",
+			"--concurrency", "1",
+			"--max-rounds", "1",
+			"--mode", "pr",
+			"--trust-repo",
+			"--no-tui",
+		)
+		if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
+			t.Fatalf("expected skipped delivery after explicit no-op, got: %s", output)
+		}
+		runDir := singleRunDir(t, workspace)
+		if _, err := os.Stat(filepath.Join(runDir, "round-01", "execute", "prompt-02.stdout.jsonl")); err != nil {
+			t.Fatalf("expected prompt 2 log after explicit no-op: %v", err)
+		}
+		body, err := os.ReadFile(filepath.Join(runDir, "round-01", "round-triage.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(body), `"no_op":true`) {
+			t.Fatalf("expected explicit no_op decision, got: %s", string(body))
+		}
+		after := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
+		if after != sourceSHA {
+			t.Fatalf("source branch moved from %s to %s", sourceSHA, after)
+		}
+		assertCandidateAtSource(t, workspace, userClone, "feature/test", sourceSHA, runDir)
+	})
+}
+
+func singleRunDir(t *testing.T, workspace string) string {
+	t.Helper()
+	runs, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(runs) != 1 {
+		t.Fatalf("expected 1 run dir, got %d (%v)", len(runs), runs)
+	}
+	return runs[0]
+}
+
+func assertNoExecutePromptTwo(t *testing.T, runDir string) {
+	t.Helper()
+	matches, err := filepath.Glob(filepath.Join(runDir, "round-01", "execute", "prompt-02*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("prompt 2 started: %v", matches)
+	}
+}
+
+func assertCandidateAtSource(t *testing.T, workspace, userClone, sourceBranch, sourceSHA, runDir string) {
+	t.Helper()
+	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, userClone)
+	if err != nil {
+		t.Fatalf("resolveRepoIdentity failed: %v", err)
+	}
+	managed := filepath.Join(append([]string{workspace, "repos"}, append(identity.NamespaceSegments(), "branches", FilesystemSafeKey(sourceBranch))...)...)
+	ref := "refs/heads/deepreview/candidate/" + SanitizeSegment(sourceBranch) + "/" + SanitizeSegment(filepath.Base(runDir))
+	got := runCmd(t, workspace, nil, "git", "-C", managed, "rev-parse", ref)
+	if got != sourceSHA {
+		t.Fatalf("candidate %s is %s, source is %s", ref, got, sourceSHA)
 	}
 }

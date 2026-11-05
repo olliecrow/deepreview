@@ -1342,6 +1342,9 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 					},
 				},
 			)
+			if err == nil {
+				err = validateReviewReport(workerReviewPath)
+			}
 			resultsCh <- reviewWorkerResult{workerID: workerID, restarts: restarts, err: err}
 		}(idx)
 	}
@@ -1402,8 +1405,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 			o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 			return nil, err
 		}
-		if _, err := os.Stat(reviewPath); err != nil {
-			err := NewDeepReviewError("independent review output missing: %s", reviewPath)
+		if err := validateReviewReport(reviewPath); err != nil {
 			o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 			return nil, err
 		}
@@ -1478,6 +1480,8 @@ func (o *Orchestrator) runExecuteStage(
 	roundStatusWorktreePath := filepath.Join(executeArtifactsDir, "round-status.json")
 	roundSummaryWorktreePath := filepath.Join(executeArtifactsDir, "round-summary.md")
 	roundTriageWorktreePath := filepath.Join(executeArtifactsDir, "round-triage.md")
+	roundTriageJSONPath := filepath.Join(roundDir, "round-triage.json")
+	roundTriageJSONWorktreePath := filepath.Join(executeArtifactsDir, "round-triage.json")
 	roundPlanWorktreePath := filepath.Join(executeArtifactsDir, "round-plan.md")
 	roundVerificationWorktreePath := filepath.Join(executeArtifactsDir, "round-verification.md")
 	if err := os.MkdirAll(executeArtifactsDir, 0o755); err != nil {
@@ -1530,6 +1534,7 @@ func (o *Orchestrator) runExecuteStage(
 		"REVIEW_REPORT_PATHS":     reviewReportPathsBullet,
 		"REVIEW_INPUT_MANIFEST":   reviewInputManifest,
 		"ROUND_TRIAGE_PATH":       filepath.ToSlash(roundTriageWorktreePath),
+		"ROUND_TRIAGE_JSON_PATH":  filepath.ToSlash(roundTriageJSONWorktreePath),
 		"ROUND_PLAN_PATH":         filepath.ToSlash(roundPlanWorktreePath),
 		"ROUND_VERIFICATION_PATH": filepath.ToSlash(roundVerificationWorktreePath),
 		"ROUND_STATUS_PATH":       filepath.ToSlash(roundStatusWorktreePath),
@@ -1560,6 +1565,7 @@ func (o *Orchestrator) runExecuteStage(
 			idx,
 			reviewInputsDir,
 			roundTriageWorktreePath,
+			roundTriageJSONWorktreePath,
 			roundPlanWorktreePath,
 			roundVerificationWorktreePath,
 		)
@@ -1611,6 +1617,20 @@ func (o *Orchestrator) runExecuteStage(
 			return RoundStatus{}, "", err
 		}
 		codexContext = nextContext
+		if templateName == "01-triage-plan.md" {
+			if err := persistValidatedTriageAndPlan(
+				roundTriageWorktreePath,
+				roundTriagePath,
+				roundTriageJSONWorktreePath,
+				roundTriageJSONPath,
+				roundPlanWorktreePath,
+				roundPlanPath,
+			); err != nil {
+				o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
+				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
+				return RoundStatus{}, "", err
+			}
+		}
 		o.reporter.StageFinished(stageName, roundPtr(round), true, "completed")
 	}
 
@@ -1626,26 +1646,6 @@ func (o *Orchestrator) runExecuteStage(
 		roundSummaryWorktreePath,
 		filepath.Join(executeWorktree, "round-summary.md"),
 		roundSummaryPath,
-	}); err != nil {
-		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-		return RoundStatus{}, "", err
-	}
-	if err := ensureCanonicalArtifact(roundTriagePath, []string{
-		roundTriageWorktreePath,
-		filepath.Join(executeWorktree, "round-triage.md"),
-		roundTriagePath,
-	}); err != nil {
-		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-		return RoundStatus{}, "", err
-	}
-	if err := validateRoundTriagePolicy(roundTriagePath); err != nil {
-		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
-		return RoundStatus{}, "", err
-	}
-	if err := ensureCanonicalArtifact(roundPlanPath, []string{
-		roundPlanWorktreePath,
-		filepath.Join(executeWorktree, "round-plan.md"),
-		roundPlanPath,
 	}); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
@@ -1853,98 +1853,6 @@ func readRoundRecord(path string) (RoundRecord, error) {
 	}
 	record.Status = status
 	return record, nil
-}
-
-var (
-	triageDispositionRegex = regexp.MustCompile(`(?i)\bdisposition\b[^a-z0-9]*(accept|reject|defer)\b`)
-	triageImpactRegex      = regexp.MustCompile(`(?i)\bimpact\b[^a-z0-9]*(material|minor|unclear)\b`)
-	triageConfidenceRegex  = regexp.MustCompile(`(?i)\bconfidence\b[^a-z0-9]*(high|medium|low)\b`)
-	triageHeadingRegex     = regexp.MustCompile(`(?m)^###\s+(.+)$`)
-)
-
-func validateRoundTriagePolicy(path string) error {
-	body, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	violations := triagePolicyViolations(string(body))
-	if len(violations) == 0 {
-		return nil
-	}
-	return NewDeepReviewError(
-		"round triage validation failed: accepted items must be impact material with high confidence: %s",
-		strings.Join(violations, "; "),
-	)
-}
-
-func triagePolicyViolations(markdown string) []string {
-	dispositions := triageDispositionRegex.FindAllStringSubmatchIndex(markdown, -1)
-	if len(dispositions) == 0 {
-		return nil
-	}
-	violations := make([]string, 0)
-	for _, match := range dispositions {
-		if len(match) < 4 {
-			continue
-		}
-		disposition := strings.ToLower(markdown[match[2]:match[3]])
-		if disposition != "accept" {
-			continue
-		}
-		heading, section := triageSectionAt(markdown, match[0])
-		impactMatch := triageImpactRegex.FindStringSubmatch(section)
-		if len(impactMatch) < 2 {
-			violations = append(violations, fmt.Sprintf("%s missing impact tag", heading))
-		} else {
-			impact := strings.ToLower(strings.TrimSpace(impactMatch[1]))
-			if impact != "material" {
-				violations = append(violations, fmt.Sprintf("%s has disallowed impact %q", heading, impact))
-			}
-		}
-
-		confidenceMatch := triageConfidenceRegex.FindStringSubmatch(section)
-		if len(confidenceMatch) < 2 {
-			violations = append(violations, fmt.Sprintf("%s missing confidence tag", heading))
-		} else {
-			confidence := strings.ToLower(strings.TrimSpace(confidenceMatch[1]))
-			if confidence != "high" {
-				violations = append(violations, fmt.Sprintf("%s has disallowed confidence %q", heading, confidence))
-			}
-		}
-	}
-	return violations
-}
-
-func triageSectionAt(markdown string, offset int) (string, string) {
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > len(markdown) {
-		offset = len(markdown)
-	}
-	headings := triageHeadingRegex.FindAllStringSubmatchIndex(markdown, -1)
-	if len(headings) == 0 {
-		return "accepted item", markdown
-	}
-	for idx, match := range headings {
-		if len(match) < 4 {
-			continue
-		}
-		start := match[0]
-		end := len(markdown)
-		if idx+1 < len(headings) {
-			end = headings[idx+1][0]
-		}
-		if offset < start || offset >= end {
-			continue
-		}
-		heading := strings.TrimSpace(markdown[match[2]:match[3]])
-		if heading == "" {
-			heading = "accepted item"
-		}
-		return heading, markdown[start:end]
-	}
-	return "accepted item", markdown
 }
 
 func isInternalArtifactPath(path string) bool {
@@ -2221,12 +2129,12 @@ func recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef 
 	return restoreSnapshot(worktreePath, snapshotDir)
 }
 
-func executeRetryPreservePathsForPrompt(promptIdx int, reviewInputsDir, roundTriagePath, roundPlanPath, roundVerificationPath string) []string {
+func executeRetryPreservePathsForPrompt(promptIdx int, reviewInputsDir, roundTriagePath, roundTriageJSONPath, roundPlanPath, roundVerificationPath string) []string {
 	// Preserve only artifacts from earlier successful prompts. Final round
 	// status and summary must be rewritten by the successful final prompt attempt.
 	paths := []string{reviewInputsDir}
 	if promptIdx >= 1 {
-		paths = append(paths, roundTriagePath, roundPlanPath)
+		paths = append(paths, roundTriagePath, roundTriageJSONPath, roundPlanPath)
 	}
 	if promptIdx >= 2 {
 		paths = append(paths, roundVerificationPath)
