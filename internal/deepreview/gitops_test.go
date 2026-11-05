@@ -88,6 +88,77 @@ func TestDryRunPushRefspec(t *testing.T) {
 	}
 }
 
+func TestPublicationRefspecUsesTheCommitAndFullRef(t *testing.T) {
+	sha := strings.Repeat("a", 40)
+	refspec, err := PublicationRefspec("git", sha, "deepreview/feature/test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if refspec != sha+":refs/heads/deepreview/feature/test" {
+		t.Fatalf("unexpected refspec %q", refspec)
+	}
+
+	if _, err := PublicationRefspec("git", "main", "main"); err == nil {
+		t.Fatal("expected a branch name to be rejected as a publication commit")
+	}
+	if _, err := PublicationRefspec("git", sha, "-force"); err == nil {
+		t.Fatal("expected an option-shaped branch to be rejected")
+	}
+	if _, err := PublicationRefspec("git", sha, "bad:ref"); err == nil {
+		t.Fatal("expected a refspec-shaped branch to be rejected")
+	}
+}
+
+func TestPushVerifiedRefPushesTheRequestedCommit(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	repo := filepath.Join(td, "repo")
+	runGitCommand(t, td, "init", "--bare", remote)
+	runGitCommand(t, td, "clone", remote, repo)
+	runGitCommand(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitCommand(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitCommand(t, td, "-C", repo, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "README.md")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "seed")
+	reviewed := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
+
+	if err := os.WriteFile(filepath.Join(repo, "later.txt"), []byte("later\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "later.txt")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "later")
+
+	refspec, err := PushVerifiedRef(repo, "git", reviewed, "release/topic")
+	if err != nil {
+		t.Fatalf("PushVerifiedRef failed: %v", err)
+	}
+	if !strings.HasPrefix(refspec, reviewed+":refs/heads/release/topic") {
+		t.Fatalf("unexpected refspec %q", refspec)
+	}
+	remoteHead := strings.TrimSpace(runGitCommand(t, td, "--git-dir", remote, "rev-parse", "refs/heads/release/topic"))
+	if remoteHead != reviewed {
+		t.Fatalf("remote ref = %s, want reviewed commit %s", remoteHead, reviewed)
+	}
+
+	runGitCommand(t, td, "-C", repo, "checkout", "--orphan", "unrelated")
+	if err := os.WriteFile(filepath.Join(repo, "unrelated.txt"), []byte("unrelated\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "unrelated.txt")
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "unrelated")
+	unrelated := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
+	if _, err := PushVerifiedRef(repo, "git", unrelated, "release/topic"); err == nil {
+		t.Fatal("expected a non-fast-forward publication to fail")
+	}
+	remoteHead = strings.TrimSpace(runGitCommand(t, td, "--git-dir", remote, "rev-parse", "refs/heads/release/topic"))
+	if remoteHead != reviewed {
+		t.Fatalf("rejected publication moved the remote ref to %s", remoteHead)
+	}
+}
+
 func TestRefContainsCommit(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")

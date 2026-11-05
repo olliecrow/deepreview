@@ -92,6 +92,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - post-prompt delivery validation must inspect the exact candidate ref that deepreview will publish, not a stale candidate-branch diff or mutable post-push remote-tracking ref.
 - post-prompt delivery validation must also enforce repo-native outbound history policies against the candidate publish range when the repository defines them.
 - final publishability validation must inspect every outgoing commit, including sensitive content and blocked operational artifacts introduced and removed before the current tip.
+- publication pushes that reviewed commit SHA to `refs/heads/<target>` and confirms the remote ref matches it. A candidate branch that moved after review is not published.
 - sensitive-text policy failures report the rule, file, and line only. They do not print the matched text. A missing, unreadable, or unscannable input fails closed.
 - a tracked-content or outgoing-history publication blocker fails delivery before push; deepreview does not rewrite candidate history to repair it.
 - after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.

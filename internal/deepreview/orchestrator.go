@@ -831,7 +831,14 @@ func (o *Orchestrator) candidateBranchName(sourceBranch, runID string) string {
 }
 
 func (o *Orchestrator) verifyYoloDefaultBranchPushAllowed(candidateBranch, defaultBranch string) error {
-	refspec := candidateBranch + ":" + o.config.SourceBranch
+	sha, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return err
+	}
+	refspec, err := PublicationRefspec(o.config.GitBin, sha, o.config.SourceBranch)
+	if err != nil {
+		return err
+	}
 	if err := DryRunPushRefspec(o.managedRepoPath, o.config.GitBin, refspec); err != nil {
 		return NewDeepReviewError(
 			"yolo preflight failed: cannot push to default branch `%s`; use --mode pr or adjust branch protections/permissions",
@@ -2958,13 +2965,21 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return delivery, nil
 	}
 
+	reviewedHead, err := o.reviewedCandidateHeadForPublish(candidateBranch)
+	if err != nil {
+		return DeliveryResult{}, err
+	}
+	pushRefspec, err = PublicationRefspec(o.config.GitBin, reviewedHead, commitsBranch)
+	if err != nil {
+		return DeliveryResult{}, err
+	}
 	partialDelivery := DeliveryResult{
 		Mode:          result.Mode,
 		PushedRefspec: pushRefspec,
 		CommitsURL:    fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(commitsBranch)),
 	}
 	o.lastDelivery = &partialDelivery
-	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, pushRefspec); err != nil {
+	if _, err := o.pushReviewedCommit(candidateBranch, commitsBranch); err != nil {
 		return DeliveryResult{}, err
 	}
 	o.pushCount++
@@ -3077,14 +3092,36 @@ func (o *Orchestrator) deliveryBranchName() string {
 	return "deepreview/" + SanitizeSegment(o.config.SourceBranch) + "/" + SanitizeSegment(o.config.RunID)
 }
 
+func (o *Orchestrator) pushReviewedCommit(candidateBranch, destinationBranch string) (string, error) {
+	reviewed, err := o.reviewedCandidateHeadForPublish(candidateBranch)
+	if err != nil {
+		return "", err
+	}
+	current, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(current) != strings.TrimSpace(reviewed) {
+		return "", NewDeepReviewError("delivery candidate branch no longer matches the reviewed candidate tip; rerun deepreview from the intended source tip instead of publishing a moved ref")
+	}
+	return PushVerifiedRef(o.managedRepoPath, o.config.GitBin, reviewed, destinationBranch)
+}
+
 func (o *Orchestrator) ensurePRDeliveryBranchPushed(candidateBranch string) (string, string, bool, error) {
 	if o.prDelivery.pushed {
 		return o.prDelivery.branch, o.prDelivery.refspec, true, nil
 	}
 	deliveryBranch := o.deliveryBranchName()
-	refspec := candidateBranch + ":" + deliveryBranch
+	reviewedHead, err := o.reviewedCandidateHeadForPublish(candidateBranch)
+	if err != nil {
+		return "", "", false, err
+	}
+	refspec, err := PublicationRefspec(o.config.GitBin, reviewedHead, deliveryBranch)
+	if err != nil {
+		return "", "", false, err
+	}
 	o.reporter.StageProgress("delivery", "pushing delivery branch and creating pull request", nil)
-	if err := PushRefspec(o.managedRepoPath, o.config.GitBin, refspec); err != nil {
+	if _, err := o.pushReviewedCommit(candidateBranch, deliveryBranch); err != nil {
 		return "", "", false, err
 	}
 	o.pushCount++

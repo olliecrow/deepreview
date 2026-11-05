@@ -14,6 +14,7 @@ import (
 
 var sanitizeSegmentRe = regexp.MustCompile(`[^A-Za-z0-9._/-]+`)
 var filesystemSafeKeyRe = regexp.MustCompile(`[^A-Za-z0-9._-]+`)
+var fullGitSHARe = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 var worktreeOperationalExcludePatterns = []string{
 	".deepreview/",
@@ -941,6 +942,57 @@ func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (
 func PushRefspec(repoPath, gitBin, refspec string) error {
 	_, err := RunCommand([]string{gitBin, "-C", repoPath, "push", "origin", refspec}, "", "", true, 0)
 	return err
+}
+
+func PublicationRefspec(gitBin, commitSHA, branch string) (string, error) {
+	sha := strings.ToLower(strings.TrimSpace(commitSHA))
+	if !fullGitSHARe.MatchString(sha) {
+		return "", NewDeepReviewError("publication commit must be a full 40-character SHA")
+	}
+	branch = strings.TrimSpace(branch)
+	if branch == "" || strings.HasPrefix(branch, "-") || strings.Contains(branch, ":") {
+		return "", NewDeepReviewError("publication branch is not a valid ref")
+	}
+	ref := "refs/heads/" + branch
+	if _, err := RunCommand([]string{gitBin, "check-ref-format", ref}, "", "", true, 0); err != nil {
+		return "", NewDeepReviewError("publication branch is not a valid ref")
+	}
+	return sha + ":" + ref, nil
+}
+
+func PushVerifiedRef(repoPath, gitBin, commitSHA, branch string) (string, error) {
+	sha := strings.ToLower(strings.TrimSpace(commitSHA))
+	refspec, err := PublicationRefspec(gitBin, sha, branch)
+	if err != nil {
+		return "", err
+	}
+	if err := PushRefspec(repoPath, gitBin, refspec); err != nil {
+		return "", err
+	}
+	if err := requireRemoteBranchSHA(repoPath, gitBin, branch, sha); err != nil {
+		return "", err
+	}
+	return refspec, nil
+}
+
+func requireRemoteBranchSHA(repoPath, gitBin, branch, want string) error {
+	ref := "refs/heads/" + branch
+	completed, err := RunCommand([]string{gitBin, "-C", repoPath, "ls-remote", "--exit-code", "origin", ref}, "", "", true, 0)
+	if err != nil {
+		return NewDeepReviewError("publication could not confirm remote ref %s", ref)
+	}
+	got := ""
+	for _, line := range strings.Split(completed.Stdout, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[1] == ref {
+			got = strings.ToLower(fields[0])
+			break
+		}
+	}
+	if got != want {
+		return NewDeepReviewError("remote ref %s does not match the reviewed commit after publication", ref)
+	}
+	return nil
 }
 
 func DryRunPushRefspec(repoPath, gitBin, refspec string) error {
