@@ -126,7 +126,7 @@ func TestRunCommandStreamCallbackKeepsDiagnosticTail(t *testing.T) {
 	}
 	completed, err := RunCommandContextWithCallbacks(
 		context.Background(),
-		[]string{"/bin/sh", "-c", "dd if=/dev/zero bs=1024 count=400 2>/dev/null | tr '\\0' a; printf ENDMARKER"},
+		[]string{"/bin/sh", "-c", "i=0; while [ \"$i\" -lt 400 ]; do printf '%1024s' x; i=$((i+1)); done; printf ENDMARKER"},
 		"",
 		"",
 		true,
@@ -227,7 +227,7 @@ func TestRunCommandDetachedStdoutReturnsWithinDrainBound(t *testing.T) {
 	dir := t.TempDir()
 	pidFile := filepath.Join(dir, "detached.pid")
 	script := filepath.Join(dir, "detach.sh")
-	writeShellScript(t, script, "#!/bin/sh\nset -eu\npidfile=$1\nsetsid sh -c 'printf %s \"$$\" > \"$1\"; exec sleep 30' sh \"$pidfile\" &\ni=0\nwhile [ ! -s \"$pidfile\" ]; do\n  i=$((i+1))\n  if [ \"$i\" -gt 50 ]; then\n    exit 1\n  fi\n  sleep 0.05\ndone\nexit 0\n")
+	writeShellScript(t, script, "#!/bin/sh\nset -eu\npidfile=$1\ndetach='setsid'\nif ! command -v setsid >/dev/null 2>&1; then\n  if ! command -v perl >/dev/null 2>&1; then\n    echo 'setsid is unavailable' >&2\n    exit 1\n  fi\n  detach='perl'\nfi\nif [ \"$detach\" = setsid ]; then\n  setsid sh -c 'printf %s \"$$\" > \"$1\"; exec sleep 30' sh \"$pidfile\" &\nelse\n  perl -MPOSIX -e 'fork and exit; POSIX::setsid() or die \"setsid failed: $!\"; exec @ARGV or die $!' sh -c 'printf %s \"$$\" > \"$1\"; exec sleep 30' sh \"$pidfile\" &\nfi\ni=0\nwhile [ ! -s \"$pidfile\" ]; do\n  i=$((i+1))\n  if [ \"$i\" -gt 50 ]; then\n    echo 'detached child did not write its pid' >&2\n    exit 1\n  fi\n  sleep 0.05\ndone\nexit 0\n")
 	t.Cleanup(func() {
 		killPIDFile(pidFile)
 	})
@@ -235,7 +235,7 @@ func TestRunCommandDetachedStdoutReturnsWithinDrainBound(t *testing.T) {
 	completed, err := RunCommandContext(context.Background(), []string{"/bin/sh", script, pidFile}, "", "", true, 0)
 	elapsed := time.Since(started)
 	if err != nil {
-		t.Fatalf("detached holder should not fail the exited command: %v", err)
+		t.Fatalf("detached holder should not fail the exited command: %s", describeRunPromptError(err))
 	}
 	if completed.ReturnCode != 0 {
 		t.Fatalf("return code = %d", completed.ReturnCode)
