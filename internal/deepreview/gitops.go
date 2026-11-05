@@ -391,7 +391,7 @@ func worktreeRegistrationExists(ctx context.Context, gitDir, gitBin, worktreePat
 		if !strings.HasPrefix(line, "worktree ") {
 			continue
 		}
-		if filepath.Clean(strings.TrimPrefix(line, "worktree ")) == want {
+		if samePathAfterSymlinks(strings.TrimPrefix(line, "worktree "), want) {
 			return true, nil
 		}
 	}
@@ -453,9 +453,6 @@ func assertOwnedLinkedWorktree(repoPath, worktreePath string) error {
 		return err
 	}
 	worktreesRoot := filepath.Join(repoGit, "worktrees")
-	if !pathIsWithinDir(worktreesRoot, meta) {
-		return &worktreeNotOwnedError{message: "worktree gitdir is outside the repository worktrees directory: " + worktreePath}
-	}
 	resolvedMeta, err := filepath.EvalSymlinks(meta)
 	if err != nil {
 		return err
@@ -475,7 +472,7 @@ func assertOwnedLinkedWorktree(repoPath, worktreePath string) error {
 	if !filepath.IsAbs(backPath) {
 		backPath = filepath.Join(meta, backPath)
 	}
-	if filepath.Clean(backPath) != filepath.Clean(filepath.Join(worktreePath, ".git")) {
+	if !samePathAfterSymlinks(backPath, filepath.Join(worktreePath, ".git")) {
 		return &worktreeNotOwnedError{message: "worktree gitdir does not point back at the worktree: " + worktreePath}
 	}
 	commonRaw, err := os.ReadFile(filepath.Join(meta, "commondir"))
@@ -561,6 +558,33 @@ func discoverWorktreeRepository(worktreePath string) (string, error) {
 		return "", err
 	}
 	return repoPath, nil
+}
+
+func samePathAfterSymlinks(left, right string) bool {
+	left = filepath.Clean(left)
+	right = filepath.Clean(right)
+	if left == right {
+		return true
+	}
+	resolvedLeft, leftErr := resolvePathWithParentSymlinks(left)
+	resolvedRight, rightErr := resolvePathWithParentSymlinks(right)
+	return leftErr == nil && rightErr == nil && resolvedLeft == resolvedRight
+}
+
+func resolvePathWithParentSymlinks(path string) (string, error) {
+	resolved, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		return resolved, nil
+	}
+	parent := filepath.Dir(path)
+	if parent == path {
+		return "", err
+	}
+	resolvedParent, parentErr := filepath.EvalSymlinks(parent)
+	if parentErr != nil {
+		return "", err
+	}
+	return filepath.Join(resolvedParent, filepath.Base(path)), nil
 }
 
 func pathIsWithinDir(root, target string) bool {

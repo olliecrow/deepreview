@@ -653,6 +653,63 @@ func TestRemoveWorktreeDeletesReadOnlyOwnedFiles(t *testing.T) {
 	}
 }
 
+func TestRemoveWorktreeAcceptsSymlinkParentAlias(t *testing.T) {
+	td := t.TempDir()
+	realBase := filepath.Join(td, "real")
+	if err := os.MkdirAll(realBase, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	alias := filepath.Join(td, "alias")
+	if err := os.Symlink(realBase, alias); err != nil {
+		t.Fatal(err)
+	}
+	repo := filepath.Join(alias, "repo")
+	worktree := filepath.Join(alias, "worktree")
+	initCommittedRepo(t, repo)
+	if err := AddDetachedWorktree(repo, "git", worktree, "HEAD"); err != nil {
+		t.Fatalf("AddDetachedWorktree failed: %v", err)
+	}
+
+	gitFile := filepath.Join(worktree, ".git")
+	raw, err := os.ReadFile(gitFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pointer, err := parseGitdirPointer(string(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(pointer) {
+		pointer = filepath.Join(worktree, pointer)
+	}
+	resolvedGit, err := filepath.EvalSymlinks(gitFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolvedGit == filepath.Clean(gitFile) {
+		t.Fatal("symlink alias did not change the worktree path")
+	}
+	if err := os.WriteFile(filepath.Join(pointer, "gitdir"), []byte(resolvedGit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := RemoveWorktree(repo, "git", worktree); err != nil {
+		t.Fatalf("RemoveWorktree failed: %v", err)
+	}
+	if _, err := os.Stat(worktree); !os.IsNotExist(err) {
+		t.Fatalf("expected worktree removal, err=%v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "README.md")); err != nil {
+		t.Fatalf("repository checkout was damaged: %v", err)
+	}
+	list := runGitCommand(t, td, "-C", filepath.Join(realBase, "repo"), "worktree", "list", "--porcelain")
+	for _, line := range strings.Split(list, "\n") {
+		if strings.HasPrefix(line, "worktree ") && strings.HasSuffix(strings.TrimSpace(line), string(filepath.Separator)+"worktree") {
+			t.Fatalf("worktree registration remained:\n%s", list)
+		}
+	}
+}
+
 func TestRemoveWorktreeRejectsUnownedPath(t *testing.T) {
 	td := t.TempDir()
 	repo := filepath.Join(td, "repo")

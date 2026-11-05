@@ -92,4 +92,4 @@ jobs:
           cache: true
 
       - name: Test supported-platform process and TUI behavior
-        run: go test -p 4 -count=1 -timeout 20m ./internal/deepreview/ -run 'TestRunCommand|TestTUI|TestCheckPush|TestCloneOrFetch|TestInterrupt|TestTerminate'
+        run: go test -p 4 -count=1 -timeout 20m ./internal/deepreview/ -run 'TestRunCommand|TestTUI|TestCheckPush|TestCloneOrFetch|TestInterrupt|TestTerminate|TestRemoveWorktree'
