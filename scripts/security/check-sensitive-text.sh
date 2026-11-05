@@ -19,47 +19,75 @@ email_regex='[A-Za-z0-9._%+-]+@([A-Za-z0-9-]+\.)+[A-Za-z]{2,}'
 allowed_placeholder_email_regex='@([A-Za-z0-9._%+-]+\.)?example\.(com|org|net)([^A-Za-z0-9]|$)'
 known_token_regex='((ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{16}|sk(-[A-Za-z0-9]+)?-[A-Za-z0-9]{20,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|xox[baprs]-[A-Za-z0-9-]{10,})'
 
-search_pattern() {
-  local pattern="$1"
-  local file_path="$2"
+collect_findings() {
+  local rule_id="$1"
+  local pattern="$2"
+  local allow_pattern="$3"
+  local file_path="$4"
+  local status=0
+  local output=""
   if command -v rg >/dev/null 2>&1; then
-    rg --line-number --only-matching --no-heading --color never -e "$pattern" "$file_path" || true
+    output="$(rg --no-filename --line-number --only-matching --no-heading --color never -e "$pattern" -- "$file_path")" || status=$?
   else
-    grep -nEo "$pattern" "$file_path" || true
+    output="$(grep -nEo "$pattern" -- "$file_path")" || status=$?
   fi
+  if [[ "$status" -eq 1 ]]; then
+    return 0
+  fi
+  if [[ "$status" -ne 0 ]]; then
+    echo "sensitive-text search failed: ${rule_id} ${file_path}" >&2
+    return 1
+  fi
+
+  local match_line line_no match
+  while IFS= read -r match_line; do
+    [[ -z "$match_line" ]] && continue
+    line_no="${match_line%%:*}"
+    match="${match_line#*:}"
+    if [[ ! "$line_no" =~ ^[0-9]+$ ]]; then
+      echo "sensitive-text search returned an unexpected record: ${rule_id} ${file_path}" >&2
+      return 1
+    fi
+    if [[ -n "$allow_pattern" ]] && printf '%s\n' "$match" | grep -Eq "$allow_pattern"; then
+      continue
+    fi
+    printf '%s %s:%s\n' "$rule_id" "$file_path" "$line_no"
+  done <<<"$output"
 }
 
-exclude_pattern() {
-  local pattern="$1"
-  if command -v rg >/dev/null 2>&1; then
-    rg --invert-match --ignore-case --no-heading -e "$pattern" || true
-  else
-    grep -viE "$pattern" || true
+record_rule() {
+  local status=0
+  local result=""
+  result="$(collect_findings "$1" "$2" "$3" "$4")" || status=$?
+  if [[ "$status" -ne 0 ]]; then
+    search_failed=1
+    return 0
   fi
+  findings+="${result}"$'\n'
 }
 
 failed=0
 for target in "$@"; do
-  if [[ ! -f "$target" ]]; then
+  if [[ ! -f "$target" || ! -r "$target" ]]; then
+    echo "sensitive-text input unavailable: ${target}" >&2
+    failed=1
     continue
   fi
 
-  path_matches="$(search_pattern "$local_path_regex" "$target")"
-  if [[ -n "$path_matches" ]]; then
-    path_matches="$(printf '%s\n' "$path_matches" | exclude_pattern "$allowed_path_placeholder_regex")"
-  fi
+  findings=""
+  search_failed=0
+  record_rule local-path "$local_path_regex" "$allowed_path_placeholder_regex" "$target"
+  record_rule local-email "$email_regex" "$allowed_placeholder_email_regex" "$target"
+  record_rule secret-assignment "$secret_assignment_regex" "" "$target"
+  record_rule known-token "$known_token_regex" "" "$target"
 
-  secret_assignment_matches="$(search_pattern "$secret_assignment_regex" "$target")"
-  email_matches="$(search_pattern "$email_regex" "$target")"
-  if [[ -n "$email_matches" ]]; then
-    email_matches="$(printf '%s\n' "$email_matches" | exclude_pattern "$allowed_placeholder_email_regex")"
+  if [[ "$search_failed" -ne 0 ]]; then
+    failed=1
   fi
-  known_token_matches="$(search_pattern "$known_token_regex" "$target")"
-
-  matches="$(printf '%s\n%s\n%s\n%s\n' "$path_matches" "$email_matches" "$secret_assignment_matches" "$known_token_matches" | sed '/^$/d' | sort -u)"
-  if [[ -n "$matches" ]]; then
+  findings="$(printf '%s\n' "$findings" | sed '/^$/d' | sort -u)"
+  if [[ -n "$findings" ]]; then
     echo "policy violation in ${context}: ${target}" >&2
-    echo "$matches" >&2
+    printf '%s\n' "$findings" >&2
     failed=1
   fi
 done

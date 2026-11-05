@@ -161,8 +161,11 @@ func TestCheckSensitiveTextRejectsMixedPlaceholderAndSensitiveEmailOnSameLine(t 
 	if !strings.Contains(output, "policy violation in direct-text") {
 		t.Fatalf("expected direct-text policy violation, got:\n%s", output)
 	}
-	if !strings.Contains(output, sensitiveEmailFixture()) {
-		t.Fatalf("expected disallowed email to remain visible in output, got:\n%s", output)
+	if strings.Contains(output, sensitiveEmailFixture()) {
+		t.Fatalf("expected disallowed email to stay out of the output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "local-email ") || !strings.Contains(output, "mixed.txt:1") {
+		t.Fatalf("expected rule, file, and line, got:\n%s", output)
 	}
 }
 
@@ -174,8 +177,11 @@ func TestCheckSensitiveTextRejectsMixedPlaceholderAndSensitivePathOnSameLine(t *
 	if !strings.Contains(output, "policy violation in direct-text") {
 		t.Fatalf("expected direct-text policy violation, got:\n%s", output)
 	}
-	if !strings.Contains(output, sensitiveLocalPathUserPrefix()) {
-		t.Fatalf("expected sensitive path token to remain visible in output, got:\n%s", output)
+	if strings.Contains(output, sensitiveLocalPathUserPrefix()) {
+		t.Fatalf("expected sensitive path to stay out of the output, got:\n%s", output)
+	}
+	if !strings.Contains(output, "local-path ") || !strings.Contains(output, "mixed.txt:1") {
+		t.Fatalf("expected rule, file, and line, got:\n%s", output)
 	}
 }
 
@@ -185,14 +191,67 @@ func TestCheckSensitiveTextRejectsSensitiveTextWithoutRipgrep(t *testing.T) {
 		"contact "+sensitiveEmailFixture()+" token "+buildSensitiveToken("sk-admin-")+"\n")
 
 	output := runSensitiveTextScriptExpectFailureWithEnv(t, repo, target, []string{"PATH=/usr/bin:/bin"})
-	if !strings.Contains(output, sensitiveEmailFixture()) {
-		t.Fatalf("expected disallowed email in grep fallback output, got:\n%s", output)
+	if strings.Contains(output, sensitiveEmailFixture()) || strings.Contains(output, "sk-admin-") {
+		t.Fatalf("expected sensitive values to stay out of the grep fallback output, got:\n%s", output)
 	}
-	if !strings.Contains(output, "sk-admin-") {
-		t.Fatalf("expected disallowed token in grep fallback output, got:\n%s", output)
+	if !strings.Contains(output, "local-email ") || !strings.Contains(output, "known-token ") || !strings.Contains(output, "sensitive.txt:1") {
+		t.Fatalf("expected rule, file, and line from the grep fallback, got:\n%s", output)
 	}
 	if strings.Contains(output, "warning:") {
 		t.Fatalf("expected grep-compatible expressions, got:\n%s", output)
+	}
+}
+
+func TestCheckSensitiveTextRejectsMissingInput(t *testing.T) {
+	repo := initSecurityScriptRepo(t)
+	target := filepath.Join(repo, "missing.txt")
+
+	output := runSensitiveTextScriptExpectFailure(t, repo, target)
+	if !strings.Contains(output, "sensitive-text input unavailable: "+target) {
+		t.Fatalf("expected missing input to fail closed, got:\n%s", output)
+	}
+	if strings.Contains(output, "policy violation in direct-text") {
+		t.Fatalf("expected no content scan for a missing input, got:\n%s", output)
+	}
+}
+
+func TestCheckSensitiveTextRejectsUnreadableInput(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can read a mode 000 file")
+	}
+	repo := initSecurityScriptRepo(t)
+	target := writeRepoFile(t, repo, "secret.txt", "token "+buildSensitiveToken("sk-admin-")+"\n")
+	if err := os.Chmod(target, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chmod(target, 0o644)
+	})
+
+	output := runSensitiveTextScriptExpectFailure(t, repo, target)
+	if !strings.Contains(output, "sensitive-text input unavailable: "+target) {
+		t.Fatalf("expected unreadable input to fail closed, got:\n%s", output)
+	}
+	if strings.Contains(output, "sk-admin-") {
+		t.Fatalf("expected token to stay out of the output, got:\n%s", output)
+	}
+}
+
+func TestCheckSensitiveTextRejectsSearchCommandFailure(t *testing.T) {
+	repo := initSecurityScriptRepo(t)
+	target := writeRepoFile(t, repo, "sensitive.txt", "token "+buildSensitiveToken("sk-admin-")+"\n")
+	binDir := t.TempDir()
+	fakeRG := filepath.Join(binDir, "rg")
+	if err := os.WriteFile(fakeRG, []byte("#!/bin/sh\nexit 2\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	output := runSensitiveTextScriptExpectFailureWithEnv(t, repo, target, []string{"PATH=" + binDir + ":/usr/bin:/bin"})
+	if !strings.Contains(output, "sensitive-text search failed: ") {
+		t.Fatalf("expected search failure to fail closed, got:\n%s", output)
+	}
+	if strings.Contains(output, "sk-admin-") {
+		t.Fatalf("expected token to stay out of the search-failure output, got:\n%s", output)
 	}
 }
 
@@ -358,7 +417,7 @@ func sensitiveLocalPathUserPrefix() string {
 }
 
 func sensitiveEmailFixture() string {
-	return strings.Join([]string{"alice", "corp.com"}, "@")
+	return strings.Join([]string{"alice", "corp.invalid"}, "@")
 }
 
 func sensitiveDriveLetterPathFixture() string {
