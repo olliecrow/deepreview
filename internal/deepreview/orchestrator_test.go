@@ -1,6 +1,7 @@
 package deepreview
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -1560,5 +1561,71 @@ func TestEvaluateRoundLoopControlCleanStopTerminates(t *testing.T) {
 	}
 	if !strings.Contains(control.message, "no repository changes") {
 		t.Fatalf("expected clean-stop message, got %q", control.message)
+	}
+}
+
+func TestPromptRetryKeepsDistinctAttemptLogs(t *testing.T) {
+	fakeBin := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "stalled")
+	writeExecutable(t, filepath.Join(fakeBin, "codex"), `#!/bin/sh
+set -eu
+cat >/dev/null
+if [ ! -f "$STALL_MARKER" ]; then
+  : > "$STALL_MARKER"
+  printf '%s\n' '{"type":"thread.started","thread_id":"thread-stall"}'
+  exec /bin/sleep 5
+fi
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-ok"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}'
+`)
+	writeExecutable(t, filepath.Join(fakeBin, "multicodex"), "#!/bin/sh\nset -eu\ncmd=\"$1\"\nshift\ncase \"$cmd\" in\n  exec) exec codex exec \"$@\" ;;\n  *) echo unexpected >&2; exit 1 ;;\nesac\n")
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("STALL_MARKER", marker)
+	logPrefix := filepath.Join(t.TempDir(), "logs", "codex")
+	o := &Orchestrator{
+		config: ReviewConfig{
+			ReviewInactivity:   300 * time.Millisecond,
+			ReviewActivityPoll: 50 * time.Millisecond,
+			ReviewMaxRestarts:  1,
+			CodexBin:           "codex",
+		},
+		codexRunner: CodexRunner{CodexBin: "codex", Timeout: 8 * time.Second},
+	}
+	result, restarts, err := o.runPromptWithWatchdog(
+		context.Background(),
+		monitoredPromptRequest{
+			label:     "prompt",
+			cwd:       t.TempDir(),
+			prompt:    "hello",
+			logPrefix: logPrefix,
+			monitoredPaths: []string{
+				logPrefix + ".stdout.jsonl",
+				logPrefix + ".stderr.log",
+			},
+		},
+		monitoredPromptCallbacks{},
+	)
+	if err != nil {
+		t.Fatalf("watchdog retry failed: %v", err)
+	}
+	if restarts != 1 {
+		t.Fatalf("restarts = %d", restarts)
+	}
+	if result.ThreadID != "thread-ok" {
+		t.Fatalf("thread id = %q", result.ThreadID)
+	}
+	first, err := os.ReadFile(logPrefix + ".stdout.jsonl")
+	if err != nil {
+		t.Fatalf("read first attempt log: %v", err)
+	}
+	if !strings.Contains(string(first), "thread-stall") || strings.Contains(string(first), "thread-ok") {
+		t.Fatalf("first attempt log = %q", first)
+	}
+	second, err := os.ReadFile(logPrefix + ".attempt-2.stdout.jsonl")
+	if err != nil {
+		t.Fatalf("read second attempt log: %v", err)
+	}
+	if !strings.Contains(string(second), "thread-ok") {
+		t.Fatalf("second attempt log = %q", second)
 	}
 }

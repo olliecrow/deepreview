@@ -43,7 +43,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - each review worker starts in a fresh isolated context and writes one canonical review artifact
 - when source branch equals default branch, treat branch diff as orientation only and run independent review as a current-state repository audit
 - require all review workers to complete successfully and emit one markdown review artifact each
-- monitor worker activity (stdout/stderr + filesystem/git-change evidence); cancel and restart inactive workers with bounded retries
+- monitor worker activity (stdout/stderr + filesystem/git-change evidence); cancel and restart inactive workers with bounded retries, keeping a separate Codex log for each attempt
 - collect report artifacts needed for execute prompts by copying worker-written review files from worktree-local paths into the canonical run directory
 - pass execute prompt 1 review artifact paths plus a compact manifest; let Codex open full review files directly instead of injecting large review-summary blocks
 - aggressively remove independent-review worktrees; review-stage teardown waits for worker goroutines and active command shutdown before removing worktrees so interrupt cleanup does not leave transient review worktrees behind

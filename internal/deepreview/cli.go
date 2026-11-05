@@ -521,6 +521,8 @@ func runReviewCommand(args []string) int {
 
 	runCtx, cancelRun := context.WithCancel(context.Background())
 	defer cancelRun()
+	commandSession := newProcessSession()
+	runCtx = contextWithProcessSession(runCtx, commandSession)
 	restoreCommandContext := setRunCommandContext(runCtx)
 	defer restoreCommandContext()
 
@@ -529,6 +531,7 @@ func runReviewCommand(args []string) int {
 	requestCancel := func() {
 		cancelOnce.Do(func() {
 			cancelRun()
+			commandSession.terminateProcesses()
 			terminateActiveCommands()
 		})
 	}
@@ -610,6 +613,7 @@ func runReviewCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
+	orchestrator.commandCtx = runCtx
 
 	if enableTUI {
 		err = RunTUIWithWorker(state, termWidth, termHeight, requestCancel, func() error { return orchestrator.Run() })

@@ -21,6 +21,83 @@ type CommandStreamCallbacks struct {
 	OnStderrChunk func(chunk []byte)
 }
 
+const (
+	commandWaitDelay           = 2 * time.Second
+	commandDiagnosticTailBytes = 256 << 10
+)
+
+type processSession struct {
+	mu   sync.Mutex
+	pids map[int]struct{}
+}
+
+type processSessionKey struct{}
+
+func newProcessSession() *processSession {
+	return &processSession{pids: map[int]struct{}{}}
+}
+
+func contextWithProcessSession(ctx context.Context, session *processSession) context.Context {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	if session == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, processSessionKey{}, session)
+}
+
+func processSessionFromContext(ctx context.Context) *processSession {
+	if ctx == nil {
+		return nil
+	}
+	session, _ := ctx.Value(processSessionKey{}).(*processSession)
+	return session
+}
+
+func (s *processSession) register(cmd *exec.Cmd) {
+	if s == nil || cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return
+	}
+	s.mu.Lock()
+	s.pids[cmd.Process.Pid] = struct{}{}
+	s.mu.Unlock()
+}
+
+func (s *processSession) unregister(cmd *exec.Cmd) {
+	if s == nil || cmd == nil || cmd.Process == nil || cmd.Process.Pid <= 0 {
+		return
+	}
+	s.mu.Lock()
+	delete(s.pids, cmd.Process.Pid)
+	s.mu.Unlock()
+}
+
+func (s *processSession) terminateProcesses() {
+	if s == nil {
+		return
+	}
+	s.mu.Lock()
+	pids := make([]int, 0, len(s.pids))
+	for pid := range s.pids {
+		pids = append(pids, pid)
+	}
+	s.mu.Unlock()
+	for _, pid := range pids {
+		terminateActiveProcessByPID(pid)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		s.mu.Lock()
+		activeCount := len(s.pids)
+		s.mu.Unlock()
+		if activeCount == 0 {
+			return
+		}
+		time.Sleep(25 * time.Millisecond)
+	}
+}
+
 var (
 	runCommandContextMu sync.RWMutex
 	runCommandContext   context.Context
@@ -110,7 +187,7 @@ func runCommandInvocation(
 		return CompletedProcess{}, commandContextError(err, command, timeout, CompletedProcess{})
 	}
 
-	cmd := exec.Command(command[0], command[1:]...)
+	cmd := exec.CommandContext(ctx, command[0], command[1:]...)
 	configureCommandForManagedCancellation(cmd)
 	if cwd != "" {
 		cmd.Dir = cwd
@@ -122,10 +199,9 @@ func runCommandInvocation(
 		cmd.Stdin = strings.NewReader(input)
 	}
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	stdoutWriter := &streamCaptureWriter{buffer: &stdout}
-	stderrWriter := &streamCaptureWriter{buffer: &stderr}
+	retainFull := callbacks == nil
+	stdoutWriter := newStreamCaptureWriter(retainFull)
+	stderrWriter := newStreamCaptureWriter(retainFull)
 	if callbacks != nil {
 		stdoutWriter.onChunk = callbacks.OnStdoutChunk
 		stderrWriter.onChunk = callbacks.OnStderrChunk
@@ -134,45 +210,34 @@ func runCommandInvocation(
 	cmd.Stderr = stderrWriter
 
 	if err := cmd.Start(); err != nil {
+		if ctx.Err() != nil {
+			return CompletedProcess{}, commandContextError(ctx.Err(), command, timeout, CompletedProcess{})
+		}
 		return CompletedProcess{}, err
 	}
-	registerActiveCommand(cmd)
-	defer unregisterActiveCommand(cmd)
-
-	waitCh := make(chan error, 1)
-	go func() {
-		waitCh <- cmd.Wait()
-	}()
-
-	var waitErr error
-	select {
-	case waitErr = <-waitCh:
-	case <-ctx.Done():
-		terminateCommandProcessTree(cmd)
-		waitErr = <-waitCh
+	if session := processSessionFromContext(ctx); session != nil {
+		session.register(cmd)
+		defer session.unregister(cmd)
+	} else {
+		registerActiveCommand(cmd)
+		defer unregisterActiveCommand(cmd)
 	}
+
+	waitErr := cmd.Wait()
 	code := 0
 	if cmd.ProcessState != nil {
 		code = cmd.ProcessState.ExitCode()
 	}
-
 	completed := CompletedProcess{
-		Stdout:     stdout.String(),
-		Stderr:     stderr.String(),
+		Stdout:     stdoutWriter.String(),
+		Stderr:     stderrWriter.String(),
 		ReturnCode: code,
 	}
-
-	if waitErr == nil {
+	if ctx.Err() != nil {
+		return completed, commandContextError(ctx.Err(), command, timeout, completed)
+	}
+	if waitErr == nil || (errors.Is(waitErr, exec.ErrWaitDelay) && cmd.ProcessState != nil && cmd.ProcessState.Success()) {
 		return completed, nil
-	}
-
-	timedOut := timeout > 0 && ctx.Err() == context.DeadlineExceeded
-	cancelled := errors.Is(ctx.Err(), context.Canceled)
-	if timedOut {
-		return completed, commandContextError(context.DeadlineExceeded, command, timeout, completed)
-	}
-	if cancelled {
-		return completed, commandContextError(context.Canceled, command, timeout, completed)
 	}
 
 	if check {
@@ -191,19 +256,77 @@ func runCommandInvocation(
 }
 
 type streamCaptureWriter struct {
-	buffer  *bytes.Buffer
-	onChunk func(chunk []byte)
+	retainFull bool
+	buffer     *bytes.Buffer
+	tail       *tailBuffer
+	onChunk    func(chunk []byte)
+}
+
+func newStreamCaptureWriter(retainFull bool) *streamCaptureWriter {
+	writer := &streamCaptureWriter{retainFull: retainFull}
+	if retainFull {
+		writer.buffer = &bytes.Buffer{}
+	} else {
+		writer.tail = &tailBuffer{max: commandDiagnosticTailBytes}
+	}
+	return writer
 }
 
 func (w *streamCaptureWriter) Write(p []byte) (int, error) {
-	if w == nil || w.buffer == nil {
+	if w == nil {
 		return len(p), nil
 	}
-	n, err := w.buffer.Write(p)
-	if n > 0 && w.onChunk != nil {
-		w.onChunk(p[:n])
+	if w.retainFull {
+		if w.buffer != nil {
+			_, _ = w.buffer.Write(p)
+		}
+	} else if w.tail != nil {
+		w.tail.Write(p)
 	}
-	return n, err
+	if len(p) > 0 && w.onChunk != nil {
+		w.onChunk(p)
+	}
+	return len(p), nil
+}
+
+func (w *streamCaptureWriter) String() string {
+	if w == nil {
+		return ""
+	}
+	if w.retainFull && w.buffer != nil {
+		return w.buffer.String()
+	}
+	if w.tail != nil {
+		return w.tail.String()
+	}
+	return ""
+}
+
+type tailBuffer struct {
+	max int
+	buf []byte
+}
+
+func (t *tailBuffer) Write(p []byte) {
+	if t == nil || t.max <= 0 || len(p) == 0 {
+		return
+	}
+	if len(p) >= t.max {
+		t.buf = append(t.buf[:0], p[len(p)-t.max:]...)
+		return
+	}
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > t.max {
+		overflow := len(t.buf) - t.max
+		t.buf = append([]byte(nil), t.buf[overflow:]...)
+	}
+}
+
+func (t *tailBuffer) String() string {
+	if t == nil {
+		return ""
+	}
+	return string(t.buf)
 }
 
 func registerActiveCommand(cmd *exec.Cmd) {

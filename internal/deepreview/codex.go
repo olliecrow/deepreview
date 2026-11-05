@@ -1,8 +1,10 @@
 package deepreview
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,6 +15,11 @@ import (
 
 const envRequireMulticodex = "DEEPREVIEW_REQUIRE_MULTICODEX"
 const envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
+const maxCodexEventBytes = 1 << 20
+
+var openPromptLogFile = func(path string) (io.WriteCloser, error) {
+	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+}
 
 type CodexRunner struct {
 	CodexBin string
@@ -114,6 +121,8 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 	if hooks != nil && hooks.Context != nil {
 		parentCtx = hooks.Context
 	}
+	runCtx, cancelRun := context.WithCancel(parentCtx)
+	defer cancelRun()
 	launcher, err := c.resolveLauncherForContext(ctx)
 	if err != nil {
 		return CodexRunResult{}, err
@@ -126,17 +135,21 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 	if err := os.MkdirAll(filepath.Dir(stdoutPath), 0o755); err != nil {
 		return CodexRunResult{}, err
 	}
-	stdoutFile, err := os.Create(stdoutPath)
+	stdoutFile, err := openPromptLogFile(stdoutPath)
 	if err != nil {
 		return CodexRunResult{}, err
 	}
 	defer stdoutFile.Close()
-	stderrFile, err := os.Create(stderrPath)
+	stderrFile, err := openPromptLogFile(stderrPath)
 	if err != nil {
 		return CodexRunResult{}, err
 	}
 	defer stderrFile.Close()
 
+	parser := &codexEventParser{}
+	if ctx != nil {
+		parser.threadID = ctx.ThreadID
+	}
 	var streamMu sync.Mutex
 	var streamErr error
 	setStreamErr := func(err error) {
@@ -148,24 +161,40 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 			streamErr = err
 		}
 		streamMu.Unlock()
+		cancelRun()
+	}
+	writeStream := func(file io.Writer, chunk []byte) error {
+		if len(chunk) == 0 {
+			return nil
+		}
+		_, err := file.Write(chunk)
+		if err != nil {
+			return NewDeepReviewError("codex log write failed: %v", err)
+		}
+		return nil
 	}
 	streamCallbacks := &CommandStreamCallbacks{
 		OnStdoutChunk: func(chunk []byte) {
+			copied := append([]byte(nil), chunk...)
 			streamMu.Lock()
-			_, err := stdoutFile.Write(chunk)
+			err := writeStream(stdoutFile, copied)
+			if err == nil {
+				err = parser.push(copied)
+			}
 			streamMu.Unlock()
 			setStreamErr(err)
 			if hooks != nil && hooks.OnStdoutChunk != nil {
-				hooks.OnStdoutChunk(chunk)
+				hooks.OnStdoutChunk(copied)
 			}
 		},
 		OnStderrChunk: func(chunk []byte) {
+			copied := append([]byte(nil), chunk...)
 			streamMu.Lock()
-			_, err := stderrFile.Write(chunk)
+			err := writeStream(stderrFile, copied)
 			streamMu.Unlock()
 			setStreamErr(err)
 			if hooks != nil && hooks.OnStderrChunk != nil {
-				hooks.OnStderrChunk(chunk)
+				hooks.OnStderrChunk(copied)
 			}
 		},
 	}
@@ -173,67 +202,35 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 	if launcher.Display == "multicodex" && (ctx == nil || strings.TrimSpace(ctx.MulticodexProfile) == "") {
 		commandEnv = withEnvOverride(commandEnv, envMulticodexSelectedProfilePath, selectedProfilePath)
 	}
-	completed, err := RunCommandContextWithEnvAndCallbacks(parentCtx, command, cwd, commandEnv, prompt, true, c.Timeout, streamCallbacks)
-	if err != nil {
-		return CodexRunResult{}, err
-	}
+	completed, err := RunCommandContextWithEnvAndCallbacks(runCtx, command, cwd, commandEnv, prompt, true, c.Timeout, streamCallbacks)
 	streamMu.Lock()
+	if streamErr == nil {
+		streamErr = parser.finish()
+	}
 	capturedStreamErr := streamErr
+	threadID := parser.threadID
+	agentMessages := append([]string(nil), parser.messages...)
 	streamMu.Unlock()
 	if capturedStreamErr != nil {
 		return CodexRunResult{}, capturedStreamErr
 	}
-
-	discoveredThreadID := ""
-	if ctx != nil {
-		discoveredThreadID = ctx.ThreadID
+	if err != nil {
+		return CodexRunResult{}, err
 	}
+
 	discoveredProfile := ""
 	if ctx != nil {
 		discoveredProfile = strings.TrimSpace(ctx.MulticodexProfile)
 	}
-	agentMessages := make([]string, 0)
 	if launcher.Display == "multicodex" && discoveredProfile == "" {
 		discoveredProfile = readSelectedMulticodexProfile(selectedProfilePath)
 	}
-
-	for _, raw := range strings.Split(completed.Stdout, "\n") {
-		line := strings.TrimSpace(raw)
-		if line == "" {
-			continue
-		}
-		var event map[string]any
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			return CodexRunResult{}, NewDeepReviewError("failed parsing codex event json: %v", err)
-		}
-
-		eventType, _ := event["type"].(string)
-		if eventType == "thread.started" {
-			if tid, ok := event["thread_id"].(string); ok && tid != "" {
-				discoveredThreadID = tid
-			}
-		}
-		if eventType == "item.completed" {
-			item, ok := event["item"].(map[string]any)
-			if !ok {
-				continue
-			}
-			itype, _ := item["type"].(string)
-			if itype != "agent_message" {
-				continue
-			}
-			if text, ok := item["text"].(string); ok && text != "" {
-				agentMessages = append(agentMessages, text)
-			}
-		}
-	}
-
-	if discoveredThreadID == "" {
+	if threadID == "" {
 		return CodexRunResult{}, NewDeepReviewError("codex run did not emit a thread id")
 	}
 
 	return CodexRunResult{
-		ThreadID:          discoveredThreadID,
+		ThreadID:          threadID,
 		MulticodexProfile: discoveredProfile,
 		UsedMulticodex:    launcher.Display == "multicodex",
 		AgentMessages:     agentMessages,
@@ -259,6 +256,85 @@ func withEnvOverride(base []string, key, value string) []string {
 		env = append(env, prefix+value)
 	}
 	return env
+}
+
+type codexEventParser struct {
+	pending  []byte
+	threadID string
+	messages []string
+}
+
+func (p *codexEventParser) push(chunk []byte) error {
+	if len(chunk) == 0 {
+		return nil
+	}
+	p.pending = append(p.pending, chunk...)
+	for {
+		idx := bytes.IndexByte(p.pending, '\n')
+		if idx < 0 {
+			if len(p.pending) > maxCodexEventBytes {
+				p.pending = nil
+				return NewDeepReviewError("codex event exceeds %d bytes", maxCodexEventBytes)
+			}
+			return nil
+		}
+		line := p.pending[:idx]
+		p.pending = append([]byte(nil), p.pending[idx+1:]...)
+		if len(line) > maxCodexEventBytes {
+			return NewDeepReviewError("codex event exceeds %d bytes", maxCodexEventBytes)
+		}
+		if err := p.consumeLine(line); err != nil {
+			return err
+		}
+	}
+}
+
+func (p *codexEventParser) finish() error {
+	if len(bytes.TrimSpace(p.pending)) == 0 {
+		p.pending = nil
+		return nil
+	}
+	if len(p.pending) > maxCodexEventBytes {
+		p.pending = nil
+		return NewDeepReviewError("codex event exceeds %d bytes", maxCodexEventBytes)
+	}
+	line := p.pending
+	p.pending = nil
+	return p.consumeLine(line)
+}
+
+func (p *codexEventParser) consumeLine(line []byte) error {
+	trimmed := bytes.TrimSpace(line)
+	if len(trimmed) == 0 {
+		return nil
+	}
+	var event map[string]any
+	if err := json.Unmarshal(trimmed, &event); err != nil {
+		return NewDeepReviewError("failed parsing codex event json: %v", err)
+	}
+	eventType, _ := event["type"].(string)
+	if eventType == "thread.started" {
+		if tid, ok := event["thread_id"].(string); ok && tid != "" {
+			p.threadID = tid
+		}
+	}
+	if eventType != "item.completed" {
+		return nil
+	}
+	item, ok := event["item"].(map[string]any)
+	if !ok {
+		return nil
+	}
+	itemType, _ := item["type"].(string)
+	if itemType != "agent_message" {
+		return nil
+	}
+	text, _ := item["text"].(string)
+	if text == "" {
+		return nil
+	}
+	p.messages = append(p.messages, text)
+	return nil
 }
 
 func readSelectedMulticodexProfile(path string) string {

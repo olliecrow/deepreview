@@ -3,6 +3,8 @@
 package deepreview
 
 import (
+	"errors"
+	"os"
 	"os/exec"
 	"syscall"
 )
@@ -12,23 +14,34 @@ func configureCommandForManagedCancellation(cmd *exec.Cmd) {
 		return
 	}
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.WaitDelay = commandWaitDelay
+	cmd.Cancel = func() error {
+		return terminateCommandProcessTree(cmd)
+	}
 }
 
-func terminateCommandProcessTree(cmd *exec.Cmd) {
+func terminateCommandProcessTree(cmd *exec.Cmd) error {
 	if cmd == nil || cmd.Process == nil {
-		return
+		return os.ErrProcessDone
 	}
-	terminatePIDTree(cmd.Process.Pid)
+	return terminatePIDTree(cmd.Process.Pid)
 }
 
 func terminateActiveProcessByPID(pid int) {
-	terminatePIDTree(pid)
+	_ = terminatePIDTree(pid)
 }
 
-func terminatePIDTree(pid int) {
+func terminatePIDTree(pid int) error {
 	if pid <= 0 {
-		return
+		return os.ErrProcessDone
 	}
 	_ = syscall.Kill(-pid, syscall.SIGKILL)
-	_ = syscall.Kill(pid, syscall.SIGKILL)
+	err := syscall.Kill(pid, syscall.SIGKILL)
+	if err == nil {
+		return nil
+	}
+	if errors.Is(err, syscall.ESRCH) {
+		return os.ErrProcessDone
+	}
+	return err
 }

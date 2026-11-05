@@ -1,8 +1,10 @@
 package deepreview
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -342,6 +344,148 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
 	if !strings.Contains(log, "arg[0]=exec") || !strings.Contains(log, "arg[1]=resume") || !strings.Contains(log, "arg[2]=thread-123") {
 		t.Fatalf("expected pinned resume invocation, got %q", log)
 	}
+}
+
+func TestCodexEventParserSplitsChunksAndRejectsBadEvents(t *testing.T) {
+	parser := &codexEventParser{}
+	parts := []string{
+		`{"type":"thr`,
+		`ead.started","thread_id":"thread-split"}` + "\n",
+		`{"type":"item.completed","item":{"type":"agent_message","text":"hel`,
+		`lo"}}` + "\n",
+	}
+	for _, part := range parts {
+		if err := parser.push([]byte(part)); err != nil {
+			t.Fatalf("push %q: %v", part, err)
+		}
+	}
+	if err := parser.finish(); err != nil {
+		t.Fatalf("finish: %v", err)
+	}
+	if parser.threadID != "thread-split" {
+		t.Fatalf("thread id = %q", parser.threadID)
+	}
+	if len(parser.messages) != 1 || parser.messages[0] != "hello" {
+		t.Fatalf("messages = %#v", parser.messages)
+	}
+
+	malformed := &codexEventParser{}
+	if err := malformed.push([]byte("{\"type\":\n")); err == nil || !strings.Contains(err.Error(), "failed parsing codex event json") {
+		t.Fatalf("malformed error = %v", err)
+	}
+
+	oversize := &codexEventParser{}
+	if err := oversize.push(bytes.Repeat([]byte("a"), maxCodexEventBytes+1)); err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("oversize error = %v", err)
+	}
+	if len(oversize.pending) > maxCodexEventBytes {
+		t.Fatalf("oversize parser retained %d bytes", len(oversize.pending))
+	}
+}
+
+func TestCodexRunPromptRejectsMalformedEventWithoutWaiting(t *testing.T) {
+	assertCodexPromptFailsFast(t, "#!/bin/sh\nset -eu\ncat >/dev/null\nprintf '%s\\n' '{\"type\":'\nexec /bin/sleep 30\n", "failed parsing codex event json")
+}
+
+func TestCodexRunPromptRejectsOversizeEventWithoutWaiting(t *testing.T) {
+	assertCodexPromptFailsFast(t, "#!/bin/sh\nset -eu\ncat >/dev/null\ndd if=/dev/zero bs=1024 count=1025 2>/dev/null | tr '\\0' a\nprintf '\\n'\nexec /bin/sleep 30\n", "exceeds")
+}
+
+func TestCodexRunPromptCancelsOnLogWriteFailure(t *testing.T) {
+	dir := t.TempDir()
+	pidFile := filepath.Join(dir, "codex.pid")
+	script := "#!/bin/sh\nset -eu\nprintf '%s\\n' \"$$\" > " + shellSingleQuote(pidFile) + "\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-x\"}'\nexec /bin/sleep 30\n"
+	original := openPromptLogFile
+	t.Cleanup(func() {
+		openPromptLogFile = original
+		killPIDFile(pidFile)
+	})
+	openPromptLogFile = func(path string) (io.WriteCloser, error) {
+		return failingLogWriter{}, nil
+	}
+	started := time.Now()
+	_, err := runFakeCodexPrompt(t, script)
+	if time.Since(started) > 5*time.Second {
+		t.Fatalf("log write failure returned in %s", time.Since(started))
+	}
+	if err == nil || !strings.Contains(err.Error(), "codex log write failed") {
+		t.Fatalf("error = %v", err)
+	}
+	pid := waitForPIDFile(t, pidFile)
+	assertPIDGone(t, pid)
+}
+
+func TestCodexRunPromptMultiMegabyteOutputRetainsTail(t *testing.T) {
+	script := `#!/bin/sh
+set -eu
+cat >/dev/null
+pad=$(dd if=/dev/zero bs=1500 count=1 2>/dev/null | tr '\0' x)
+i=0
+while [ "$i" -lt 3000 ]; do
+  printf '{"type":"progress","pad":"%s"}\n' "$pad"
+  i=$((i+1))
+done
+printf '%s\n' '{"type":"thread.started","thread_id":"thread-big"}'
+printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
+`
+	logDir := t.TempDir()
+	prefix := filepath.Join(logDir, "codex")
+	runner, _ := fakeCodexRunner(t, script)
+	result, err := runner.RunPrompt(t.TempDir(), "hello", nil, prefix)
+	if err != nil {
+		t.Fatalf("RunPrompt failed: %s", describeRunPromptError(err))
+	}
+	if result.ThreadID != "thread-big" {
+		t.Fatalf("thread id = %q", result.ThreadID)
+	}
+	if len(result.AgentMessages) != 1 || result.AgentMessages[0] != "done" {
+		t.Fatalf("messages = %#v", result.AgentMessages)
+	}
+	if len(result.Stdout) > commandDiagnosticTailBytes || len(result.Stderr) > commandDiagnosticTailBytes {
+		t.Fatalf("retained stdout=%d stderr=%d", len(result.Stdout), len(result.Stderr))
+	}
+	info, err := os.Stat(prefix + ".stdout.jsonl")
+	if err != nil {
+		t.Fatalf("stat log: %v", err)
+	}
+	if info.Size() <= int64(commandDiagnosticTailBytes) {
+		t.Fatalf("on-disk log is %d bytes", info.Size())
+	}
+}
+
+type failingLogWriter struct{}
+
+func (failingLogWriter) Write([]byte) (int, error) {
+	return 0, errors.New("disk full")
+}
+
+func (failingLogWriter) Close() error { return nil }
+
+func assertCodexPromptFailsFast(t *testing.T, script, want string) {
+	t.Helper()
+	started := time.Now()
+	_, err := runFakeCodexPrompt(t, script)
+	if time.Since(started) > 5*time.Second {
+		t.Fatalf("returned in %s", time.Since(started))
+	}
+	if err == nil || !strings.Contains(err.Error(), want) {
+		t.Fatalf("error = %v", err)
+	}
+}
+
+func runFakeCodexPrompt(t *testing.T, script string) (CodexRunResult, error) {
+	t.Helper()
+	runner, prefix := fakeCodexRunner(t, script)
+	return runner.RunPrompt(t.TempDir(), "hello", nil, prefix)
+}
+
+func fakeCodexRunner(t *testing.T, script string) (CodexRunner, string) {
+	t.Helper()
+	fakeBin := t.TempDir()
+	writeExecutable(t, filepath.Join(fakeBin, "codex"), script)
+	writeExecutable(t, filepath.Join(fakeBin, "multicodex"), "#!/bin/sh\nset -eu\ncmd=\"$1\"\nshift\ncase \"$cmd\" in\n  exec) exec codex exec \"$@\" ;;\n  *) echo unexpected >&2; exit 1 ;;\nesac\n")
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	return CodexRunner{CodexBin: "codex", Timeout: 20 * time.Second}, filepath.Join(t.TempDir(), "logs", "codex")
 }
 
 func writeExecutable(t *testing.T, path, content string) {

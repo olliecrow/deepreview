@@ -37,6 +37,7 @@ type Orchestrator struct {
 	runLockPath           string
 	commitIdentity        CommitIdentity
 	reviewedCandidateHead string
+	commandCtx            context.Context
 }
 
 type prDeliveryState struct {
@@ -394,9 +395,19 @@ func canonicalOwnerRepoSegments(owner, name string) (string, string, bool) {
 	return SanitizeSegment(trimmedOwner), SanitizeSegment(trimmedName), true
 }
 
+func (o *Orchestrator) commandContext() context.Context {
+	if o != nil && o.commandCtx != nil {
+		return o.commandCtx
+	}
+	return currentRunCommandContext()
+}
+
 func (o *Orchestrator) Run() (retErr error) {
 	if !o.config.TrustRepo {
 		return NewDeepReviewError("%s", repositoryTrustRequiredMessage)
+	}
+	if o.commandCtx == nil {
+		o.commandCtx = currentRunCommandContext()
 	}
 	if err := o.preflight(); err != nil {
 		return err
@@ -941,7 +952,10 @@ func (o *Orchestrator) runPromptWithWatchdog(
 	restarts := 0
 	currentRequest := request
 	for attempt := 1; attempt <= maxAttempts; attempt++ {
-		result, err := o.runPromptAttemptWithWatchdog(parent, currentRequest, policy, callbacks.onHeartbeat)
+		attemptRequest := currentRequest
+		attemptRequest.logPrefix = logPrefixForAttempt(request.logPrefix, attempt)
+		attemptRequest.monitoredPaths = retargetAttemptLogs(request.monitoredPaths, request.logPrefix, attemptRequest.logPrefix)
+		result, err := o.runPromptAttemptWithWatchdog(parent, attemptRequest, policy, callbacks.onHeartbeat)
 		if err == nil {
 			return result, restarts, nil
 		}
@@ -969,6 +983,35 @@ func (o *Orchestrator) runPromptWithWatchdog(
 		currentRequest = preparePromptRetryRequest(currentRequest)
 	}
 	return CodexRunResult{}, restarts, NewDeepReviewError("%s failed unexpectedly", currentRequest.label)
+}
+
+func logPrefixForAttempt(base string, attempt int) string {
+	if attempt <= 1 {
+		return base
+	}
+	return fmt.Sprintf("%s.attempt-%d", base, attempt)
+}
+
+func retargetAttemptLogs(paths []string, base, next string) []string {
+	if base == next {
+		return paths
+	}
+	oldStdout := base + ".stdout.jsonl"
+	oldStderr := base + ".stderr.log"
+	newStdout := next + ".stdout.jsonl"
+	newStderr := next + ".stderr.log"
+	retargeted := make([]string, len(paths))
+	for i, path := range paths {
+		switch path {
+		case oldStdout:
+			retargeted[i] = newStdout
+		case oldStderr:
+			retargeted[i] = newStderr
+		default:
+			retargeted[i] = path
+		}
+	}
+	return retargeted
 }
 
 func preparePromptRetryRequest(request monitoredPromptRequest) monitoredPromptRequest {
@@ -1224,9 +1267,13 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	}
 	o.reporter.StageProgress("independent review stage", policyMessage, roundPtr(round))
 
-	stageCtx, cancelStage := context.WithCancel(currentRunCommandContext())
+	parentCtx := o.commandContext()
+	stageCtx, cancelStage := context.WithCancel(parentCtx)
+	previousCommandCtx := o.commandCtx
+	o.commandCtx = stageCtx
 	restoreCommandContext := setRunCommandContext(stageCtx)
 	defer func() {
+		o.commandCtx = previousCommandCtx
 		restoreCommandContext()
 	}()
 
@@ -1732,7 +1779,7 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 ) (CodexRunResult, error) {
 	policy := o.promptWatchdogPolicy()
 	result, _, err := o.runPromptWithWatchdog(
-		currentRunCommandContext(),
+		o.commandContext(),
 		monitoredPromptRequest{
 			label:               stageName,
 			cwd:                 cwd,
@@ -2460,7 +2507,7 @@ func (o *Orchestrator) deliveryPushRangePolicyScanBetween(policyRef, baseRef, he
 		"PRE_COMMIT_TO_REF="+strings.TrimSpace(headRef),
 	)
 	completed, err := RunCommandContextWithEnvAndCallbacks(
-		currentRunCommandContext(),
+		o.commandContext(),
 		[]string{"bash", "scripts/security/check-push-range.sh"},
 		policyWorktree,
 		env,
