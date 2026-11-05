@@ -9,7 +9,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
+
+	"golang.org/x/sys/unix"
 )
 
 const maxArtifactBytes int64 = 8 << 20
@@ -38,7 +39,7 @@ func openArtifactRoot(root string) (*os.File, error) {
 	}
 	// O_NOFOLLOW applies to the final component. Callers pass a directory they
 	// created. Later components are opened from that directory fd.
-	fd, err := syscall.Open(cleaned, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+	fd, err := unix.Open(cleaned, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -72,14 +73,14 @@ func openFromRoot(root *os.File, rel string, finalFlags int) (*os.File, error) {
 		}
 	}()
 	for i, part := range parts {
-		flags := syscall.O_RDONLY | syscall.O_NOFOLLOW | syscall.O_CLOEXEC
+		flags := unix.O_RDONLY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 		last := i == len(parts)-1
 		if last {
 			flags |= finalFlags
 		} else {
-			flags |= syscall.O_DIRECTORY
+			flags |= unix.O_DIRECTORY
 		}
-		fd, err := syscall.Openat(int(current.Fd()), part, flags, 0)
+		fd, err := unix.Openat(int(current.Fd()), part, flags, 0)
 		if err != nil {
 			return nil, err
 		}
@@ -113,7 +114,7 @@ func readFileFromRoot(root, rel string) ([]byte, error) {
 		return nil, err
 	}
 	defer rootFile.Close()
-	file, err := openFromRoot(rootFile, rel, syscall.O_NONBLOCK)
+	file, err := openFromRoot(rootFile, rel, unix.O_NONBLOCK)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, NewDeepReviewError("file does not exist: %s", rel)
@@ -152,7 +153,7 @@ func writeFileAtomicFromRoot(root, rel string, data []byte, mode os.FileMode) er
 		}
 	}()
 	for _, part := range parts[:len(parts)-1] {
-		fd, err := syscall.Openat(int(parent.Fd()), part, syscall.O_RDONLY|syscall.O_DIRECTORY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, 0)
+		fd, err := unix.Openat(int(parent.Fd()), part, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return err
 		}
@@ -166,7 +167,7 @@ func writeFileAtomicFromRoot(root, rel string, data []byte, mode os.FileMode) er
 		return err
 	}
 	tmpName := ".dr-write-" + hex.EncodeToString(random[:])
-	fd, err := syscall.Openat(int(parent.Fd()), tmpName, syscall.O_CREAT|syscall.O_EXCL|syscall.O_WRONLY|syscall.O_NOFOLLOW|syscall.O_CLOEXEC, uint32(mode.Perm()))
+	fd, err := unix.Openat(int(parent.Fd()), tmpName, unix.O_CREAT|unix.O_EXCL|unix.O_WRONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, uint32(mode.Perm()))
 	if err != nil {
 		return err
 	}
@@ -175,7 +176,7 @@ func writeFileAtomicFromRoot(root, rel string, data []byte, mode os.FileMode) er
 	defer func() {
 		_ = tmp.Close()
 		if !renamed {
-			_ = syscall.Unlinkat(int(parent.Fd()), tmpName)
+			_ = unix.Unlinkat(int(parent.Fd()), tmpName, 0)
 		}
 	}()
 	if _, err := tmp.Write(data); err != nil {
@@ -184,7 +185,7 @@ func writeFileAtomicFromRoot(root, rel string, data []byte, mode os.FileMode) er
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	if err := syscall.Renameat(int(parent.Fd()), tmpName, int(parent.Fd()), base); err != nil {
+	if err := unix.Renameat(int(parent.Fd()), tmpName, int(parent.Fd()), base); err != nil {
 		return err
 	}
 	renamed = true
