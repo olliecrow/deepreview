@@ -2,7 +2,7 @@ package deepreview
 
 import (
 	"encoding/json"
-	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -20,25 +20,29 @@ type triageItem struct {
 }
 
 func validateReviewReport(path string) error {
-	body, err := os.ReadFile(path)
+	body, err := readFileFromRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return NewDeepReviewError("independent review report missing: %s", path)
 	}
-	text := strings.TrimSpace(string(body))
+	return validateReviewReportText(string(body))
+}
+
+func validateReviewReportText(text string) error {
+	text = strings.TrimSpace(text)
 	if text == "" {
-		return NewDeepReviewError("independent review report is empty: %s", path)
+		return NewDeepReviewError("independent review report is empty")
 	}
 	if !strings.Contains(text, "material_findings_found: yes") && !strings.Contains(text, "material_findings_found: no") {
-		return NewDeepReviewError("independent review report missing material_findings_found verdict: %s", path)
+		return NewDeepReviewError("independent review report missing material_findings_found verdict")
 	}
 	if !strings.Contains(text, "merge_readiness: ready") && !strings.Contains(text, "merge_readiness: needs_fixes") {
-		return NewDeepReviewError("independent review report missing merge_readiness verdict: %s", path)
+		return NewDeepReviewError("independent review report missing merge_readiness verdict")
 	}
 	return nil
 }
 
 func validateTriageDecisionFile(path string) error {
-	body, err := os.ReadFile(path)
+	body, err := readFileFromRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return NewDeepReviewError("triage decision missing: %s", path)
 	}
@@ -107,20 +111,25 @@ func triageIDPattern(id string) bool {
 	return id != "" && id != "." && id != ".."
 }
 
-func persistValidatedTriageAndPlan(triageSrc, triageDst, triageJSONSrc, triageJSONDst, planSrc, planDst string) error {
-	if err := ensureCanonicalArtifact(triageDst, []string{triageSrc}); err != nil {
-		return NewDeepReviewError("execute prompt 1 triage markdown missing")
+func persistValidatedTriageAndPlan(srcRoot, dstRoot string) error {
+	copies := []struct {
+		srcRel  string
+		dstRel  string
+		missing string
+	}{
+		{filepath.Join(".deepreview", "artifacts", "round-triage.md"), "round-triage.md", "execute prompt 1 triage markdown missing"},
+		{filepath.Join(".deepreview", "artifacts", "round-triage.json"), "round-triage.json", "execute prompt 1 triage decision missing"},
+		{filepath.Join(".deepreview", "artifacts", "round-plan.md"), "round-plan.md", "execute prompt 1 plan missing"},
 	}
-	if err := ensureCanonicalArtifact(triageJSONDst, []string{triageJSONSrc}); err != nil {
-		return NewDeepReviewError("execute prompt 1 triage decision missing")
+	for _, item := range copies {
+		if err := copyBoundedArtifact(dstRoot, item.dstRel, srcRoot, item.srcRel); err != nil {
+			return NewDeepReviewError("%s", item.missing)
+		}
 	}
-	if err := ensureCanonicalArtifact(planDst, []string{planSrc}); err != nil {
-		return NewDeepReviewError("execute prompt 1 plan missing")
-	}
-	if err := validateTriageDecisionFile(triageJSONDst); err != nil {
+	if err := validateTriageDecisionFile(filepath.Join(dstRoot, "round-triage.json")); err != nil {
 		return err
 	}
-	body, err := os.ReadFile(planDst)
+	body, err := readFileFromRoot(dstRoot, "round-plan.md")
 	if err != nil {
 		return err
 	}

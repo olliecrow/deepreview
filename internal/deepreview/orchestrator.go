@@ -68,6 +68,9 @@ type pullRequestMergeState struct {
 }
 
 func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestrator, error) {
+	if !validPathSegment(config.RunID) {
+		return nil, NewDeepReviewError("run id must be one safe path segment")
+	}
 	workspaceRoot, err := filepath.Abs(config.WorkspaceRoot)
 	if err != nil {
 		return nil, err
@@ -1325,6 +1328,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 							candidateHead,
 							workerReviewPath,
 							workerNotesPath,
+							filepath.Join(o.runRoot, "tmp"),
 						)
 					},
 					onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
@@ -1343,7 +1347,13 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 				},
 			)
 			if err == nil {
-				err = validateReviewReport(workerReviewPath)
+				reviewRel := filepath.Join(".deepreview", fmt.Sprintf("review-%02d.md", workerID))
+				body, readErr := readFileFromRoot(worktreePath, reviewRel)
+				if readErr != nil {
+					err = NewDeepReviewError("independent review report missing: %s", workerReviewPath)
+				} else {
+					err = validateReviewReportText(string(body))
+				}
 			}
 			resultsCh <- reviewWorkerResult{workerID: workerID, restarts: restarts, err: err}
 		}(idx)
@@ -1395,17 +1405,19 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	for workerID := 1; workerID <= o.config.Concurrency; workerID++ {
 		idx := workerID - 1
 		reviewPath := reviewPaths[idx]
-		if err := ensureCanonicalArtifact(reviewPath, []string{
-			workerReviewPaths[idx],
-			filepath.Join(worktrees[idx], fmt.Sprintf("review-%02d.md", idx+1)),
-			filepath.Join(worktrees[idx], "review.md"),
-			reviewPath,
-		}); err != nil {
+		reviewName := fmt.Sprintf("review-%02d.md", workerID)
+		reviewRel := filepath.Join(".deepreview", reviewName)
+		if err := copyBoundedArtifact(roundDir, reviewName, worktrees[idx], reviewRel); err != nil {
 			err := NewDeepReviewError("independent review output missing: %s", reviewPath)
 			o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 			return nil, err
 		}
-		if err := validateReviewReport(reviewPath); err != nil {
+		copied, err := readFileFromRoot(roundDir, reviewName)
+		if err != nil {
+			o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
+			return nil, err
+		}
+		if err := validateReviewReportText(string(copied)); err != nil {
 			o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 			return nil, err
 		}
@@ -1426,8 +1438,8 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	return selectedReviewPaths, nil
 }
 
-func prepareReviewWorkerRetry(repoPath, worktreePath, gitBin, baselineRef, reviewPath, notesPath string) error {
-	if err := recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef, nil); err != nil {
+func prepareReviewWorkerRetry(repoPath, worktreePath, gitBin, baselineRef, reviewPath, notesPath, snapshotParent string) error {
+	if err := recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef, nil, snapshotParent); err != nil {
 		return err
 	}
 	for _, path := range []string{reviewPath, notesPath} {
@@ -1472,15 +1484,11 @@ func (o *Orchestrator) runExecuteStage(
 
 	roundStatusPath := filepath.Join(roundDir, "round-status.json")
 	roundSummaryPath := filepath.Join(roundDir, "round-summary.md")
-	roundTriagePath := filepath.Join(roundDir, "round-triage.md")
-	roundPlanPath := filepath.Join(roundDir, "round-plan.md")
-	roundVerificationPath := filepath.Join(roundDir, "round-verification.md")
 	roundRecordPath := filepath.Join(roundDir, "round.json")
 	executeArtifactsDir := filepath.Join(executeWorktree, ".deepreview", "artifacts")
 	roundStatusWorktreePath := filepath.Join(executeArtifactsDir, "round-status.json")
 	roundSummaryWorktreePath := filepath.Join(executeArtifactsDir, "round-summary.md")
 	roundTriageWorktreePath := filepath.Join(executeArtifactsDir, "round-triage.md")
-	roundTriageJSONPath := filepath.Join(roundDir, "round-triage.json")
 	roundTriageJSONWorktreePath := filepath.Join(executeArtifactsDir, "round-triage.json")
 	roundPlanWorktreePath := filepath.Join(executeArtifactsDir, "round-plan.md")
 	roundVerificationWorktreePath := filepath.Join(executeArtifactsDir, "round-verification.md")
@@ -1594,6 +1602,7 @@ func (o *Orchestrator) runExecuteStage(
 					o.config.GitBin,
 					candidateHead,
 					preservePaths,
+					filepath.Join(o.runRoot, "tmp"),
 				)
 			},
 		)
@@ -1618,14 +1627,7 @@ func (o *Orchestrator) runExecuteStage(
 		}
 		codexContext = nextContext
 		if templateName == "01-triage-plan.md" {
-			if err := persistValidatedTriageAndPlan(
-				roundTriageWorktreePath,
-				roundTriagePath,
-				roundTriageJSONWorktreePath,
-				roundTriageJSONPath,
-				roundPlanWorktreePath,
-				roundPlanPath,
-			); err != nil {
+			if err := persistValidatedTriageAndPlan(executeWorktree, roundDir); err != nil {
 				o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
 				o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 				return RoundStatus{}, "", err
@@ -1634,27 +1636,15 @@ func (o *Orchestrator) runExecuteStage(
 		o.reporter.StageFinished(stageName, roundPtr(round), true, "completed")
 	}
 
-	if err := ensureCanonicalArtifact(roundStatusPath, []string{
-		roundStatusWorktreePath,
-		filepath.Join(executeWorktree, "round-status.json"),
-		roundStatusPath,
-	}); err != nil {
+	if err := copyBoundedArtifact(roundDir, "round-status.json", executeWorktree, filepath.Join(".deepreview", "artifacts", "round-status.json")); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	if err := ensureCanonicalArtifact(roundSummaryPath, []string{
-		roundSummaryWorktreePath,
-		filepath.Join(executeWorktree, "round-summary.md"),
-		roundSummaryPath,
-	}); err != nil {
+	if err := copyBoundedArtifact(roundDir, "round-summary.md", executeWorktree, filepath.Join(".deepreview", "artifacts", "round-summary.md")); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
-	if err := ensureCanonicalArtifact(roundVerificationPath, []string{
-		roundVerificationWorktreePath,
-		filepath.Join(executeWorktree, "round-verification.md"),
-		roundVerificationPath,
-	}); err != nil {
+	if err := copyBoundedArtifact(roundDir, "round-verification.md", executeWorktree, filepath.Join(".deepreview", "artifacts", "round-verification.md")); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1798,25 +1788,6 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 	return result, nil
 }
 
-func ensureCanonicalArtifact(canonicalPath string, candidates []string) error {
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(candidate); err == nil {
-			if candidate == canonicalPath {
-				return nil
-			}
-			content, err := os.ReadFile(candidate)
-			if err != nil {
-				return err
-			}
-			return os.WriteFile(canonicalPath, content, 0o644)
-		}
-	}
-	return os.ErrNotExist
-}
-
 func writeRoundRecord(path string, record RoundRecord) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
@@ -1840,8 +1811,8 @@ func readRoundRecord(path string) (RoundRecord, error) {
 	if record.Round < 1 {
 		return RoundRecord{}, NewDeepReviewError("invalid round record %s: missing positive round number", path)
 	}
-	if strings.TrimSpace(record.Summary) == "" {
-		return RoundRecord{}, NewDeepReviewError("invalid round record %s: missing summary artifact path", path)
+	if record.Summary != "round-summary.md" {
+		return RoundRecord{}, NewDeepReviewError("invalid round record %s: summary must be round-summary.md", path)
 	}
 	statusPayload, err := json.Marshal(record.Status)
 	if err != nil {
@@ -1973,11 +1944,17 @@ func summarizePrivacyScanIssues(commitScanErr, fileScanErr error) string {
 	return strings.Join(issues, " | ")
 }
 
-func snapshotPaths(basePath string, preservePaths []string) (string, error) {
+func snapshotPaths(basePath string, preservePaths []string, snapshotParent string) (string, error) {
 	if len(preservePaths) == 0 {
 		return "", nil
 	}
-	snapshotDir, err := os.MkdirTemp("", "deepreview-retry-snapshot-*")
+	if strings.TrimSpace(snapshotParent) == "" {
+		return "", NewDeepReviewError("retry snapshot parent is required")
+	}
+	if err := os.MkdirAll(snapshotParent, 0o700); err != nil {
+		return "", err
+	}
+	snapshotDir, err := os.MkdirTemp(snapshotParent, "retry-")
 	if err != nil {
 		return "", err
 	}
@@ -2010,6 +1987,12 @@ func snapshotOnePath(basePath, snapshotDir, preservePath string) error {
 		return NewDeepReviewError("preserved path must stay within worktree: %s", preservePath)
 	}
 	dstPath := filepath.Join(snapshotDir, relPath)
+	if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
+		return NewDeepReviewError("preserved path must be a regular file or directory: %s", preservePath)
+	}
+	if !info.IsDir() && info.Size() > maxArtifactBytes {
+		return NewDeepReviewError("preserved path exceeds %d bytes", maxArtifactBytes)
+	}
 	if info.IsDir() {
 		return copyDirectory(preservePath, dstPath)
 	}
@@ -2103,8 +2086,8 @@ func copyFileWithMode(srcPath, dstPath string, mode os.FileMode) error {
 	return nil
 }
 
-func recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef string, preservePaths []string) error {
-	snapshotDir, err := snapshotPaths(worktreePath, preservePaths)
+func recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef string, preservePaths []string, snapshotParent string) error {
+	snapshotDir, err := snapshotPaths(worktreePath, preservePaths, snapshotParent)
 	if err != nil {
 		return err
 	}
@@ -2184,7 +2167,7 @@ func summarizeReviewVerdict(reportName, markdown string) string {
 }
 
 func readRoundStatus(path string) (RoundStatus, error) {
-	b, err := os.ReadFile(path)
+	b, err := readFileFromRoot(filepath.Dir(path), filepath.Base(path))
 	if err != nil {
 		return RoundStatus{}, err
 	}
@@ -2836,6 +2819,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 					o.config.GitBin,
 					candidateHead,
 					nil,
+					filepath.Join(o.runRoot, "tmp"),
 				)
 			},
 		)
@@ -2845,7 +2829,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return DeliveryResult{}, err
 	}
 
-	if err := ensureCanonicalArtifact(resultPath, []string{resultWorktreePath, resultPath}); err != nil {
+	if err := copyBoundedArtifact(deliveryDir, "delivery-result.json", deliveryWorktree, filepath.Join(".deepreview", "artifacts", "delivery-result.json")); err != nil {
 		return DeliveryResult{}, err
 	}
 	result, err := readPromptDeliveryResult(resultPath, o.config.Mode)
@@ -3557,7 +3541,7 @@ func (o *Orchestrator) discoverCompletedRoundSummaries() ([]string, error) {
 			continue
 		}
 		summaryPath := filepath.Join(filepath.Dir(recordPath), record.Summary)
-		if _, err := os.Stat(summaryPath); err != nil {
+		if _, err := readFileFromRoot(filepath.Dir(recordPath), record.Summary); err != nil {
 			continue
 		}
 		summaries = append(summaries, summaryPath)

@@ -28,6 +28,9 @@ func ReadQueue(path string) ([]string, error) {
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
 		}
+		if !validPathSegment(line) {
+			return nil, NewDeepReviewError("execute queue entry must be one safe file name: %s", line)
+		}
 		entries = append(entries, line)
 	}
 	if len(entries) == 0 {
