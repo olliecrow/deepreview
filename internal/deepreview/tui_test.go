@@ -1,6 +1,7 @@
 package deepreview
 
 import (
+	"errors"
 	"fmt"
 	"math/rand"
 	"strings"
@@ -408,8 +409,11 @@ func TestTUICtrlCRequestsCancelWithoutImmediateQuit(t *testing.T) {
 	}, 100, 30)
 
 	updated, cmd := model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
-	if cmd != nil {
-		t.Fatalf("expected no immediate quit command while worker is still running")
+	if cmd == nil {
+		t.Fatal("expected asynchronous cancel command while worker is still running")
+	}
+	if _, isQuit := cmd().(tea.QuitMsg); isQuit {
+		t.Fatal("cancel command should not quit immediately")
 	}
 	next, ok := updated.(tuiModel)
 	if !ok {
@@ -432,6 +436,75 @@ func TestTUICtrlCRequestsCancelWithoutImmediateQuit(t *testing.T) {
 	}
 	if !next.cancelRequested {
 		t.Fatalf("expected cancelRequested to remain true")
+	}
+}
+
+func TestTUIRunFailureCancelsAndWaitsForWorker(t *testing.T) {
+	restore := runTUIProgram
+	t.Cleanup(func() { runTUIProgram = restore })
+	runTUIProgram = func(model tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+		return nil, errors.New("terminal init failed")
+	}
+	release := make(chan struct{})
+	var cancelCalls int
+	err := RunTUIWithWorker(NewSharedProgressState(), 80, 24, func() {
+		cancelCalls++
+		close(release)
+	}, func() error {
+		<-release
+		return errors.New("worker stopped")
+	})
+	if cancelCalls != 1 {
+		t.Fatalf("expected one cancel callback, got %d", cancelCalls)
+	}
+	if err == nil || !strings.Contains(err.Error(), "terminal init failed") || !strings.Contains(err.Error(), "worker stopped") {
+		t.Fatalf("expected both renderer and worker errors, got %v", err)
+	}
+}
+
+func TestTUIExternalQuitCancelsRunningWorker(t *testing.T) {
+	restore := runTUIProgram
+	t.Cleanup(func() { runTUIProgram = restore })
+	runTUIProgram = func(model tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+		return model, nil
+	}
+	release := make(chan struct{})
+	var cancelCalls int
+	err := RunTUIWithWorker(NewSharedProgressState(), 80, 24, func() {
+		cancelCalls++
+		close(release)
+	}, func() error {
+		<-release
+		return errors.New("worker canceled")
+	})
+	if cancelCalls != 1 {
+		t.Fatalf("expected one cancel callback, got %d", cancelCalls)
+	}
+	if err == nil || !strings.Contains(err.Error(), "worker canceled") {
+		t.Fatalf("expected worker error, got %v", err)
+	}
+}
+
+func TestTUIFinishedWorkerDoesNotCancelAgain(t *testing.T) {
+	restore := runTUIProgram
+	t.Cleanup(func() { runTUIProgram = restore })
+	runTUIProgram = func(model tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+		current := model.(tuiModel)
+		err := <-current.doneCh
+		updated, _ := current.Update(workerResultMsg{err: err})
+		return updated, nil
+	}
+	var cancelCalls int
+	err := RunTUIWithWorker(NewSharedProgressState(), 80, 24, func() {
+		cancelCalls++
+	}, func() error {
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("expected finished worker to return nil, got %v", err)
+	}
+	if cancelCalls != 0 {
+		t.Fatalf("expected no cancel after the worker finished, got %d", cancelCalls)
 	}
 }
 

@@ -1,6 +1,7 @@
 package deepreview
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -68,9 +69,7 @@ func (m tuiModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.String() == "ctrl+c" {
 			if !m.cancelRequested {
 				m.cancelRequested = true
-				if m.requestCancel != nil {
-					m.requestCancel()
-				}
+				return m, requestCancelCmd(m.requestCancel)
 			}
 			return m, nil
 		}
@@ -113,6 +112,7 @@ const (
 	timelineSafetyGutter = 0
 	defaultContentWidth  = 72
 	sectionSeparator     = "\n"
+	tuiWorkerExitTimeout = 30 * time.Second
 )
 
 func chip(style lipgloss.Style, text string) string {
@@ -567,22 +567,62 @@ func (m tuiModel) View() string {
 	return finalizeView(joinSections(lines), m.width, m.height)
 }
 
+func requestCancelCmd(requestCancel func()) tea.Cmd {
+	return func() tea.Msg {
+		if requestCancel != nil {
+			requestCancel()
+		}
+		return tuiCancelRequestedMsg{}
+	}
+}
+
+type tuiCancelRequestedMsg struct{}
+
+var runTUIProgram = func(model tea.Model, opts ...tea.ProgramOption) (tea.Model, error) {
+	return tea.NewProgram(model, opts...).Run()
+}
+
 func RunTUIWithWorker(state *SharedProgressState, initialWidth, initialHeight int, requestCancel func(), worker func() error) error {
 	doneCh := make(chan error, 1)
+	workerDone := make(chan struct{})
+	var workerErr error
 	go func() {
-		doneCh <- worker()
+		workerErr = worker()
+		close(workerDone)
+		doneCh <- workerErr
 	}()
 
-	p := tea.NewProgram(newTUIModel(state, doneCh, requestCancel, initialWidth, initialHeight), tea.WithAltScreen())
-	finalModel, err := p.Run()
-	if err != nil {
-		return err
+	finalModel, runErr := runTUIProgram(
+		newTUIModel(state, doneCh, requestCancel, initialWidth, initialHeight),
+		tea.WithAltScreen(),
+	)
+	if !workerHasFinished(workerDone) {
+		if requestCancel != nil {
+			requestCancel()
+		}
+		select {
+		case <-workerDone:
+		case <-time.After(tuiWorkerExitTimeout):
+			return errors.Join(runErr, NewDeepReviewError("timed out waiting for TUI worker to exit"))
+		}
 	}
-	m, ok := finalModel.(tuiModel)
-	if !ok {
-		return nil
+	<-workerDone
+	if runErr != nil {
+		return errors.Join(runErr, workerErr)
 	}
-	return m.workerErr
+	if m, ok := finalModel.(tuiModel); ok && m.workerErr != nil {
+		return m.workerErr
+	}
+	return workerErr
+}
+
+func workerHasFinished(workerDone <-chan struct{}) bool {
+	select {
+	case <-workerDone:
+		return true
+	default:
+		return false
+	}
 }
 
 func fmtDuration(d time.Duration) string {

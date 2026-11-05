@@ -127,6 +127,7 @@ This document defines the canonical runtime and product contract for `deepreview
   - `--yolo` alias for `--mode yolo`
   - full-screen terminal UI is enabled by default when terminal capabilities are valid
   - when TUI is enabled, deepreview exits the UI automatically on completion and prints the text summary immediately
+  - Ctrl+C requests cancellation as an asynchronous UI command. If terminal startup fails, or the UI exits while its worker is still running, deepreview cancels that worker and waits up to 30 seconds for it to exit. A worker that has already finished is not canceled again.
   - before printing the completion summary after a TUI run, deepreview clears the terminal and prints summary text from the top-left cursor position
   - `--no-tui` force structured text progress logs
 - worker-activity resilience env knobs (applies to all Codex workers):
