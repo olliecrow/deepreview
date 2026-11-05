@@ -158,6 +158,19 @@ func TestParseReviewArgsDefaults(t *testing.T) {
 	if parsed.NoTUI {
 		t.Fatalf("expected --no-tui default to false")
 	}
+	if parsed.Config.TrustRepo {
+		t.Fatalf("expected --trust-repo default to false")
+	}
+}
+
+func TestParseReviewArgsTrustRepo(t *testing.T) {
+	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature", "--trust-repo"}, time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatalf("ParseReviewArgs failed: %v", err)
+	}
+	if !parsed.Config.TrustRepo {
+		t.Fatal("expected --trust-repo to set repository execution trust")
+	}
 }
 
 func TestParseReviewArgsReviewPolicyEnvOverrides(t *testing.T) {
@@ -240,6 +253,8 @@ func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 		"press Ctrl+C once",
 		"Codex execution uses your normal local Codex config/profile",
 		"Codex prompt timeout per prompt: 3600s",
+		"--trust-repo",
+		"deepreview is not a sandbox",
 	} {
 		if !strings.Contains(help, want) {
 			t.Fatalf("review help missing %q", want)
@@ -352,6 +367,9 @@ func TestPrintDryRunPlanUsesRepoBranchLockLanguage(t *testing.T) {
 	}
 	if !strings.Contains(text, "sync branch-scoped managed repository copy") {
 		t.Fatalf("expected dry-run plan to describe branch-scoped managed repo sync, got:\n%s", text)
+	}
+	if !strings.Contains(text, "repository execution trust: not granted") {
+		t.Fatalf("expected dry-run plan to show missing repository trust, got:\n%s", text)
 	}
 }
 
@@ -707,6 +725,9 @@ func TestRunDoctorCommandUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) 
 		}
 		if !strings.Contains(stdout, "doctor result: PASS") {
 			t.Fatalf("expected doctor pass output, got:\n%s", stdout)
+		}
+		if !strings.Contains(stdout, "repository execution trust") || !strings.Contains(stdout, "not granted") {
+			t.Fatalf("expected informational trust status, got:\n%s", stdout)
 		}
 		if strings.Contains(stdout, "tool available: codex") {
 			t.Fatalf("did not expect raw codex tool check in multicodex mode, got:\n%s", stdout)

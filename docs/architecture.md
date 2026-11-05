@@ -9,6 +9,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - `deepreview review` runs the full multi-round orchestration workflow.
 - `deepreview doctor` runs non-mutating preflight checks and exits with pass/fail status.
 - `deepreview dry-run` prints resolved run context and planned stage order without running Codex or mutating git state.
+- `review` requires `--trust-repo` before it runs repository instructions, tests, hooks, filters, or policy scripts. Those commands use the operator's user privileges. deepreview is not a sandbox. `doctor` and `dry-run` report the trust state and do not execute those scripts.
 
 ## Core pipeline
 1. Resolve input and source context:
@@ -28,6 +29,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 2. Prepare managed workspace under `~/deepreview`:
 - replace stale managed checkout for the source branch with a fresh clone
 - fetch latest remote refs
+- disable inherited hooks and LFS smudge/clean filters for clone, fetch, and worktree add only; later verification hooks still run
 - create the run root eagerly once run arguments are resolved so interrupt/failure reporting always has a stable artifact path
 - resolve source-branch head SHA
 - resolve the operator's Git identity from the source repository Git config first, then global Git config, and apply it to the managed clone with local signing disabled for deepreview-owned commits
@@ -57,6 +59,7 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - execute prompts stage their output files inside reserved worktree-local `.deepreview/artifacts/` paths; after prompt queue completion, the orchestrator validates those staged files, persists canonical copies into the run directory, and then writes the authoritative `round.json` completion record for that round
 - apply the same inactivity watchdog/restart policy to execute and delivery Codex workers
 - Codex workers run with the operator's normal local Codex configuration and inherited local environment; deepreview does not add a separate execution/temp-cache layer, except that resumed multicodex-backed threads stay pinned to the profile that created the thread
+- prompt inputs from the repository, reviews, issues, pull requests, and tools are untrusted data and cannot authorize pushes, credential reads, scope expansion, or edits outside assigned paths
 - allow local checkpoint commits throughout execution; never push during rounds
 - Codex writes the round status file inside the execute worktree, and the orchestrator persists the canonical copy at `~/deepreview/runs/<run-id>/round-<round>/round-status.json` with enum decision (`continue|stop`) and rationale
 - the orchestrator writes `~/deepreview/runs/<run-id>/round-<round>/round.json` after successful execute-stage completion; final completion reporting counts only rounds with that authoritative record

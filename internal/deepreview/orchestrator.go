@@ -392,6 +392,9 @@ func canonicalOwnerRepoSegments(owner, name string) (string, string, bool) {
 }
 
 func (o *Orchestrator) Run() (retErr error) {
+	if !o.config.TrustRepo {
+		return NewDeepReviewError("%s", repositoryTrustRequiredMessage)
+	}
 	if err := o.preflight(); err != nil {
 		return err
 	}
@@ -2537,14 +2540,31 @@ func (o *Orchestrator) deliveryPushRangePolicyScanBetween(policyRef, baseRef, he
 	}
 	defer cleanup()
 	scriptPath := filepath.Join(policyWorktree, "scripts", "security", "check-push-range.sh")
-	if _, err := os.Stat(scriptPath); err != nil {
-		if os.IsNotExist(err) {
-			return nil
+	info, statErr := os.Lstat(scriptPath)
+	if statErr != nil {
+		if os.IsNotExist(statErr) {
+			return o.writePolicyScriptRecord(policyRef, false, "")
 		}
+		return statErr
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return NewDeepReviewError("policy script must be a regular file")
+	}
+	blobSHA, err := Git(
+		o.managedRepoPath,
+		o.config.GitBin,
+		true,
+		"rev-parse",
+		strings.TrimSpace(policyRef)+":scripts/security/check-push-range.sh",
+	)
+	if err != nil {
 		return err
 	}
-	env := append(
-		os.Environ(),
+	if err := o.writePolicyScriptRecord(policyRef, true, blobSHA); err != nil {
+		return err
+	}
+	env := restrictedPolicyEnviron(os.Environ())
+	env = append(env,
 		"PRE_COMMIT_FROM_REF="+strings.TrimSpace(baseRef),
 		"PRE_COMMIT_TO_REF="+strings.TrimSpace(headRef),
 	)
@@ -2555,7 +2575,7 @@ func (o *Orchestrator) deliveryPushRangePolicyScanBetween(policyRef, baseRef, he
 		env,
 		"",
 		false,
-		0,
+		policyScriptTimeout,
 		nil,
 	)
 	if err != nil {
@@ -3798,6 +3818,7 @@ func (o *Orchestrator) writeRunConfig() error {
 		}(),
 		"review_max_restarts":   o.config.ReviewMaxRestarts,
 		"mode":                  o.config.Mode,
+		"trust_repo":            o.config.TrustRepo,
 		"workspace_root":        sanitizePublicText(o.workspaceRoot),
 		"run_id":                o.config.RunID,
 		"git_bin":               sanitizePublicText(o.config.GitBin),

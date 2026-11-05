@@ -52,6 +52,9 @@ Optional launcher:
 
 ## Safety and isolation
 
+- `review` runs repository instructions, tests, hooks, filters, and policy scripts with your user privileges. Pass `--trust-repo` only for a repository you trust. deepreview is not a sandbox.
+- `doctor` and `dry-run` show whether that consent is set and do not execute those scripts.
+- Managed clone, fetch, and worktree preparation disable inherited Git hooks and LFS filters for those commands. Verification hooks still run during execute.
 - Review and execute work happen under `~/deepreview`, not in your local checkout.
 - Run-scoped logs, canonical artifacts, temp directories, and caches live under `~/deepreview/runs/<run-id>/`.
 - Codex workers stage prompt-written artifacts under reserved worktree-local `.deepreview/` paths, which deepreview excludes from delivery and copies back into the run directory for canonical storage.

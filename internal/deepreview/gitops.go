@@ -70,6 +70,18 @@ func Git(repoPath, gitBin string, check bool, args ...string) (string, error) {
 	return strings.TrimSpace(completed.Stdout), nil
 }
 
+func managedPreparationArgs(gitBin string, args ...string) []string {
+	command := []string{
+		gitBin,
+		"-c", "core.hooksPath=/dev/null",
+		"-c", "filter.lfs.required=false",
+		"-c", "filter.lfs.smudge=",
+		"-c", "filter.lfs.clean=",
+		"-c", "filter.lfs.process=",
+	}
+	return append(command, args...)
+}
+
 func CloneOrFetch(repoPath, cloneSource, gitBin string) error {
 	if _, err := os.Stat(repoPath); err == nil {
 		if err := os.RemoveAll(repoPath); err != nil {
@@ -82,11 +94,11 @@ func CloneOrFetch(repoPath, cloneSource, gitBin string) error {
 	if err := os.MkdirAll(filepath.Dir(repoPath), 0o755); err != nil {
 		return err
 	}
-	if _, err := RunCommand([]string{gitBin, "clone", cloneSource, repoPath}, "", "", true, 0); err != nil {
+	if _, err := RunCommand(managedPreparationArgs(gitBin, "clone", cloneSource, repoPath), "", "", true, 0); err != nil {
 		return err
 	}
 
-	_, err := RunCommand([]string{gitBin, "-C", repoPath, "fetch", "--all", "--prune"}, "", "", true, 0)
+	_, err := RunCommand(managedPreparationArgs(gitBin, "-C", repoPath, "fetch", "--all", "--prune"), "", "", true, 0)
 	return err
 }
 
@@ -199,7 +211,7 @@ func AddDetachedWorktree(repoPath, gitBin, worktreePath, ref string) error {
 	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
 		return err
 	}
-	_, err := RunCommand([]string{gitBin, "-C", repoPath, "worktree", "add", "--detach", worktreePath, ref}, "", "", true, 0)
+	_, err := RunCommand(managedPreparationArgs(gitBin, "-C", repoPath, "worktree", "add", "--detach", worktreePath, ref), "", "", true, 0)
 	return err
 }
 

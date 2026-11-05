@@ -432,6 +432,7 @@ func TestEndToEndYoloWithFakeCodex(t *testing.T) {
 		"--concurrency", "2",
 		"--max-rounds", "2",
 		"--mode", "yolo",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "deepreview completed:") {
@@ -539,6 +540,7 @@ func TestEndToEndYOLOModeRejectsIncompletePromptResult(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "yolo",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if strings.Contains(output, "changes pushed:") {
@@ -631,6 +633,7 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "yolo",
+		"--trust-repo",
 		"--no-tui",
 	)
 	identity, err := resolveRepoIdentity(ReviewConfig{GitBin: "git"}, userClone)
@@ -648,6 +651,7 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "yolo",
+		"--trust-repo",
 		"--no-tui",
 	)
 
@@ -737,6 +741,7 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "deepreview completed:") {
@@ -939,6 +944,7 @@ func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testi
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
@@ -1023,6 +1029,7 @@ func TestEndToEndPRModeSupportsIncompletePromptResult(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
@@ -1104,6 +1111,7 @@ func TestEndToEndPRModeFailsBeforePublishingSecretChange(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "privacy scan failed: secret-like pattern matched in deepreview_test_round.txt") {
@@ -1160,6 +1168,7 @@ func TestEndToEndPRModeRejectsDeliveryMutationAndPublishesReviewedDraft(t *testi
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery prompt must not mutate tracked content or history; resolve the blocker before a new run instead") {
@@ -1224,6 +1233,7 @@ func TestEndToEndYoloFailsBeforePublishingSecretChange(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "yolo",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "privacy scan failed: secret-like pattern matched in deepreview_test_round.txt") {
@@ -1285,6 +1295,7 @@ func TestEndToEndPRModeRejectsSeparatePreparedDeliveryBranch(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
@@ -1369,6 +1380,7 @@ func TestEndToEndPRModeDoesNotFallbackPublishHistoryBlockedCandidateBranch(t *te
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery push-range policy failed") {
@@ -1446,6 +1458,7 @@ func TestEndToEndPRModeUsesTrustedPublishRangeScript(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
@@ -1525,6 +1538,7 @@ func TestEndToEndPRModeRejectsCandidateDeletingTrustedPushRangePolicy(t *testing
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery push-range policy failed") {
@@ -1579,6 +1593,7 @@ func TestEndToEndPRModeReportsExistingPRAfterMergeabilityFailure(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	for _, want := range []string{
@@ -1664,6 +1679,7 @@ func TestEndToEndPRModeWaitsForTransientMergeabilityState(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
@@ -1732,6 +1748,7 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "yolo",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if exitCode != 130 {
@@ -1832,6 +1849,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 		"--concurrency", "2",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
@@ -1901,6 +1919,7 @@ func TestReviewStageDoesNotReuseStaleArtifactsFromKilledWorker(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "independent review output missing") {
@@ -1975,6 +1994,7 @@ func TestEndToEndPRModeUsesNormalInheritedCodexEnvironment(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
@@ -2021,6 +2041,7 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
@@ -2095,6 +2116,7 @@ func TestEndToEndPRModeAllowsNewTrackedFilesUnderRepoOwnedOperationalPath(t *tes
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
@@ -2169,6 +2191,7 @@ func TestEndToEndPRModeReservesDeepreviewTmpArtifactsInsideRepoOwnedTmp(t *testi
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
@@ -2233,6 +2256,7 @@ func TestRunFailsWhenExecuteForceCommitsNewOperationalArtifacts(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "operational artifacts must not be committed: .tmp/go-build-cache/forced-cache.txt") {
@@ -2296,6 +2320,7 @@ func TestEndToEndPRModeFailsWhenNoChangesButCodexStillRequestsAnotherRound(t *te
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "requires another review round") {
@@ -2359,6 +2384,7 @@ func TestEndToEndPRModeRecreatesExecuteWorktreeBeforeRetryAfterStall(t *testing.
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
@@ -2439,6 +2465,7 @@ func TestEndToEndPRModeRetriesExecutePromptWithFreshContextAfterStall(t *testing
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "requires another review round") {
@@ -2512,6 +2539,7 @@ func TestEndToEndPRModeDoesNotReuseStaleExecuteStatusArtifactsFromKilledPrompt(t
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "file does not exist") {
@@ -2574,6 +2602,7 @@ func TestEndToEndPRModeCompletesAfterOneCleanStopDecision(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {
@@ -2662,6 +2691,7 @@ func TestRunReviewsChangedRoundThenStopsOnCleanRound(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "yolo",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(out, "deepreview completed:") {
@@ -2750,6 +2780,7 @@ func TestEndToEndPRModeDiscardsStaleDeliveryCommitBeforeRetry(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "PR created: https://example.com/example/test/pull/123") {
@@ -2830,6 +2861,7 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 		"--concurrency", "1",
 		"--max-rounds", "2",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "Draft PR created: https://example.com/example/test/pull/123") {
@@ -2947,6 +2979,7 @@ func TestRunPRModeDoesNotPublishInvalidExecuteRound(t *testing.T) {
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "round status must be a JSON object") {
@@ -3033,6 +3066,7 @@ func TestRunPRModeIncompleteDraftRejectsPrivacyBlockedDocsWithoutAutoSanitizing(
 		"--concurrency", "1",
 		"--max-rounds", "1",
 		"--mode", "pr",
+		"--trust-repo",
 		"--no-tui",
 	)
 	if !strings.Contains(output, "privacy scan failed: local path pattern matched in docs/generated.md") {

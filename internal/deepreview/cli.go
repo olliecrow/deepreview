@@ -55,6 +55,7 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 	mode := fs.String("mode", ModePR, "delivery mode")
 	yolo := fs.Bool("yolo", false, "alias for --mode yolo")
 	noTUI := fs.Bool("no-tui", false, "disable terminal UI")
+	trustRepo := fs.Bool("trust-repo", false, "run repository code with operator privileges")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return ParsedArgs{}, err
@@ -120,6 +121,7 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		ReviewActivityPollS: reviewActivityPollS,
 		ReviewMaxRestarts:   reviewMaxRestarts,
 		Mode:                finalMode,
+		TrustRepo:           *trustRepo,
 		WorkspaceRoot:       workspaceRoot,
 		RunID:               runID,
 		GitBin:              gitBin,
@@ -202,7 +204,7 @@ What this command does:
      - mode=yolo: pushes directly to source branch
 
 Usage:
-  deepreview review [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--no-tui]
+  deepreview review [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--no-tui] [--trust-repo]
 
 Arguments:
   <repo>
@@ -255,6 +257,11 @@ Optional flags:
   --no-tui              (default: false)
     Force structured text progress logs (disables full-screen terminal user interface).
     Default behavior enables terminal user interface when terminal capabilities are valid.
+
+  --trust-repo          (default: false)
+    Required before review runs repository instructions, tests, hooks, filters,
+    and policy scripts with your user privileges. deepreview is not a sandbox.
+    doctor and dry-run show this state and do not execute those scripts.
 
 	Environment overrides:
   DEEPREVIEW_WORKSPACE_ROOT   (default: ~/deepreview)
@@ -320,12 +327,15 @@ What this checks:
   - launcher auth status is healthy (`+"`multicodex status`"+` or `+"`codex login status`"+`)
   - GitHub auth status is healthy (when mode=pr)
   - source branch is reachable on remote
+  - whether --trust-repo is set; this check is informational and does not execute repository scripts
 
 Usage:
-  deepreview doctor [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo]
+  deepreview doctor [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--trust-repo]
 
 Notes:
   - doctor does not clone, commit, push, or open PRs.
+  - doctor reports whether --trust-repo is set. It does not execute repository instructions, tests, hooks, filters, or policy scripts.
+  - review requires --trust-repo because that execution uses operator privileges and is not a sandbox.
   - argument inference and validation follow the same rules as "deepreview review".
   - `+"`--mode pr`"+` requires a GitHub-backed repo identity.
 
@@ -353,10 +363,11 @@ What this prints:
   - stop conditions and delivery behavior
 
 Usage:
-  deepreview dry-run [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo]
+  deepreview dry-run [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--trust-repo]
 
 Notes:
   - dry-run does not run Codex, does not mutate git state, and does not push.
+  - dry-run reports whether --trust-repo is set. It does not execute repository instructions, tests, hooks, filters, or policy scripts.
   - argument inference and validation follow the same rules as "deepreview review".
   - `+"`--mode pr`"+` requires a GitHub-backed repo identity.
 
@@ -462,7 +473,7 @@ _deepreview_completion() {
       COMPREPLY=( $(compgen -W "bash zsh" -- "${cur}") )
       ;;
     review|doctor|dry-run)
-      COMPREPLY=( $(compgen -W "--source-branch --concurrency --max-rounds --mode --yolo --no-tui" -- "${cur}") )
+      COMPREPLY=( $(compgen -W "--source-branch --concurrency --max-rounds --mode --yolo --no-tui --trust-repo" -- "${cur}") )
       ;;
     *)
       COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
@@ -491,7 +502,7 @@ _deepreview() {
       _values 'shell' bash zsh
       ;;
     review|doctor|dry-run)
-      _values 'flag' --source-branch --concurrency --max-rounds --mode --yolo --no-tui
+      _values 'flag' --source-branch --concurrency --max-rounds --mode --yolo --no-tui --trust-repo
       ;;
   esac
 }
@@ -687,7 +698,12 @@ func runDoctorCommand(args []string) int {
 
 func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 	cfg := o.config
-	checks := make([]doctorCheck, 0, 11)
+	checks := make([]doctorCheck, 0, 12)
+	checks = append(checks, doctorCheck{
+		Name:   "repository execution trust",
+		Passed: true,
+		Detail: repositoryTrustDoctorDetail(cfg.TrustRepo),
+	})
 
 	for _, tool := range requiredHostTools(cfg) {
 		path, err := exec.LookPath(tool)
@@ -941,6 +957,8 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintf(out, "repo: %s\n", o.repoIdentity.Slug())
 	fmt.Fprintf(out, "source branch: %s\n", cfg.SourceBranch)
 	fmt.Fprintf(out, "mode: %s\n", cfg.Mode)
+	fmt.Fprintf(out, "repository execution trust: %s\n", repositoryTrustStatus(cfg.TrustRepo))
+	fmt.Fprintln(out, "dry-run does not execute repository instructions, tests, hooks, filters, or policy scripts.")
 	fmt.Fprintf(out, "concurrency: %d\n", cfg.Concurrency)
 	fmt.Fprintf(out, "max rounds: %d\n", cfg.MaxRounds)
 	fmt.Fprintf(out, "workspace root: %s\n", o.workspaceRoot)
