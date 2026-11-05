@@ -33,6 +33,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 ## Requirements
 
 - supported host operating systems: macOS and Linux
+- Go 1.27.3 for development builds
 - `git`
 - `codex`
 - `gh` for default pull request mode
