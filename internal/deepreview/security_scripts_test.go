@@ -240,6 +240,71 @@ func TestCheckPushRangeRejectsHistoryOnlyMixedPlaceholderPath(t *testing.T) {
 	}
 }
 
+func TestResolveScanRangeKeepsReachableBaseAndFallsBackToTip(t *testing.T) {
+	repo := initSecurityScriptRepo(t)
+	writeRepoFile(t, repo, "notes.txt", "clean\n")
+	runCmd(t, repo, nil, "git", "add", "notes.txt")
+	runCmd(t, repo, nil, "git", "commit", "-m", "seed")
+	base := runCmd(t, repo, nil, "git", "rev-parse", "HEAD")
+	writeRepoFile(t, repo, "notes.txt", "updated\n")
+	runCmd(t, repo, nil, "git", "add", "notes.txt")
+	runCmd(t, repo, nil, "git", "commit", "-m", "update")
+	head := runCmd(t, repo, nil, "git", "rev-parse", "HEAD")
+
+	script := filepath.Join(repoRoot(t), "scripts", "security", "resolve-scan-range.sh")
+	if got := runResolveScanRange(t, repo, script, head, base); got != base+".."+head {
+		t.Fatalf("expected reachable range %s..%s, got %q", base, head, got)
+	}
+	zero := "0000000000000000000000000000000000000000"
+	if got := runResolveScanRange(t, repo, script, head, zero); got != head+"^!" {
+		t.Fatalf("expected tip-only range for an all-zero base, got %q", got)
+	}
+	missing := "0123456789abcdef0123456789abcdef01234567"
+	if got := runResolveScanRange(t, repo, script, head, missing); got != head+"^!" {
+		t.Fatalf("expected tip-only range for a missing base, got %q", got)
+	}
+	if got := runResolveScanRange(t, repo, script, head, ""); got != head+"^!" {
+		t.Fatalf("expected tip-only range for an empty base, got %q", got)
+	}
+}
+
+func TestWriteModuleSBOMSkipsMainAndEmitsPurl(t *testing.T) {
+	script := filepath.Join(repoRoot(t), "scripts", "security", "write-module-sbom.py")
+	cmd := exec.Command("python3", script)
+	cmd.Stdin = strings.NewReader("{\"Path\":\"example.com/app\",\"Main\":true,\"Version\":\"v0.0.0\"}\n{\"Path\":\"golang.org/x/text\",\"Version\":\"v0.43.0\"}\n{\"Path\":\"incomplete.example/mod\"}\n")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("write-module-sbom failed: %v\n%s", err, stderr.String())
+	}
+	out := stdout.String()
+	if strings.Contains(out, "example.com/app") {
+		t.Fatalf("main module must be omitted, got %s", out)
+	}
+	if !strings.Contains(out, "pkg:golang/golang.org/x/text@v0.43.0") {
+		t.Fatalf("expected text purl, got %s", out)
+	}
+	if strings.Contains(out, "incomplete.example") {
+		t.Fatalf("module without a version must be omitted, got %s", out)
+	}
+}
+
+func runResolveScanRange(t *testing.T, repo, script, head, base string) string {
+	t.Helper()
+	cmd := exec.Command("bash", script, head, base)
+	cmd.Dir = repo
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("resolve-scan-range failed: %v\nstderr=%s", err, stderr.String())
+	}
+	return strings.TrimSpace(stdout.String())
+}
+
 func initSecurityScriptRepo(t *testing.T) string {
 	t.Helper()
 	repo := filepath.Join(t.TempDir(), "repo")

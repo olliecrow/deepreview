@@ -9,7 +9,9 @@ GitHub vulnerability alerts and automated security fixes are enabled as the defa
 
 Please do not open a public GitHub issue for suspected vulnerabilities.
 
-Report security concerns privately to `GitHub private vulnerability reporting` and include:
+Report security concerns privately through this repository's Security tab. Choose "Report a vulnerability". Private vulnerability reporting is enabled.
+
+Include:
 
 - repository name
 - affected version, commit, or environment
@@ -17,4 +19,4 @@ Report security concerns privately to `GitHub private vulnerability reporting` a
 - impact assessment
 - any suggested fix or mitigation
 
-Security reports are handled on a best-effort basis. If a report is clearly not security-sensitive, it may be redirected to the normal public issue tracker.
+Security reports are handled on a best-effort basis. Report bugs that are not security-sensitive on the public issue tracker.

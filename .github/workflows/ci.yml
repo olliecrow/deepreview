@@ -5,20 +5,30 @@ on:
   push:
     branches:
       - main
+  schedule:
+    # Weekly advisory refresh. Version-update bots are not used.
+    - cron: "17 6 * * 1"
 
 permissions:
   contents: read
 
+concurrency:
+  group: go-ci-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
 
       - name: Set up Go
-        uses: actions/setup-go@v6
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           go-version-file: go.mod
           cache: true
@@ -26,11 +36,60 @@ jobs:
       - name: Verify modules
         run: go mod verify
 
+      - name: Check formatting
+        run: test -z "$(gofmt -l cmd internal)"
+
       - name: Test
-        run: go test ./...
+        run: go test -p 4 ./...
 
       - name: Test with race detector
-        run: go test -race ./...
+        run: go test -p 4 -race ./...
 
       - name: Vet
-        run: go vet ./...
+        run: go vet -p 4 ./...
+
+  vuln:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify modules
+        run: go mod verify
+
+      - name: Run govulncheck
+        run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+
+      - name: Scan the module graph with OSV
+        run: |
+          set -euo pipefail
+          go list -m -json all | python3 scripts/security/write-module-sbom.py > "$RUNNER_TEMP/modules.cdx.json"
+          go run github.com/google/osv-scanner/v2/cmd/osv-scanner@v2.7.0 scan source -L "$RUNNER_TEMP/modules.cdx.json"
+
+  macos:
+    if: github.event_name != 'schedule'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test supported-platform process and TUI behavior
+        run: go test -p 4 -count=1 -timeout 20m ./internal/deepreview/ -run 'TestRunCommand|TestTUI|TestCheckPush|TestCloneOrFetch|TestInterrupt|TestTerminate'
