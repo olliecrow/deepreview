@@ -30,7 +30,7 @@ func TestFilesystemSafeKeyIsStableDistinctAndPathSafe(t *testing.T) {
 	}
 }
 
-func TestCloneOrFetchReplacesStaleDirectory(t *testing.T) {
+func TestCloneFreshReplacesStaleDirectory(t *testing.T) {
 	oldMask := syscall.Umask(0o022)
 	t.Cleanup(func() { syscall.Umask(oldMask) })
 	td := t.TempDir()
@@ -58,8 +58,8 @@ func TestCloneOrFetchReplacesStaleDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := CloneOrFetch(managed, remote, "git"); err != nil {
-		t.Fatalf("CloneOrFetch failed: %v", err)
+	if err := CloneFresh(managed, remote, "git"); err != nil {
+		t.Fatalf("CloneFresh failed: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(managed, ".git")); err != nil {
 		t.Fatalf("expected cloned repo with .git, got error: %v", err)

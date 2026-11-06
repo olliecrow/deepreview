@@ -107,7 +107,7 @@ func managedPreparationArgs(gitBin string, args ...string) []string {
 	return append(command, args...)
 }
 
-func CloneOrFetch(repoPath, cloneSource, gitBin string) error {
+func CloneFresh(repoPath, cloneSource, gitBin string) error {
 	if _, err := os.Stat(repoPath); err == nil {
 		if err := os.RemoveAll(repoPath); err != nil {
 			return err

@@ -270,7 +270,7 @@ func handlePrompt(prompt string) (string, error) {
 		return "review complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 1 of 2") || strings.Contains(prompt, "prompt 1 of 3") {
+	if strings.Contains(prompt, "prompt 1 of 2") {
 		triage := regexGet("Write triage decisions to `([^`]+)`", prompt)
 		if triage == "" {
 			triage = regexGet("Triage output path: `([^`]+)`", prompt)
@@ -329,7 +329,7 @@ func handlePrompt(prompt string) (string, error) {
 		return "triage and plan complete", nil
 	}
 
-	if strings.Contains(prompt, "prompt 2 of 2") || strings.Contains(prompt, "prompt 2 of 3") {
+	if strings.Contains(prompt, "prompt 2 of 2") {
 		roundNumber := roundNumberFromPrompt(prompt)
 		verification := regexGet("Write verification evidence to `([^`]+)`", prompt)
 		if verification == "" {
@@ -370,24 +370,11 @@ func handlePrompt(prompt string) (string, error) {
 				return "", err
 			}
 		}
-		auditOnly := strings.Contains(prompt, "automatic final audit round")
-		if auditOnly {
-			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_WRITE_FILE_CHANGE")) != "" {
-				if err := writeText(filepath.Join(".", "audit_round_change.txt"), "audit change\n"); err != nil {
-					return "", err
-				}
-			}
-			if strings.TrimSpace(os.Getenv("FAKE_CODEX_AUDIT_ALLOW_EMPTY_COMMIT")) != "" {
-				if _, err := runGit("commit", "--allow-empty", "-m", "audit empty commit"); err != nil {
-					return "", err
-				}
-			}
-		}
 		skipCodeChange := strings.TrimSpace(os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE")) != ""
 		if !skipCodeChange && roundNumber > 0 {
 			skipCodeChange = csvContainsRound(os.Getenv("FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS"), roundNumber)
 		}
-		if !skipCodeChange && !auditOnly {
+		if !skipCodeChange {
 			changeContent := "round change\n"
 			changePath := filepath.Join(".", "deepreview_test_round.txt")
 			if strings.TrimSpace(os.Getenv("FAKE_CODEX_CHANGE_CONTENT_BY_ROUND")) != "" && roundNumber > 0 {

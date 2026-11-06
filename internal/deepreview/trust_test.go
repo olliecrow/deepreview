@@ -105,8 +105,8 @@ func TestManagedPreparationSkipsInheritedHooksAndFilters(t *testing.T) {
 
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(td, "gitconfig"))
 	t.Setenv("GIT_CONFIG_NOSYSTEM", "1")
-	if err := CloneOrFetch(managed, remote, "git"); err != nil {
-		t.Fatalf("CloneOrFetch failed: %v", err)
+	if err := CloneFresh(managed, remote, "git"); err != nil {
+		t.Fatalf("CloneFresh failed: %v", err)
 	}
 	assertMarkerAbsent(t, hookMarker)
 	assertMarkerAbsent(t, smudgeMarker)

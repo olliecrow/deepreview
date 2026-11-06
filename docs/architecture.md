@@ -5,10 +5,40 @@ This document captures the stable architecture of deepreview.
 ## Primary objective
 Run deepreview workflows against a remote source branch using isolated worktrees, iterative round-based execution, and one final Codex-assisted delivery stage.
 
+The behavior contract is [spec.md](spec.md). This page records the trust boundary and the process flow.
+
+## Trust and process
+
+```text
+caller checkout
+  readiness uses git ls-remote
+  local refs and FETCH_HEAD stay unchanged
+        |
+        v
+review requires --trust-repo
+doctor and dry-run do not execute repository code
+and do not create a run directory
+        |
+        v
+private run directory, created only inside Run
+        |
+        v
+fresh managed clone for that repo and source branch
+        |
+        v
+independent review -> execute queue -> delivery
+        |
+        v
+exit 0 complete or no-change
+exit 2 incomplete
+exit 1 failed
+exit 130 canceled
+```
+
 ## CLI command surface
 - `deepreview review` runs the full multi-round orchestration workflow.
 - `deepreview doctor` runs non-mutating preflight checks and exits with pass/fail status.
-- `deepreview dry-run` prints resolved run context and planned stage order without running Codex or mutating git state.
+- `deepreview dry-run` prints resolved run context and planned stage order without running Codex, mutating git state, or creating a run directory.
 - `review` requires `--trust-repo` before it runs repository instructions, tests, hooks, filters, or policy scripts. Those commands use the operator's user privileges. deepreview is not a sandbox. `doctor` and `dry-run` report the trust state and do not execute those scripts.
 
 ## Core pipeline
@@ -24,13 +54,13 @@ Run deepreview workflows against a remote source branch using isolated worktrees
 - multicodex routing is dynamic only for fresh prompt contexts; once deepreview needs to resume a multicodex-backed Codex thread, it reuses the profile that created that thread
 - if source branch is inferred from local repo context, require local readiness:
   - no tracked local changes
-  - local branch exactly synchronized with upstream remote branch after refreshing the tracked upstream ref
+  - local HEAD matches the remote branch. The check uses `git ls-remote` and does not update local refs or `FETCH_HEAD`
 
 2. Prepare managed workspace under `~/deepreview`:
 - replace stale managed checkout for the source branch with a fresh clone
 - fetch latest remote refs
 - disable inherited hooks and LFS smudge/clean filters for clone, fetch, and worktree add only; later verification hooks still run
-- create the run root eagerly once run arguments are resolved so interrupt/failure reporting always has a stable artifact path
+- create the private run directory only after `--trust-repo` is granted and `Run` begins. `doctor` and `dry-run` do not create it
 - resolve source-branch head SHA
 - resolve the operator's Git identity from the source repository Git config first, then global Git config, and apply it to the managed clone with local signing disabled for deepreview-owned commits
 - initialize candidate head to latest remote source branch

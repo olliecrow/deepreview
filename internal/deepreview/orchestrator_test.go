@@ -379,8 +379,8 @@ func TestNewOrchestratorCanonicalizesRelativeFilesystemOriginForDoctorAndClone(t
 		if err != nil {
 			t.Fatalf("NewOrchestrator failed: %v", err)
 		}
-		if err := CloneOrFetch(orchestrator.managedRepoPath, orchestrator.repoIdentity.CloneSource, "git"); err != nil {
-			t.Fatalf("CloneOrFetch failed with canonicalized local origin: %v", err)
+		if err := CloneFresh(orchestrator.managedRepoPath, orchestrator.repoIdentity.CloneSource, "git"); err != nil {
+			t.Fatalf("CloneFresh failed with canonicalized local origin: %v", err)
 		}
 	})
 

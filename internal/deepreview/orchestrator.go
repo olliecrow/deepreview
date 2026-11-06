@@ -687,7 +687,7 @@ func (o *Orchestrator) Run() (retErr error) {
 
 	prepareStage := "prepare"
 	o.reporter.StageStarted(prepareStage, nil, "syncing branch-scoped managed repository copy")
-	if err := CloneOrFetch(o.managedRepoPath, o.repoIdentity.CloneSource, o.config.GitBin); err != nil {
+	if err := CloneFresh(o.managedRepoPath, o.repoIdentity.CloneSource, o.config.GitBin); err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
 	}

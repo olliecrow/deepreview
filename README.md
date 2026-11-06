@@ -99,13 +99,13 @@ Optional launcher:
 2. Build deepreview.
 
 ```bash
-go build -o ./bin/deepreview ./cmd/deepreview
+go build -trimpath -o ./bin/deepreview ./cmd/deepreview
 ```
 
-3. Run deepreview from inside a GitHub repo checkout.
+3. Run deepreview from inside a GitHub repo checkout. `review` requires `--trust-repo`.
 
 ```bash
-./bin/deepreview review
+./bin/deepreview review --trust-repo
 ```
 
 4. Optional quick checks before a full run.
@@ -125,7 +125,7 @@ Show command help.
 5. Optional explicit target repo and source branch.
 
 ```bash
-./bin/deepreview review <repo> --source-branch <branch>
+./bin/deepreview review <repo> --source-branch <branch> --trust-repo
 ./bin/deepreview doctor <repo> --source-branch <branch>
 ./bin/deepreview dry-run <repo> --source-branch <branch>
 ```
@@ -134,15 +134,15 @@ If you want to require `multicodex` on a machine where it is expected to exist:
 
 ```bash
 DEEPREVIEW_REQUIRE_MULTICODEX=1 ./bin/deepreview doctor
-DEEPREVIEW_REQUIRE_MULTICODEX=1 ./bin/deepreview review
+DEEPREVIEW_REQUIRE_MULTICODEX=1 ./bin/deepreview review --trust-repo
 ```
 
 ## Useful options
 
 ```bash
-./bin/deepreview review <repo> --source-branch <branch> --concurrency 4 --max-rounds 5
-./bin/deepreview review <repo> --source-branch <branch> --mode yolo
-./bin/deepreview review <repo> --source-branch <branch> --no-tui
+./bin/deepreview review <repo> --source-branch <branch> --trust-repo --concurrency 4 --max-rounds 5
+./bin/deepreview review <repo> --source-branch <branch> --trust-repo --mode yolo
+./bin/deepreview review <repo> --source-branch <branch> --trust-repo --no-tui
 ./bin/deepreview doctor <repo> --source-branch <branch> --mode pr
 ./bin/deepreview dry-run <repo> --source-branch <branch> --mode yolo
 ```
@@ -204,7 +204,7 @@ alias dr="/path/to/deepreview/bin/deepreview"
 Then run:
 
 ```bash
-dr review
+dr review --trust-repo
 ```
 
 If a launcher changes directories before it starts deepreview, set `DEEPREVIEW_CALLER_CWD` to the directory you started from. deepreview uses that checkout for repo and branch inference. An invalid non-empty value fails fast. deepreview does not read `OLDPWD`.
@@ -230,7 +230,7 @@ If you also keep `multicodex` under active development, expose it as a real comm
 
 ## Command summary
 
-- `deepreview review [<repo>] [--source-branch <branch>]`
+- `deepreview review [<repo>] [--source-branch <branch>] --trust-repo`
 - `deepreview doctor [<repo>] [--source-branch <branch>]`
 - `deepreview dry-run [<repo>] [--source-branch <branch>]`
 - `deepreview completion [bash|zsh]`
@@ -242,6 +242,7 @@ If you also keep `multicodex` under active development, expose it as a real comm
 
 Common options.
 
+- `--trust-repo` (required for `review`)
 - `--concurrency <n>`
 - `--max-rounds <n>`
 - `--mode <pr|yolo>`
@@ -256,7 +257,7 @@ Common options.
 ## Documentation map
 
 - [AGENTS.md](AGENTS.md): repository operating instructions and agent constraints
-- [docs/spec.md](docs/spec.md): canonical runtime and product behavior
-- [docs/architecture.md](docs/architecture.md): pipeline and isolation model
-- [docs/decisions.md](docs/decisions.md): durable decision rationale
+- [docs/spec.md](docs/spec.md): behavior contract
+- [docs/architecture.md](docs/architecture.md): trust boundary and process flow
+- [docs/decisions.md](docs/decisions.md): decision rationale
 - [prompts/README.md](prompts/README.md): prompt template pack and execute queue
