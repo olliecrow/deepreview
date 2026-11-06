@@ -12,18 +12,18 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	promptpack "deepreview/prompts"
 )
 
 type Orchestrator struct {
 	config                ReviewConfig
-	toolRoot              string
 	promptsRoot           string
 	workspaceRoot         string
 	runRoot               string
@@ -82,7 +82,7 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	if err != nil {
 		return nil, err
 	}
-	promptsRoot, toolRoot, err := findPromptsRoot()
+	promptsRoot, err := findPromptsRoot()
 	if err != nil {
 		return nil, err
 	}
@@ -100,12 +100,6 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	}
 
 	runRoot := filepath.Join(workspaceRoot, "runs", config.RunID)
-	if err := mkdirPrivate(filepath.Dir(runRoot)); err != nil {
-		return nil, err
-	}
-	if err := mkdirPrivate(runRoot); err != nil {
-		return nil, err
-	}
 	managedRepoPath := filepath.Join(
 		append(
 			[]string{workspaceRoot, "repos"},
@@ -123,7 +117,6 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	}
 	return &Orchestrator{
 		config:          config,
-		toolRoot:        toolRoot,
 		promptsRoot:     promptsRoot,
 		workspaceRoot:   workspaceRoot,
 		runRoot:         runRoot,
@@ -142,6 +135,13 @@ func (o *Orchestrator) RunRoot() string {
 	return o.runRoot
 }
 
+func (o *Orchestrator) ensureRunRoot() error {
+	if err := mkdirPrivate(filepath.Dir(o.runRoot)); err != nil {
+		return err
+	}
+	return mkdirPrivate(o.runRoot)
+}
+
 func (o *Orchestrator) RepoSlug() string {
 	return o.repoIdentity.Slug()
 }
@@ -158,28 +158,69 @@ func (o *Orchestrator) LastDelivery() *DeliveryResult {
 	return &copyValue
 }
 
-func findPromptsRoot() (string, string, error) {
-	if override := os.Getenv("DEEPREVIEW_PROMPTS_ROOT"); override != "" {
-		prompts := filepath.Clean(override)
-		if st, err := os.Stat(prompts); err == nil && st.IsDir() {
-			return prompts, filepath.Dir(prompts), nil
-		}
-		return "", "", NewDeepReviewError("prompts root not found: %s", prompts)
+func findPromptsRoot() (string, error) {
+	override := strings.TrimSpace(os.Getenv("DEEPREVIEW_PROMPTS_ROOT"))
+	if override == "" {
+		return "", nil
 	}
+	prompts := filepath.Clean(override)
+	st, err := os.Stat(prompts)
+	if err != nil || !st.IsDir() {
+		return "", NewDeepReviewError("prompts root not found")
+	}
+	abs, err := filepath.Abs(prompts)
+	if err != nil {
+		return "", err
+	}
+	return abs, nil
+}
 
-	_, thisFile, _, ok := runtime.Caller(0)
-	if ok {
-		candidate := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", "..", "prompts"))
-		if st, err := os.Stat(candidate); err == nil && st.IsDir() {
-			abs, err := filepath.Abs(candidate)
-			if err != nil {
-				return "", "", err
+func (o *Orchestrator) readPromptFile(rel string) (string, error) {
+	rel = filepath.ToSlash(rel)
+	if o.promptsRoot == "" {
+		body, err := promptpack.Files.ReadFile(rel)
+		if err != nil {
+			return "", NewDeepReviewError("prompt template missing")
+		}
+		return string(body), nil
+	}
+	return ReadTemplate(filepath.Join(o.promptsRoot, filepath.FromSlash(rel)))
+}
+
+func (o *Orchestrator) readExecuteQueue() ([]string, error) {
+	if o.promptsRoot == "" {
+		body, err := promptpack.Files.ReadFile("execute/queue.txt")
+		if err != nil {
+			return nil, NewDeepReviewError("execute queue file not found")
+		}
+		return parseQueue(string(body), "")
+	}
+	return ReadQueue(filepath.Join(o.promptsRoot, "execute", "queue.txt"))
+}
+
+func (o *Orchestrator) checkPromptTemplates() error {
+	queue, err := o.readExecuteQueue()
+	if err != nil {
+		return err
+	}
+	for _, templateName := range queue {
+		if _, err := o.readPromptFile("execute/" + templateName); err != nil {
+			if o.promptsRoot == "" {
+				return NewDeepReviewError("execute template file not found")
 			}
-			return abs, filepath.Dir(abs), nil
+			return NewDeepReviewError("execute template file not found: %s", filepath.Join(o.promptsRoot, "execute", templateName))
 		}
 	}
-
-	return "", "", NewDeepReviewError("unable to locate prompts root; set DEEPREVIEW_PROMPTS_ROOT")
+	if _, err := o.readPromptFile("review/independent-review.md"); err != nil {
+		return NewDeepReviewError("independent review prompt template missing")
+	}
+	if _, err := o.readPromptFile("delivery/01-deliver.md"); err != nil {
+		if o.promptsRoot == "" {
+			return NewDeepReviewError("delivery prompt template missing")
+		}
+		return NewDeepReviewError("delivery prompt template missing: %s", filepath.Join(o.promptsRoot, "delivery", "01-deliver.md"))
+	}
+	return nil
 }
 
 func resolveRepoIdentity(config ReviewConfig, repo string) (RepoIdentity, error) {
@@ -564,6 +605,9 @@ func (o *Orchestrator) Run() (retErr error) {
 	if !o.config.TrustRepo {
 		return NewDeepReviewError("%s", repositoryTrustRequiredMessage)
 	}
+	if err := o.ensureRunRoot(); err != nil {
+		return err
+	}
 	if o.commandCtx == nil {
 		o.commandCtx = currentRunCommandContext()
 	}
@@ -885,7 +929,7 @@ func (o *Orchestrator) preflight() error {
 	if _, err := o.codexRunner.resolveLauncher(); err != nil {
 		return err
 	}
-	if err := checkPromptTemplates(o.promptsRoot); err != nil {
+	if err := o.checkPromptTemplates(); err != nil {
 		return err
 	}
 	return nil
@@ -1467,7 +1511,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		return nil, err
 	}
 
-	templateText, err := ReadTemplate(filepath.Join(o.promptsRoot, "review", "independent-review.md"))
+	templateText, err := o.readPromptFile("review/independent-review.md")
 	if err != nil {
 		o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 		return nil, err
@@ -1765,7 +1809,7 @@ func (o *Orchestrator) runExecuteStage(
 		return RoundStatus{}, "", err
 	}
 
-	queue, err := ReadQueue(filepath.Join(o.promptsRoot, "execute", "queue.txt"))
+	queue, err := o.readExecuteQueue()
 	if err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
@@ -1823,8 +1867,7 @@ func (o *Orchestrator) runExecuteStage(
 		stageName := "execute / " + label
 		o.reporter.StageStarted(stageName, roundPtr(round), fmt.Sprintf("running execute step %d of %d", idx+1, len(queue)))
 
-		templatePath := filepath.Join(o.promptsRoot, "execute", templateName)
-		templateText, err := ReadTemplate(templatePath)
+		templateText, err := o.readPromptFile("execute/" + templateName)
 		if err != nil {
 			o.reporter.StageFinished(stageName, roundPtr(round), false, progressMessage(err))
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
@@ -3148,8 +3191,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		return DeliveryResult{}, err
 	}
 
-	templatePath := filepath.Join(o.promptsRoot, "delivery", "01-deliver.md")
-	templateText, err := ReadTemplate(templatePath)
+	templateText, err := o.readPromptFile("delivery/01-deliver.md")
 	if err != nil {
 		return DeliveryResult{}, err
 	}

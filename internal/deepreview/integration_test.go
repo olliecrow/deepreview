@@ -3337,3 +3337,66 @@ func assertCandidateAtSource(t *testing.T, workspace, userClone, sourceBranch, s
 		t.Fatalf("candidate %s is %s, source is %s", ref, got, sourceSHA)
 	}
 }
+
+func TestInstalledBinaryDryRunUsesEmbeddedPrompts(t *testing.T) {
+	goBin, err := exec.LookPath("go")
+	if err != nil {
+		t.Fatal("go is required to build the installed binary")
+	}
+	gitBin, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatal(err)
+	}
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	root := repoRoot(t)
+	binPath := filepath.Join(t.TempDir(), "deepreview")
+	build := exec.Command(goBin, "build", "-trimpath", "-o", binPath, "./cmd/deepreview")
+	build.Dir = root
+	build.Env = replaceEnv(os.Environ(), "GOTOOLCHAIN", "local")
+	buildOut, err := build.CombinedOutput()
+	if err != nil {
+		t.Fatalf("build failed: %v\n%s", err, buildOut)
+	}
+
+	workspace := t.TempDir()
+	outside := t.TempDir()
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", "")
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", workspace)
+
+	help := exec.Command(binPath, "--help")
+	help.Dir = outside
+	helpOut, err := help.CombinedOutput()
+	if err != nil {
+		t.Fatalf("help failed: %v\n%s", err, helpOut)
+	}
+
+	before := gitContentSnapshot(t, gitBin, repo)
+	dry := exec.Command(binPath, "dry-run", repo, "--source-branch", "feature/test")
+	dry.Dir = outside
+	dryOut, err := dry.CombinedOutput()
+	if err != nil {
+		t.Fatalf("dry-run failed: %v\n%s", err, dryOut)
+	}
+	if !strings.Contains(string(dryOut), "triage and plan") {
+		t.Fatalf("expected embedded queue step, got:\n%s", dryOut)
+	}
+	after := gitContentSnapshot(t, gitBin, repo)
+	if before != after {
+		t.Fatalf("dry-run changed git state\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	if _, err := os.Stat(filepath.Join(workspace, "runs")); !os.IsNotExist(err) {
+		t.Fatalf("installed dry-run created a run directory: %v", err)
+	}
+}
+
+func replaceEnv(base []string, key, value string) []string {
+	prefix := key + "="
+	next := make([]string, 0, len(base)+1)
+	for _, entry := range base {
+		if strings.HasPrefix(entry, prefix) {
+			continue
+		}
+		next = append(next, entry)
+	}
+	return append(next, prefix+value)
+}

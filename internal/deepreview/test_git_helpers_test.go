@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -22,6 +23,28 @@ func runGitCommand(t *testing.T, cwd string, args ...string) string {
 		t.Fatalf("git command failed: %v\nargs=%v\noutput=%s", err, args, string(out))
 	}
 	return string(out)
+}
+
+func gitContentSnapshot(t *testing.T, gitBin, repo string) string {
+	t.Helper()
+	var snapshot strings.Builder
+	queries := [][]string{
+		{"rev-parse", "HEAD"},
+		{"status", "--porcelain=v1"},
+		{"for-each-ref"},
+	}
+	for _, query := range queries {
+		cmd := exec.Command(gitBin, append([]string{"-C", repo}, query...)...)
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("git %v failed: %v\n%s", query, err, out)
+		}
+		snapshot.WriteString(strings.Join(query, " "))
+		snapshot.WriteByte('\n')
+		snapshot.Write(out)
+		snapshot.WriteByte('\n')
+	}
+	return snapshot.String()
 }
 
 func withWorkingDir(t *testing.T, dir string, fn func()) {

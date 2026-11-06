@@ -207,23 +207,24 @@ Then run:
 dr review
 ```
 
-If your launcher changes directories before invoking deepreview (for example, wrapping `go run` in the deepreview source repo), pass the original caller directory so repo inference stays correct. `DEEPREVIEW_CALLER_CWD` is an explicit override, so deepreview will use it even if the wrapper launches from another repo or a non-repo directory. If it is set to an invalid path or a non-repo directory, deepreview now fails fast instead of silently falling back to `OLDPWD` or the current working directory:
+If a launcher changes directories before it starts deepreview, set `DEEPREVIEW_CALLER_CWD` to the directory you started from. deepreview uses that checkout for repo and branch inference. An invalid non-empty value fails fast. deepreview does not read `OLDPWD`.
 
 ```bash
 deepreview() {
   local caller_cwd="$PWD"
-  (
-    cd /path/to/deepreview || return 1
-    DEEPREVIEW_CALLER_CWD="$caller_cwd" go run ./cmd/deepreview review "$@"
-  )
+  DEEPREVIEW_CALLER_CWD="$caller_cwd" /path/to/deepreview review "$@"
 }
 ```
 
-If you are actively editing deepreview source, rebuild after changes:
+An installed binary uses the embedded prompt pack. Set `DEEPREVIEW_PROMPTS_ROOT` to a prompt directory when you want to replace that pack without rebuilding.
+
+Build the binary from a checkout of this repository:
 
 ```bash
-go build -o ./bin/deepreview ./cmd/deepreview
+go build -trimpath -o /path/to/deepreview ./cmd/deepreview
 ```
+
+Rebuild after prompt or code changes. The embedded pack is fixed at build time.
 
 If you also keep `multicodex` under active development, expose it as a real command on `PATH` rather than relying on a stale copied binary. deepreview only resolves launcher names (`multicodex` first, then `codex`) and does not hardcode repo-specific launcher paths.
 

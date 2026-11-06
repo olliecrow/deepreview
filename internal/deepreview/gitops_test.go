@@ -612,10 +612,6 @@ func TestResolveCommitIdentityHonorsCallerCWDOutsideSourceRootForRepoLocator(t *
 func TestResolveCommitIdentityRejectsInvalidCallerCWDForRepoLocator(t *testing.T) {
 	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
-	currentRepoAbs := canonicalPath(t, currentRepo)
-	setSourceRootDetectorForTest(t, func() (string, bool) {
-		return currentRepoAbs, true
-	})
 	t.Setenv("GIT_CONFIG_GLOBAL", filepath.Join(t.TempDir(), "empty.gitconfig"))
 	t.Setenv("OLDPWD", callerRepo)
 	t.Setenv(deepreviewCallerCWDEnv, filepath.Join(t.TempDir(), "missing"))

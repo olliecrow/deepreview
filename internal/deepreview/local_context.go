@@ -3,7 +3,6 @@ package deepreview
 import (
 	"os"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -21,24 +20,7 @@ type LocalGitHubRepoState struct {
 
 const deepreviewCallerCWDEnv = "DEEPREVIEW_CALLER_CWD"
 
-var detectDeepreviewSourceRoot = defaultDeepreviewSourceRoot
 var branchReadinessRemoteTimeout = 30 * time.Second
-
-func defaultDeepreviewSourceRoot() (string, bool) {
-	_, thisFile, _, ok := runtime.Caller(0)
-	if !ok {
-		return "", false
-	}
-	root := filepath.Clean(filepath.Join(filepath.Dir(thisFile), "..", ".."))
-	if st, err := os.Stat(filepath.Join(root, "prompts")); err != nil || !st.IsDir() {
-		return "", false
-	}
-	abs, err := filepath.Abs(root)
-	if err != nil {
-		return "", false
-	}
-	return abs, true
-}
 
 func samePath(a, b string) bool {
 	aAbs, errA := filepath.Abs(filepath.Clean(a))
@@ -54,20 +36,7 @@ func resolveImplicitRepoState(gitBin string, cwdState *LocalGitHubRepoState) (*L
 	if explicitOverride {
 		return state, nil
 	}
-	if callerContextFallbackAllowed(cwdState) {
-		if state := resolveOldPWDRepoState(gitBin, cwdState); state != nil {
-			return state, nil
-		}
-	}
 	return cwdState, nil
-}
-
-func callerContextFallbackAllowed(cwdState *LocalGitHubRepoState) bool {
-	if cwdState == nil {
-		return false
-	}
-	sourceRoot, ok := detectDeepreviewSourceRoot()
-	return ok && samePath(cwdState.Path, sourceRoot)
 }
 
 func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) (*LocalGitHubRepoState, bool, error) {
@@ -93,25 +62,6 @@ func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) (*
 		return cwdState, true, nil
 	}
 	return state, true, nil
-}
-
-func resolveOldPWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) *LocalGitHubRepoState {
-	if !callerContextFallbackAllowed(cwdState) {
-		return nil
-	}
-
-	oldpwd := strings.TrimSpace(os.Getenv("OLDPWD"))
-	if oldpwd == "" {
-		return nil
-	}
-	state, err := detectLocalRepoState(gitBin, oldpwd)
-	if err != nil || state == nil {
-		return nil
-	}
-	if samePath(cwdState.Path, state.Path) {
-		return nil
-	}
-	return state
 }
 
 func detectLocalRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {

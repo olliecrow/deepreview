@@ -24,7 +24,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - deepreview must isolate managed repository clones and run locks by repo plus source branch, so different branches of the same repo can run concurrently while same-branch runs remain serialized.
 - deepreview-managed commits must use the operator's resolved Git identity from the source repository Git config when present, otherwise the operator's global Git config, and must not depend on host GPG signing configuration.
 - if repo/source-branch are omitted, deepreview may infer them from current local GitHub repo context.
-- when launched via wrappers that `cd` before execution, `DEEPREVIEW_CALLER_CWD` is an explicit caller-context override for repo/branch inference; invalid non-empty values fail fast, and the implicit `OLDPWD` fallback applies only when the override is unset and the current directory is the deepreview source repo so wrappers do not silently target the tool repo.
+- when launched via wrappers that `cd` before execution, repo and branch inference uses the current checkout, or `DEEPREVIEW_CALLER_CWD` when that variable is set. An invalid non-empty caller CWD fails fast. deepreview does not read `OLDPWD`.
 - resolved repo identity must model GitHub-backed and filesystem-local sources explicitly; GitHub repos keep their stable `owner/repo` slug while filesystem-local repos use a deterministic filesystem identity derived from the canonicalized clone source.
 - in `pr` mode, the resolved repo identity must be GitHub-backed; local filesystem origin remotes are rejected before round execution.
 - source branch resolution requires local readiness checks when it targets the current local branch context (inferred branch, or explicit `--source-branch` matching the current branch in a supported local repo context): no tracked local changes and exact local/upstream synchronization after refreshing the tracked upstream ref.
@@ -146,10 +146,10 @@ This document defines the canonical runtime and product contract for `deepreview
   - `DEEPREVIEW_REVIEW_MAX_RESTARTS` default `1`
 
 Helper command behavior:
-- `doctor` runs non-mutating preflight checks for local tools, auth state, prompt assets, and remote source-branch reachability.
+- `doctor` runs non-mutating preflight checks for local tools, auth state, prompt assets, and remote source-branch reachability. It does not create a run directory.
 - `doctor` validates the actual prompt launcher that deepreview would use (`multicodex exec --help` when routed through multicodex, otherwise `codex exec --help`) and then checks matching auth state (`multicodex status` or `codex login status`).
 - `doctor` and `dry-run` reuse the same repo/branch inference and local-current-branch readiness validation rules as `review`, so they fail early on dirty or unsynchronized local source-branch state when that local context is authoritative.
-- `dry-run` prints resolved run context and stage order without running Codex or mutating git state.
+- `dry-run` prints resolved run context and stage order without running Codex, mutating git state, or creating a run directory.
 
 ## Round artifact contract
 - Authoritative round record path: `~/deepreview/runs/<run-id>/round-<round>/round.json`
@@ -236,9 +236,9 @@ PR bodies should include these sections in the final generated output:
 - final PR title text must pass privacy checks (no personal information, secrets, or private local machine paths).
 
 ## Prompt-template contract
-- Prompt templates are file-based and unversioned.
-- Prompt root directory is `prompts/`.
-- Default prompt discovery trusts only `DEEPREVIEW_PROMPTS_ROOT` or the deepreview source-relative `prompts/` tree; executable-adjacent or target-repo `./prompts` directories are never auto-trusted.
+- Prompt templates are file-based and unversioned in the repository. The binary embeds them at build time.
+- Prompt source directory is `prompts/`.
+- With `DEEPREVIEW_PROMPTS_ROOT` unset, deepreview reads the embedded pack. When that variable is set, it must name a directory and that directory replaces the pack. Executable-adjacent directories and a target repository `prompts/` directory are never selected automatically.
 - Independent review stage uses one shared template: `prompts/review/independent-review.md`.
 - Execute stage uses an ordered queue listed in `prompts/execute/queue.txt`.
 - Delivery stage uses one shared template: `prompts/delivery/01-deliver.md`.

@@ -317,6 +317,7 @@ Troubleshooting:
   - Multicodex routing: install/expose `+"`multicodex`"+` on PATH; set DEEPREVIEW_REQUIRE_MULTICODEX=1 to fail instead of falling back to codex.
   - Auth failures: run local auth flows for the launcher deepreview is using (`+"`multicodex status`"+` or `+"`codex login status`"+`) and gh.
   - Terminal rendering issues: pass --no-tui for stable text logs.
+  - Installed binaries use the embedded prompt pack. Set DEEPREVIEW_PROMPTS_ROOT to replace it. Set DEEPREVIEW_CALLER_CWD when a launcher changes directories. deepreview does not read OLDPWD.
   - To stop a run safely at any time, press Ctrl+C once (deepreview cancels and runs cleanup).
   - Invalid mode: allowed values are only pr or yolo (case-insensitive).
 `, defaultConcurrency, defaultMaxRounds, ModePR, defaultReviewInactivitySec, defaultReviewActivityPollS, defaultReviewMaxRestarts, defaultCodexTimeoutSeconds)
@@ -340,7 +341,7 @@ Usage:
   deepreview doctor [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--trust-repo]
 
 Notes:
-  - doctor does not clone, commit, push, or open PRs.
+  - doctor does not clone, commit, push, open PRs, or create a run directory.
   - doctor reports whether --trust-repo is set. It does not execute repository instructions, tests, hooks, filters, or policy scripts.
   - review requires --trust-repo because that execution uses operator privileges and is not a sandbox.
   - argument inference and validation follow the same rules as "deepreview review".
@@ -373,7 +374,7 @@ Usage:
   deepreview dry-run [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--trust-repo]
 
 Notes:
-  - dry-run does not run Codex, does not mutate git state, and does not push.
+  - dry-run does not run Codex, does not mutate git state, does not push, and does not create a run directory.
   - dry-run reports whether --trust-repo is set. It does not execute repository instructions, tests, hooks, filters, or policy scripts.
   - argument inference and validation follow the same rules as "deepreview review".
   - `+"`--mode pr`"+` requires a GitHub-backed repo identity.
@@ -578,15 +579,6 @@ func runReviewCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
-	runRoot := filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID)
-	if err := mkdirPrivate(filepath.Dir(runRoot)); err != nil {
-		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
-		return 1
-	}
-	if err := mkdirPrivate(runRoot); err != nil {
-		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
-		return 1
-	}
 	if err := validateLocalBranchReadyForRemoteReview(parsed.Config.GitBin, parsed.Config.Repo, parsed.Config.SourceBranch); err != nil {
 		if isInterruptError(err) || interruptCount.Load() > 0 {
 			reportCanceledRun(nil, parsed.Config, filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID), parsed.Config.GitBin)
@@ -776,7 +768,7 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 		}
 	}
 
-	if err := checkPromptTemplates(o.promptsRoot); err != nil {
+	if err := o.checkPromptTemplates(); err != nil {
 		checks = append(checks, doctorCheck{
 			Name:   "prompt templates and execute queue",
 			Passed: false,
@@ -907,28 +899,6 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 	return checks
 }
 
-func checkPromptTemplates(promptsRoot string) error {
-	queuePath := filepath.Join(promptsRoot, "execute", "queue.txt")
-	queue, err := ReadQueue(queuePath)
-	if err != nil {
-		return err
-	}
-	for _, templateName := range queue {
-		templatePath := filepath.Join(promptsRoot, "execute", templateName)
-		if _, err := os.Stat(templatePath); err != nil {
-			return NewDeepReviewError("execute template file not found: %s", templatePath)
-		}
-	}
-	if _, err := os.Stat(filepath.Join(promptsRoot, "review", "independent-review.md")); err != nil {
-		return NewDeepReviewError("independent review prompt template missing")
-	}
-	deliveryTemplate := filepath.Join(promptsRoot, "delivery", "01-deliver.md")
-	if _, err := os.Stat(deliveryTemplate); err != nil {
-		return NewDeepReviewError("delivery prompt template missing: %s", deliveryTemplate)
-	}
-	return nil
-}
-
 func firstOutputLine(stdout, stderr string) string {
 	raw := strings.TrimSpace(stderr)
 	if raw == "" {
@@ -967,7 +937,7 @@ func runDryRunCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
-	if err := checkPromptTemplates(orchestrator.promptsRoot); err != nil {
+	if err := orchestrator.checkPromptTemplates(); err != nil {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
@@ -1002,8 +972,7 @@ func printDryRunPlan(out io.Writer, o *Orchestrator) {
 	fmt.Fprintln(out, "   - independent review stage, run parallel reviewers and collect review markdown reports")
 	fmt.Fprintln(out, "   - execute stage, run queue steps in order:")
 
-	queuePath := filepath.Join(o.promptsRoot, "execute", "queue.txt")
-	if queue, err := ReadQueue(queuePath); err == nil {
+	if queue, err := o.readExecuteQueue(); err == nil {
 		for idx, templateName := range queue {
 			fmt.Fprintf(out, "     %d. %s\n", idx+1, executePromptLabel(templateName))
 		}

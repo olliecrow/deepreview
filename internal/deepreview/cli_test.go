@@ -751,6 +751,63 @@ func TestRunDoctorCommandUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) 
 	})
 }
 
+func TestDoctorAndDryRunDoNotMutateWorkspace(t *testing.T) {
+	repo := createSyncedGitHubLikeRepo(t, "feature/test")
+	workspace := t.TempDir()
+	t.Setenv("DEEPREVIEW_WORKSPACE_ROOT", workspace)
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", "")
+	toolDir := t.TempDir()
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Fatalf("resolve git: %v", err)
+	}
+	before := gitContentSnapshot(t, gitPath, repo)
+	multicodexPath := filepath.Join(toolDir, "multicodex")
+	writeExecutable(t, multicodexPath, "#!/bin/sh\nif [ \"$1\" = \"status\" ]; then\n  echo logged-in profile\n  exit 0\nfi\nexit 0\n")
+	t.Setenv("PATH", toolDir)
+	t.Setenv("DEEPREVIEW_GIT_BIN", gitPath)
+	t.Setenv("DEEPREVIEW_GH_BIN", writeFakeTool(t, toolDir, "gh"))
+	t.Setenv("DEEPREVIEW_CODEX_BIN", "codex")
+	t.Setenv("SHELL", "")
+
+	withWorkingDir(t, repo, func() {
+		code, stdout, stderr := captureCommandOutput(t, func() int {
+			return runDoctorCommand([]string{})
+		})
+		if code != 0 {
+			t.Fatalf("expected doctor to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "doctor result: PASS") {
+			t.Fatalf("expected doctor pass output, got:\n%s", stdout)
+		}
+		code, stdout, stderr = captureCommandOutput(t, func() int {
+			return runDryRunCommand([]string{})
+		})
+		if code != 0 {
+			t.Fatalf("expected dry-run to succeed, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
+		}
+		if !strings.Contains(stdout, "triage and plan") {
+			t.Fatalf("expected embedded execute queue step, got:\n%s", stdout)
+		}
+	})
+
+	after := gitContentSnapshot(t, gitPath, repo)
+	if before != after {
+		t.Fatalf("doctor or dry-run changed git state\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	entries, err := os.ReadDir(workspace)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		names := make([]string, 0, len(entries))
+		for _, entry := range entries {
+			names = append(names, entry.Name())
+		}
+		t.Fatalf("doctor or dry-run wrote workspace entries: %s", strings.Join(names, ", "))
+	}
+}
+
 func TestRunDoctorCommandRejectsPRModeForFilesystemOriginRemote(t *testing.T) {
 	td := t.TempDir()
 	remote := filepath.Join(td, "remote.git")

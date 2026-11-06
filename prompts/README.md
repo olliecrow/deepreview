@@ -1,6 +1,7 @@
 # Prompt Templates
 
 This directory contains file-based, unversioned prompt templates for deepreview.
+The deepreview binary embeds these files. Set `DEEPREVIEW_PROMPTS_ROOT` to a directory to replace the embedded pack.
 
 ## Goals
 - Keep prompt behavior explicit, editable, and deterministic.

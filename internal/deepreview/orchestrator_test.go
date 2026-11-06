@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 	"unicode/utf8"
+
+	promptpack "deepreview/prompts"
 )
 
 func runGitTest(t *testing.T, cwd string, args ...string) string {
@@ -636,7 +638,7 @@ func TestPromptWatchdogPolicyRejectsNegativeValues(t *testing.T) {
 	}
 }
 
-func TestFindPromptsRootIgnoresCallerWorkingDirectoryPrompts(t *testing.T) {
+func TestFindPromptsRootUsesEmbeddedPackByDefault(t *testing.T) {
 	td := t.TempDir()
 	callerPrompts := filepath.Join(td, "prompts")
 	if err := os.MkdirAll(callerPrompts, 0o755); err != nil {
@@ -645,45 +647,18 @@ func TestFindPromptsRootIgnoresCallerWorkingDirectoryPrompts(t *testing.T) {
 
 	withWorkingDir(t, td, func() {
 		t.Setenv("DEEPREVIEW_PROMPTS_ROOT", "")
-		promptsRoot, _, err := findPromptsRoot()
+		promptsRoot, err := findPromptsRoot()
 		if err != nil {
 			t.Fatalf("findPromptsRoot failed: %v", err)
 		}
-		if canonicalPath(t, promptsRoot) == canonicalPath(t, callerPrompts) {
-			t.Fatalf("expected caller working directory prompts to be ignored, got %s", promptsRoot)
+		if promptsRoot != "" {
+			t.Fatalf("expected embedded prompts, got %s", promptsRoot)
 		}
-		want := canonicalPath(t, filepath.Join(repoRoot(t), "prompts"))
-		if canonicalPath(t, promptsRoot) != want {
-			t.Fatalf("expected prompts root %s, got %s", want, promptsRoot)
+		text, err := (&Orchestrator{}).readPromptFile("review/independent-review.md")
+		if err != nil || !strings.Contains(text, "independent deepreview reviewer") {
+			t.Fatalf("embedded review prompt unavailable: %v", err)
 		}
 	})
-}
-
-func TestFindPromptsRootIgnoresExecutableAdjacentPromptsByDefault(t *testing.T) {
-	exePath, err := os.Executable()
-	if err != nil {
-		t.Fatalf("resolve executable: %v", err)
-	}
-	exePrompts := filepath.Join(filepath.Dir(exePath), "prompts")
-	if err := os.MkdirAll(exePrompts, 0o755); err != nil {
-		t.Fatalf("create executable-adjacent prompts: %v", err)
-	}
-	t.Cleanup(func() {
-		_ = os.RemoveAll(exePrompts)
-	})
-
-	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", "")
-	promptsRoot, _, err := findPromptsRoot()
-	if err != nil {
-		t.Fatalf("findPromptsRoot failed: %v", err)
-	}
-	if canonicalPath(t, promptsRoot) == canonicalPath(t, exePrompts) {
-		t.Fatalf("expected executable-adjacent prompts to be ignored, got %s", promptsRoot)
-	}
-	want := canonicalPath(t, filepath.Join(repoRoot(t), "prompts"))
-	if canonicalPath(t, promptsRoot) != want {
-		t.Fatalf("expected prompts root %s, got %s", want, promptsRoot)
-	}
 }
 
 func TestFindPromptsRootHonorsOverride(t *testing.T) {
@@ -694,15 +669,12 @@ func TestFindPromptsRootHonorsOverride(t *testing.T) {
 	}
 	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", override)
 
-	promptsRoot, toolRoot, err := findPromptsRoot()
+	promptsRoot, err := findPromptsRoot()
 	if err != nil {
 		t.Fatalf("findPromptsRoot failed: %v", err)
 	}
 	if canonicalPath(t, promptsRoot) != canonicalPath(t, override) {
 		t.Fatalf("expected prompts root %s, got %s", override, promptsRoot)
-	}
-	if canonicalPath(t, toolRoot) != canonicalPath(t, filepath.Dir(override)) {
-		t.Fatalf("expected tool root %s, got %s", filepath.Dir(override), toolRoot)
 	}
 }
 
@@ -710,12 +682,68 @@ func TestFindPromptsRootRejectsMissingOverride(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), "missing-prompts")
 	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", missing)
 
-	_, _, err := findPromptsRoot()
+	_, err := findPromptsRoot()
 	if err == nil {
 		t.Fatalf("expected missing override to fail")
 	}
 	if !strings.Contains(err.Error(), "prompts root not found") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+	if strings.Contains(err.Error(), missing) {
+		t.Fatalf("missing override error included the path")
+	}
+}
+
+func TestNewOrchestratorDoesNotCreateRunDirectory(t *testing.T) {
+	workspace := t.TempDir()
+	t.Setenv("DEEPREVIEW_PROMPTS_ROOT", "")
+	orchestrator, err := NewOrchestrator(ReviewConfig{
+		Repo:          "example-org/example-repo",
+		SourceBranch:  "main",
+		WorkspaceRoot: workspace,
+		RunID:         "run-1",
+		GitBin:        "git",
+		CodexBin:      "codex",
+		GhBin:         "gh",
+		Mode:          ModePR,
+	}, &NullProgressReporter{})
+	if err != nil {
+		t.Fatalf("NewOrchestrator failed: %v", err)
+	}
+	runsDir := filepath.Join(workspace, "runs")
+	if _, err := os.Stat(runsDir); !os.IsNotExist(err) {
+		t.Fatalf("constructor created %s: %v", runsDir, err)
+	}
+	err = orchestrator.Run()
+	if err == nil || !strings.Contains(err.Error(), "--trust-repo") {
+		t.Fatalf("expected untrusted run to fail, got %v", err)
+	}
+	if _, statErr := os.Stat(orchestrator.runRoot); !os.IsNotExist(statErr) {
+		t.Fatalf("untrusted run created %s: %v", orchestrator.runRoot, statErr)
+	}
+}
+
+func TestEmbeddedPromptsMatchSourceFiles(t *testing.T) {
+	root := filepath.Join(repoRoot(t), "prompts")
+	files := []string{
+		"review/independent-review.md",
+		"execute/01-triage-plan.md",
+		"execute/02-implement-verify-finalize.md",
+		"execute/queue.txt",
+		"delivery/01-deliver.md",
+	}
+	for _, rel := range files {
+		embedded, err := promptpack.Files.ReadFile(rel)
+		if err != nil {
+			t.Fatalf("embedded %s: %v", rel, err)
+		}
+		disk, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if err != nil {
+			t.Fatalf("disk %s: %v", rel, err)
+		}
+		if string(embedded) != string(disk) {
+			t.Fatalf("embedded prompt drifted from source: %s", rel)
+		}
 	}
 }
 

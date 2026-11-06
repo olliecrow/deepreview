@@ -8,15 +8,6 @@ import (
 	"time"
 )
 
-func setSourceRootDetectorForTest(t *testing.T, detector func() (string, bool)) {
-	t.Helper()
-	previous := detectDeepreviewSourceRoot
-	detectDeepreviewSourceRoot = detector
-	t.Cleanup(func() {
-		detectDeepreviewSourceRoot = previous
-	})
-}
-
 func TestInferRepoAndBranchFromCurrentDirectory(t *testing.T) {
 	repo := createSyncedGitHubLikeRepo(t, "feature/test")
 	withWorkingDir(t, repo, func() {
@@ -475,14 +466,10 @@ func TestInferRepoAndBranchFromProvidedFilesystemLocalRepoPath(t *testing.T) {
 	})
 }
 
-func TestInferRepoAndBranchFallsBackToOldPWDFromSourceRoot(t *testing.T) {
+func TestInferRepoAndBranchIgnoresOldPWD(t *testing.T) {
 	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/test")
 	sourceRepoAbs := canonicalPath(t, sourceRepo)
-	callerRepoAbs := canonicalPath(t, callerRepo)
-	setSourceRootDetectorForTest(t, func() (string, bool) {
-		return sourceRepoAbs, true
-	})
 	t.Setenv(deepreviewCallerCWDEnv, "")
 	t.Setenv("OLDPWD", callerRepo)
 
@@ -491,11 +478,11 @@ func TestInferRepoAndBranchFallsBackToOldPWDFromSourceRoot(t *testing.T) {
 		if err != nil {
 			t.Fatalf("inferRepoAndBranch failed: %v", err)
 		}
-		if resolvedRepo != callerRepoAbs {
-			t.Fatalf("expected inferred repo %s, got %s", callerRepoAbs, resolvedRepo)
+		if resolvedRepo != sourceRepoAbs {
+			t.Fatalf("expected current checkout %s, got %s", sourceRepoAbs, resolvedRepo)
 		}
-		if resolvedBranch != "feature/test" {
-			t.Fatalf("expected inferred branch feature/test, got %s", resolvedBranch)
+		if resolvedBranch != "main" {
+			t.Fatalf("expected inferred branch main, got %s", resolvedBranch)
 		}
 	})
 }
@@ -504,9 +491,6 @@ func TestInferRepoAndBranchOldPWDFallbackIgnoredOutsideSourceRoot(t *testing.T) 
 	currentRepo := createSyncedGitHubLikeRepo(t, "feature/current")
 	otherRepo := createSyncedGitHubLikeRepo(t, "feature/other")
 	currentRepoAbs := canonicalPath(t, currentRepo)
-	setSourceRootDetectorForTest(t, func() (string, bool) {
-		return canonicalPath(t, otherRepo), true
-	})
 	t.Setenv("OLDPWD", otherRepo)
 
 	withWorkingDir(t, currentRepo, func() {
@@ -589,11 +573,7 @@ func TestInferRepoAndBranchHonorsCallerCWDFromNonRepoDirectory(t *testing.T) {
 func TestInferRepoAndBranchPrefersCallerCWDEnv(t *testing.T) {
 	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
-	sourceRepoAbs := canonicalPath(t, sourceRepo)
 	callerRepoAbs := canonicalPath(t, callerRepo)
-	setSourceRootDetectorForTest(t, func() (string, bool) {
-		return sourceRepoAbs, true
-	})
 	t.Setenv("OLDPWD", sourceRepo)
 	t.Setenv(deepreviewCallerCWDEnv, callerRepo)
 
@@ -614,10 +594,6 @@ func TestInferRepoAndBranchPrefersCallerCWDEnv(t *testing.T) {
 func TestInferRepoAndBranchRejectsInvalidCallerCWDOverride(t *testing.T) {
 	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
-	sourceRepoAbs := canonicalPath(t, sourceRepo)
-	setSourceRootDetectorForTest(t, func() (string, bool) {
-		return sourceRepoAbs, true
-	})
 	t.Setenv("OLDPWD", callerRepo)
 
 	testCases := []struct {
@@ -647,10 +623,6 @@ func TestInferRepoAndBranchRejectsInvalidCallerCWDOverride(t *testing.T) {
 func TestValidateLocalBranchReadyForRemoteReviewRejectsInvalidCallerCWDOverride(t *testing.T) {
 	sourceRepo := createSyncedGitHubLikeRepo(t, "main")
 	callerRepo := createSyncedGitHubLikeRepo(t, "feature/caller")
-	sourceRepoAbs := canonicalPath(t, sourceRepo)
-	setSourceRootDetectorForTest(t, func() (string, bool) {
-		return sourceRepoAbs, true
-	})
 	t.Setenv("OLDPWD", callerRepo)
 	t.Setenv(deepreviewCallerCWDEnv, filepath.Join(t.TempDir(), "missing"))
 

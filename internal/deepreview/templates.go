@@ -22,8 +22,12 @@ func ReadQueue(path string) ([]string, error) {
 	if err != nil {
 		return nil, NewDeepReviewError("execute queue file not found: %s", path)
 	}
+	return parseQueue(string(b), path)
+}
+
+func parseQueue(text, source string) ([]string, error) {
 	var entries []string
-	for _, raw := range strings.Split(string(b), "\n") {
+	for _, raw := range strings.Split(text, "\n") {
 		line := strings.TrimSpace(raw)
 		if line == "" || strings.HasPrefix(line, "#") {
 			continue
@@ -34,7 +38,10 @@ func ReadQueue(path string) ([]string, error) {
 		entries = append(entries, line)
 	}
 	if len(entries) == 0 {
-		return nil, NewDeepReviewError("execute queue is empty: %s", path)
+		if source == "" {
+			return nil, NewDeepReviewError("execute queue is empty")
+		}
+		return nil, NewDeepReviewError("execute queue is empty: %s", source)
 	}
 	return entries, nil
 }
