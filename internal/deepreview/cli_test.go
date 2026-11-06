@@ -493,6 +493,46 @@ func TestReviewHelpTextMentionsBranchScopedManagedCopy(t *testing.T) {
 	}
 }
 
+func TestReviewHelpExamplesParseWithoutTrustError(t *testing.T) {
+	examples := reviewHelpExamples(ReviewHelpText())
+	if len(examples) < 6 {
+		t.Fatalf("expected every review help example, got %d", len(examples))
+	}
+	for _, example := range examples {
+		args := strings.Fields(strings.TrimPrefix(example, "deepreview review"))
+		parsed, err := ParseReviewArgs(args, time.Unix(1700000000, 0))
+		if err != nil {
+			t.Fatalf("example %q failed to parse: %v", example, err)
+		}
+		if !parsed.Config.TrustRepo {
+			t.Fatalf("example %q: %s", example, repositoryTrustRequiredMessage)
+		}
+	}
+}
+
+func reviewHelpExamples(help string) []string {
+	var examples []string
+	inExamples := false
+	for _, line := range strings.Split(help, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "Examples:" {
+			inExamples = true
+			continue
+		}
+		if !inExamples {
+			continue
+		}
+		if trimmed == "" {
+			continue
+		}
+		if !strings.HasPrefix(trimmed, "deepreview review ") {
+			break
+		}
+		examples = append(examples, trimmed)
+	}
+	return examples
+}
+
 func TestPrintDryRunPlanUsesRepoBranchLockLanguage(t *testing.T) {
 	o := &Orchestrator{
 		config: ReviewConfig{

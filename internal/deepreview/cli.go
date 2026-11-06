@@ -370,12 +370,12 @@ Operational defaults:
   Run ID: auto-generated UTC timestamp + random suffix
 
 Examples:
-  deepreview review /path/to/repo --source-branch feature/login
-  deepreview review owner/repo --source-branch feature/login --concurrency 6 --max-rounds 2
-  deepreview review owner/repo --source-branch feature/login --mode yolo
-  deepreview review owner/repo --source-branch feature/login --yolo
-  deepreview review owner/repo --source-branch feature/login
-  deepreview review owner/repo --source-branch feature/login --no-tui
+  deepreview review /path/to/repo --source-branch feature/login --trust-repo
+  deepreview review owner/repo --source-branch feature/login --trust-repo --concurrency 6 --max-rounds 2
+  deepreview review owner/repo --source-branch feature/login --trust-repo --mode yolo
+  deepreview review owner/repo --source-branch feature/login --trust-repo --yolo
+  deepreview review owner/repo --source-branch feature/login --trust-repo
+  deepreview review owner/repo --source-branch feature/login --trust-repo --no-tui
 
 Troubleshooting:
   - Missing tools: ensure git/codex/(gh for pr mode) are on PATH or set env overrides.
