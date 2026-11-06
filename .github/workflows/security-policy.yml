@@ -40,7 +40,7 @@ jobs:
           install -m 0755 "${work}/gitleaks" "$RUNNER_TEMP/gitleaks"
           echo "$RUNNER_TEMP" >> "$GITHUB_PATH"
 
-      - name: Scan pushed/PR commit range with gitleaks
+      - name: Resolve the scan range
         env:
           PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
           PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
@@ -48,51 +48,33 @@ jobs:
         run: |
           set -euo pipefail
           if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            range="$(bash scripts/security/resolve-scan-range.sh "${PR_HEAD_SHA}" "${PR_BASE_SHA}")"
+            to="${PR_HEAD_SHA}"
+            base="${PR_BASE_SHA}"
           else
-            range="$(bash scripts/security/resolve-scan-range.sh "${GITHUB_SHA}" "${PUSH_BEFORE_SHA}")"
+            to="${GITHUB_SHA}"
+            base="${PUSH_BEFORE_SHA}"
           fi
-          gitleaks git --redact --verbose --config .gitleaks.toml --log-opts="${range}"
+          from="$(bash scripts/security/resolve-scan-range.sh "${to}" "${base}")"
+          echo "SCAN_FROM=${from}" >> "$GITHUB_ENV"
+          echo "SCAN_TO=${to}" >> "$GITHUB_ENV"
+          echo "scan range: ${from:-all history}..${to}"
 
-      - name: Self-test sensitive text policy patterns
-        run: |
-          set -euo pipefail
-          tmp_ok="$(mktemp)"
-          tmp_bad="$(mktemp)"
-          printf 'docs: keep /Users/YOU as placeholder only\n' > "${tmp_ok}"
-          printf 'fix: %s=%s\n' "token" "abc123456789XYZ" > "${tmp_bad}"
-          bash scripts/security/check-sensitive-text.sh --context=policy-selftest "${tmp_ok}"
-          if bash scripts/security/check-sensitive-text.sh --context=policy-selftest "${tmp_bad}"; then
-            echo "expected policy self-test failure did not occur" >&2
-            exit 1
-          fi
+      - name: Scan the range with gitleaks
+        run: bash scripts/security/gitleaks-range.sh --from "${SCAN_FROM}" --to "${SCAN_TO}"
 
-      - name: Self-test sensitive text policy without ripgrep
-        run: |
-          set -euo pipefail
-          tmp_bad="$(mktemp)"
-          printf 'fix: %s=%s\n' "token" "abc123456789XYZ" > "${tmp_bad}"
-          if PATH="/usr/bin:/bin" bash scripts/security/check-sensitive-text.sh --context=policy-fallback-selftest "${tmp_bad}"; then
-            echo "expected fallback policy self-test failure did not occur" >&2
-            exit 1
-          fi
+      - name: Scan commit messages, added lines, and paths
+        run: PRE_COMMIT_FROM_REF="${SCAN_FROM}" PRE_COMMIT_TO_REF="${SCAN_TO}" bash scripts/security/check-push-range.sh
 
-      - name: Check commit messages for policy violations
+      - name: Set up Go
+        uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Test the security scripts with gitleaks
         env:
-          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PUSH_BEFORE_SHA: ${{ github.event.before }}
-        run: |
-          set -euo pipefail
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            range="$(bash scripts/security/resolve-scan-range.sh "${PR_HEAD_SHA}" "${PR_BASE_SHA}")"
-          else
-            range="$(bash scripts/security/resolve-scan-range.sh "${GITHUB_SHA}" "${PUSH_BEFORE_SHA}")"
-          fi
-
-          temp_file="$(mktemp)"
-          git log --format='%H%n%s%n%b%n' "${range}" > "${temp_file}"
-          bash scripts/security/check-sensitive-text.sh --context=commit-message "${temp_file}"
+          DEEPREVIEW_REQUIRE_GITLEAKS: "1"
+        run: go test -count=1 ./internal/deepreview/ -run 'TestGitleaks|TestCheckPushRange|TestCheckSensitiveText|TestResolveScanRange'
 
       - name: Check pull request title/body for policy violations
         if: github.event_name == 'pull_request'
