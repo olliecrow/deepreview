@@ -880,9 +880,11 @@ func CommitAllChanges(repoPath, gitBin, message string, identity CommitIdentity)
 }
 
 // publicationDiff fixes the output format and inspects raw blobs regardless of
-// attributes, external drivers, or user diff configuration.
+// attributes, external drivers, or user diff configuration. Paths after "--"
+// are literal, so a name like ":/README.md" or "*.md" is not pathspec magic.
 func publicationDiff(repoPath, gitBin string, args ...string) (string, error) {
 	command := []string{
+		"--literal-pathspecs",
 		"-c", "core.quotePath=false",
 		"diff", "--text", "--no-textconv", "--no-ext-diff",
 		"--no-color", "--no-renames", "--no-relative", "--word-diff=none",

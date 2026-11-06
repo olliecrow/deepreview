@@ -1023,3 +1023,61 @@ func TestPrivacyScanTokenBoundaries(t *testing.T) {
 		})
 	}
 }
+
+func TestSecretHygieneScanTreatsPathspecsLiterally(t *testing.T) {
+	cases := []struct {
+		name string
+		rel  string
+	}{
+		{name: "colon directory", rel: ":/README.md"},
+		{name: "glob name", rel: "*.md"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			o, repo, base := newPrivacyScanOrchestrator(t)
+			payload := strings.Join([]string{"", "home", "privatefixture", "notes"}, "/")
+			target := filepath.Join(repo, filepath.FromSlash(tc.rel))
+			if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(target, []byte(payload+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("benign added\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, repo, "add", "-A")
+			runGitTest(t, repo, "commit", "-m", "add unusual path")
+
+			lines, err := AddedLinesBetweenRefs(repo, "git", base, "HEAD", tc.rel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			joined := strings.Join(lines, "\n")
+			if !strings.Contains(joined, payload) || strings.Contains(joined, "benign added") {
+				t.Fatalf("path %q was not read literally", tc.rel)
+			}
+			status, err := ChangedFileStatusBetweenRefs(repo, "git", base, "HEAD", tc.rel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if status != "A" {
+				t.Fatalf("path %q status = %q", tc.rel, status)
+			}
+			content, err := FileContentAtRef(repo, "git", "HEAD", tc.rel)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(string(content), payload) {
+				t.Fatalf("blob read missed %q", tc.rel)
+			}
+			err = o.secretHygieneScanBetween(base, "HEAD")
+			if err == nil || !strings.Contains(err.Error(), "local path pattern matched in "+tc.rel) {
+				t.Fatalf("scan missed %s: %v", tc.rel, err)
+			}
+			if strings.Contains(err.Error(), payload) {
+				t.Fatal("scan disclosed sensitive content")
+			}
+		})
+	}
+}
