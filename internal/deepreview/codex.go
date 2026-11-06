@@ -233,7 +233,6 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 	}
 	capturedStreamErr := streamErr
 	threadID := parser.threadID
-	agentMessages := append([]string(nil), parser.messages...)
 	streamMu.Unlock()
 	if capturedStreamErr != nil {
 		return CodexRunResult{}, capturedStreamErr
@@ -260,7 +259,6 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 		ThreadID:          threadID,
 		MulticodexProfile: discoveredProfile,
 		UsedMulticodex:    launcher.Display == "multicodex",
-		AgentMessages:     agentMessages,
 		Stdout:            completed.Stdout,
 		Stderr:            completed.Stderr,
 	}, nil
@@ -288,7 +286,6 @@ func withEnvOverride(base []string, key, value string) []string {
 type codexEventParser struct {
 	pending  []byte
 	threadID string
-	messages []string
 }
 
 func (p *codexEventParser) push(chunk []byte) error {
@@ -345,22 +342,6 @@ func (p *codexEventParser) consumeLine(line []byte) error {
 			p.threadID = tid
 		}
 	}
-	if eventType != "item.completed" {
-		return nil
-	}
-	item, ok := event["item"].(map[string]any)
-	if !ok {
-		return nil
-	}
-	itemType, _ := item["type"].(string)
-	if itemType != "agent_message" {
-		return nil
-	}
-	text, _ := item["text"].(string)
-	if text == "" {
-		return nil
-	}
-	p.messages = append(p.messages, text)
 	return nil
 }
 

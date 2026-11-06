@@ -370,9 +370,6 @@ func TestCodexEventParserSplitsChunksAndRejectsBadEvents(t *testing.T) {
 	if parser.threadID != "thread-split" {
 		t.Fatalf("thread id = %q", parser.threadID)
 	}
-	if len(parser.messages) != 1 || parser.messages[0] != "hello" {
-		t.Fatalf("messages = %#v", parser.messages)
-	}
 
 	malformed := &codexEventParser{}
 	if err := malformed.push([]byte("{\"type\":\n")); err == nil || !strings.Contains(err.Error(), "failed parsing codex event json") {
@@ -445,9 +442,6 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"d
 	}
 	if result.ThreadID != "thread-big" {
 		t.Fatalf("thread id = %q", result.ThreadID)
-	}
-	if len(result.AgentMessages) != 1 || result.AgentMessages[0] != "done" {
-		t.Fatalf("messages = %#v", result.AgentMessages)
 	}
 	if len(result.Stdout) > commandDiagnosticTailBytes || len(result.Stderr) > commandDiagnosticTailBytes {
 		t.Fatalf("retained stdout=%d stderr=%d", len(result.Stdout), len(result.Stderr))

@@ -60,10 +60,14 @@ type promptDeliveryResult struct {
 }
 
 const (
-	stageHeartbeatInterval       = 15 * time.Second
-	mergeReadyPRPollInterval     = 1 * time.Second
-	mergeReadyPRValidationWindow = 30 * time.Second
+	stageHeartbeatInterval   = 15 * time.Second
+	mergeReadyPRPollInterval = 1 * time.Second
+	ghCommandTimeout         = 2 * time.Minute
 )
+
+// mergeReadyPRValidationWindow bounds the whole mergeability wait, including
+// each gh pr view call.
+var mergeReadyPRValidationWindow = 30 * time.Second
 
 type pullRequestMergeState struct {
 	URL              string `json:"url"`
@@ -2923,7 +2927,7 @@ func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
 	deadline := time.Now().Add(mergeReadyPRValidationWindow)
 	reportedPending := false
 	for {
-		state, err := o.readPullRequestMergeState(prURL)
+		state, err := o.readPullRequestMergeState(prURL, max(time.Until(deadline), time.Second))
 		if err != nil {
 			return err
 		}
@@ -2971,7 +2975,7 @@ func (o *Orchestrator) validateMergeReadyPR(prURL string) error {
 	}
 }
 
-func (o *Orchestrator) readPullRequestMergeState(prURL string) (pullRequestMergeState, error) {
+func (o *Orchestrator) readPullRequestMergeState(prURL string, timeout time.Duration) (pullRequestMergeState, error) {
 	completed, err := RunCommand(
 		[]string{
 			o.config.GhBin,
@@ -2982,7 +2986,7 @@ func (o *Orchestrator) readPullRequestMergeState(prURL string) (pullRequestMerge
 		o.managedRepoPath,
 		"",
 		true,
-		0,
+		timeout,
 	)
 	if err != nil {
 		return pullRequestMergeState{}, err
@@ -3297,7 +3301,7 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 		o.managedRepoPath,
 		"",
 		true,
-		0,
+		ghCommandTimeout,
 	)
 	if err != nil {
 		return DeliveryResult{}, err

@@ -26,6 +26,14 @@ const (
 	commandDiagnosticTailBytes = 256 << 10
 )
 
+// Commands whose output callers parse keep it whole, up to this cap. A larger
+// output fails the command instead of being truncated. A command without its
+// own timeout gets defaultCommandTimeout, so a stuck git or gh call ends.
+var (
+	maxRetainedCommandOutput = 64 << 20
+	defaultCommandTimeout    = 30 * time.Minute
+)
+
 type processSession struct {
 	mu   sync.Mutex
 	pids map[int]struct{}
@@ -128,6 +136,9 @@ func currentRunCommandContext() context.Context {
 }
 
 func RunCommand(command []string, cwd string, input string, check bool, timeout time.Duration) (CompletedProcess, error) {
+	if timeout <= 0 {
+		timeout = defaultCommandTimeout
+	}
 	return RunCommandContextWithCallbacks(currentRunCommandContext(), command, cwd, input, check, timeout, nil)
 }
 
@@ -181,8 +192,10 @@ func runCommandInvocation(
 	var cancel context.CancelFunc
 	if timeout > 0 {
 		ctx, cancel = context.WithTimeout(ctx, timeout)
-		defer cancel()
+	} else {
+		ctx, cancel = context.WithCancel(ctx)
 	}
+	defer cancel()
 	if err := ctx.Err(); err != nil {
 		return CompletedProcess{}, commandContextError(err, command, timeout, CompletedProcess{})
 	}
@@ -202,6 +215,8 @@ func runCommandInvocation(
 	retainFull := callbacks == nil
 	stdoutWriter := newStreamCaptureWriter(retainFull)
 	stderrWriter := newStreamCaptureWriter(retainFull)
+	stdoutWriter.onOverflow = cancel
+	stderrWriter.onOverflow = cancel
 	if callbacks != nil {
 		stdoutWriter.onChunk = callbacks.OnStdoutChunk
 		stderrWriter.onChunk = callbacks.OnStderrChunk
@@ -233,6 +248,9 @@ func runCommandInvocation(
 		Stderr:     stderrWriter.String(),
 		ReturnCode: code,
 	}
+	if stdoutWriter.overflowed || stderrWriter.overflowed {
+		return CompletedProcess{ReturnCode: code}, NewDeepReviewError("command output exceeds %d bytes: %s", maxRetainedCommandOutput, command[0])
+	}
 	if ctx.Err() != nil {
 		return completed, commandContextError(ctx.Err(), command, timeout, completed)
 	}
@@ -260,6 +278,8 @@ type streamCaptureWriter struct {
 	buffer     *bytes.Buffer
 	tail       *tailBuffer
 	onChunk    func(chunk []byte)
+	onOverflow func()
+	overflowed bool
 }
 
 func newStreamCaptureWriter(retainFull bool) *streamCaptureWriter {
@@ -277,7 +297,15 @@ func (w *streamCaptureWriter) Write(p []byte) (int, error) {
 		return len(p), nil
 	}
 	if w.retainFull {
-		if w.buffer != nil {
+		switch {
+		case w.overflowed || w.buffer == nil:
+		case w.buffer.Len()+len(p) > maxRetainedCommandOutput:
+			w.overflowed = true
+			w.buffer = nil
+			if w.onOverflow != nil {
+				w.onOverflow()
+			}
+		default:
 			_, _ = w.buffer.Write(p)
 		}
 	} else if w.tail != nil {

@@ -32,7 +32,7 @@ func inspectionConfigOverrides(gitBin, repoPath string) ([]string, error) {
 	listed, err := RunCommandContextWithEnvAndCallbacks(
 		currentRunCommandContext(),
 		[]string{gitBin, "-C", repoPath, "config", "--null", "--name-only", "--get-regexp", `^(filter|protocol)\.`},
-		"", inspectionEnv(), "", false, 0, nil,
+		"", inspectionEnv(), "", false, defaultCommandTimeout, nil,
 	)
 	if err != nil {
 		return nil, err
@@ -78,6 +78,9 @@ func inspectGit(gitBin, repoPath string, timeout time.Duration, args ...string) 
 	overrides, err := inspectionConfigOverrides(gitBin, repoPath)
 	if err != nil {
 		return CompletedProcess{}, err
+	}
+	if timeout <= 0 {
+		timeout = defaultCommandTimeout
 	}
 	command := []string{gitBin, "-C", repoPath, "--no-optional-locks"}
 	for _, override := range overrides {

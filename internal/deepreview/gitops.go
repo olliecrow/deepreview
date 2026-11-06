@@ -350,7 +350,7 @@ func removeLinkedWorktree(ctx context.Context, repoPath, gitDir, gitBin, worktre
 			if removeErr != nil {
 				lastErr = removeErr
 			}
-			if err := forceRemoveOwnedPath(worktreePath); err != nil {
+			if err := forceRemoveOwnedPath(ctx, worktreePath); err != nil {
 				lastErr = err
 			}
 		}
@@ -638,7 +638,7 @@ func pathIsWithinDir(root, target string) bool {
 	return !strings.HasPrefix(rel, ".."+string(filepath.Separator))
 }
 
-func forceRemoveOwnedPath(path string) error {
+func forceRemoveOwnedPath(ctx context.Context, path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -649,35 +649,49 @@ func forceRemoveOwnedPath(path string) error {
 	if info.Mode()&os.ModeSymlink != 0 {
 		return NewDeepReviewError("refusing to remove symlink worktree path: %s", path)
 	}
-	_ = makeTreeWritable(path)
-	return os.RemoveAll(path)
+	return removeTreeContext(ctx, path)
 }
 
-func makeTreeWritable(root string) error {
-	info, err := os.Lstat(root)
-	if err != nil || info.Mode()&os.ModeSymlink != 0 {
-		return err
-	}
-	if err := os.Chmod(root, info.Mode().Perm()|0o700); err != nil {
-		return err
-	}
-	return filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil || path == root {
-			return walkErr
-		}
-		entryInfo, err := entry.Info()
-		if err != nil {
+// removeTreeContext deletes root and everything below it without following
+// symlinks. It makes each directory user-writable before reading it and
+// stops when ctx ends, so a large or slow tree cannot outlast the cleanup
+// budget.
+func removeTreeContext(ctx context.Context, root string) error {
+	var dirs []string
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if entryInfo.Mode()&os.ModeSymlink != 0 {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) {
+				return nil
+			}
+			return walkErr
+		}
+		if entry.IsDir() {
+			if info, err := entry.Info(); err == nil {
+				_ = os.Chmod(path, info.Mode().Perm()|0o700)
+			}
+			dirs = append(dirs, path)
 			return nil
 		}
-		perm := entryInfo.Mode().Perm() | 0o200
-		if entry.IsDir() {
-			perm |= 0o700
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
 		}
-		return os.Chmod(path, perm)
+		return nil
 	})
+	if err != nil {
+		return err
+	}
+	for i := len(dirs) - 1; i >= 0; i-- {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if err := os.Remove(dirs[i]); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+	}
+	return nil
 }
 
 func EnsureWorktreeOperationalExcludes(repoPath, gitBin string) error {

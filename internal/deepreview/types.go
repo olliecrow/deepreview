@@ -116,7 +116,6 @@ type CodexRunResult struct {
 	ThreadID          string
 	MulticodexProfile string
 	UsedMulticodex    bool
-	AgentMessages     []string
 	Stdout            string
 	Stderr            string
 }
