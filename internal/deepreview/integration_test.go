@@ -375,7 +375,8 @@ func cloneUserRepoWithGitHubOrigin(t *testing.T, td, remote, userClone string) s
 	return githubURL
 }
 
-func baseEnv(root, workspace, codexBin, ghBin string) []string {
+func baseEnv(t *testing.T, root, workspace, codexBin, ghBin string) []string {
+	t.Helper()
 	env := make([]string, 0, len(os.Environ())+16)
 	for _, entry := range os.Environ() {
 		if entry == "GIT_CONFIG_COUNT" ||
@@ -392,6 +393,7 @@ func baseEnv(root, workspace, codexBin, ghBin string) []string {
 		pathPrefix += string(os.PathListSeparator) + currentPath
 	}
 	env = append(env,
+		"TMPDIR="+t.TempDir(),
 		"DEEPREVIEW_WORKSPACE_ROOT="+workspace,
 		"DEEPREVIEW_CODEX_BIN="+codexBin,
 		"DEEPREVIEW_GH_BIN="+ghBin,
@@ -445,7 +447,7 @@ func TestEndToEndYoloWithFakeCodex(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_CODEX_WRITE_OPERATIONAL_TMP=1")
 	output := runCmd(t, root, env,
 		bin,
@@ -550,7 +552,7 @@ func TestEndToEndYOLOModeRejectsIncompletePromptResult(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := strings.TrimSpace(runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test"))
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_DELIVERY_INCOMPLETE=1",
 		"FAKE_CODEX_DELIVERY_INCOMPLETE_REASON=yolo should not publish",
@@ -654,7 +656,7 @@ func TestConcurrentRunsSameRepoDifferentBranchesSucceed(t *testing.T) {
 	beforeA := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/a")
 	beforeB := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/b")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_CODEX_SLEEP_MS=200")
 
 	cmdA, stdoutA, stderrA := startCmd(t, root, env,
@@ -755,7 +757,7 @@ func TestEndToEndPRModeWithFakeGH(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
@@ -963,7 +965,7 @@ func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testi
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_GH_PR_CREATE_SILENT=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
@@ -1054,7 +1056,7 @@ func TestEndToEndPRModeSupportsIncompletePromptResult(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_DELIVERY_INCOMPLETE=1",
 		"FAKE_CODEX_DELIVERY_INCOMPLETE_REASON=waiting on mergeability signal",
@@ -1140,7 +1142,7 @@ func TestEndToEndPRModeFailsBeforePublishingSecretChange(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
@@ -1200,7 +1202,7 @@ func TestEndToEndPRModeRejectsDeliveryMutationAndPublishesReviewedDraft(t *testi
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_DELIVERY_RESET_TO_MAIN=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
@@ -1268,7 +1270,7 @@ func TestEndToEndYoloFailsBeforePublishingSecretChange(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_CODEX_WRITE_SECRET_PATTERN_CHANGE=1")
 	output := runCmdExpectFailure(t, root, env,
 		bin,
@@ -1327,7 +1329,7 @@ func TestEndToEndPRModeRejectsSeparatePreparedDeliveryBranch(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_DELIVERY_BRANCH_SECRET=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
@@ -1411,7 +1413,7 @@ func TestEndToEndPRModeDoesNotFallbackPublishHistoryBlockedCandidateBranch(t *te
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE=1",
 		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
@@ -1490,7 +1492,7 @@ func TestEndToEndPRModeUsesTrustedPublishRangeScript(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
@@ -1569,7 +1571,7 @@ func TestEndToEndPRModeRejectsCandidateDeletingTrustedPushRangePolicy(t *testing
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_WRITE_LOCAL_PATH_CHANGE=1",
 		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
@@ -1628,7 +1630,7 @@ func TestEndToEndPRModeReportsExistingPRAfterMergeabilityFailure(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_GH_PR_VIEW_MERGEABLE=CONFLICTING")
 	output := runCmdExpectFailure(t, root, env,
 		bin,
@@ -1717,7 +1719,7 @@ func TestEndToEndPRModeWaitsForTransientMergeabilityState(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_GH_PR_VIEW_SEQUENCE_STATE_PATH="+sequenceStatePath,
 		"FAKE_GH_PR_VIEW_MERGEABLE_SEQUENCE=UNKNOWN,MERGEABLE",
@@ -1786,7 +1788,7 @@ func TestInterruptCancelsRunAndCleansUp(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_CODEX_SLEEP_MS=2000")
 	stdout, stderr, exitCode := runCmdWithInterrupt(
 		t,
@@ -1883,7 +1885,7 @@ func TestReviewStageRestartsStalledWorkerAndRequiresFullCoverage(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_REQUIRE_SELF_AUDIT_REVIEW_PROMPT=1",
@@ -1955,7 +1957,7 @@ func TestReviewStageDoesNotReuseStaleArtifactsFromKilledWorker(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env := baseEnv(t, root, workspace, stallingCodex, fakeGH)
 	env = append(env,
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
 		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
@@ -2032,7 +2034,7 @@ func TestEndToEndPRModeUsesNormalInheritedCodexEnvironment(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_REQUIRE_PROMPT_OUTPUTS_WITHIN_CWD=1",
@@ -2080,7 +2082,7 @@ func TestEndToEndPRModeIgnoresUntrackedOperationalArtifactsDuringRoundChangeDete
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
@@ -2155,7 +2157,7 @@ func TestEndToEndPRModeAllowsNewTrackedFilesUnderRepoOwnedOperationalPath(t *tes
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_ADD_REPO_TMP_FILE=1",
 		"FAKE_CODEX_WRITE_OPERATIONAL_TMP=1",
@@ -2234,7 +2236,7 @@ func TestEndToEndPRModeReservesDeepreviewTmpArtifactsInsideRepoOwnedTmp(t *testi
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	output := runCmd(t, root, env,
 		bin,
 		"review",
@@ -2298,7 +2300,7 @@ func TestRunFailsWhenExecuteForceCommitsNewOperationalArtifacts(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_CODEX_FORCE_ADD_OPERATIONAL_TMP=1")
 	output := runCmdExpectFailure(t, root, env,
 		bin,
@@ -2354,7 +2356,7 @@ func TestEndToEndPRModeFailsWhenNoChangesButCodexStillRequestsAnotherRound(t *te
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_DECISION=continue",
@@ -2420,7 +2422,7 @@ func TestEndToEndPRModeRecreatesExecuteWorktreeBeforeRetryAfterStall(t *testing.
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env := baseEnv(t, root, workspace, stallingCodex, fakeGH)
 	env = append(env,
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
 		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
@@ -2498,7 +2500,7 @@ func TestEndToEndPRModeRetriesExecutePromptWithFreshContextAfterStall(t *testing
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env := baseEnv(t, root, workspace, stallingCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"FAKE_CODEX_DECISION=continue",
@@ -2574,7 +2576,7 @@ func TestEndToEndPRModeDoesNotReuseStaleExecuteStatusArtifactsFromKilledPrompt(t
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env := baseEnv(t, root, workspace, stallingCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
@@ -2644,7 +2646,7 @@ func TestEndToEndPRModeCompletesAfterOneCleanStopDecision(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env, "FAKE_CODEX_SKIP_CODE_CHANGE=1")
 	output := runCmd(t, root, env,
 		bin,
@@ -2730,7 +2732,7 @@ func TestRunReviewsChangedRoundThenStopsOnCleanRound(t *testing.T) {
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 	before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_CHANGE_CONTENT_BY_ROUND=1",
 		"FAKE_CODEX_SKIP_CODE_CHANGE_ROUNDS=2",
@@ -2816,7 +2818,7 @@ func TestEndToEndPRModeDiscardsStaleDeliveryCommitBeforeRetry(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, stallingCodex, fakeGH)
+	env := baseEnv(t, root, workspace, stallingCodex, fakeGH)
 	env = append(env,
 		"DEEPREVIEW_REVIEW_INACTIVITY_SECONDS=2",
 		"DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS=1",
@@ -2900,7 +2902,7 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_DECISION=continue",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
@@ -3026,7 +3028,7 @@ func TestRunPRModeDoesNotPublishInvalidExecuteRound(t *testing.T) {
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "main")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_ADD_REPO_TMP_FILE=1",
 		"FAKE_CODEX_DECISION=continue",
@@ -3114,7 +3116,7 @@ func TestRunPRModeIncompleteDraftRejectsPrivacyBlockedDocsWithoutAutoSanitizing(
 	cloneUserRepoWithGitHubOrigin(t, td, remote, userClone)
 	runCmd(t, td, nil, "git", "-C", userClone, "checkout", "feature/test")
 
-	env := baseEnv(root, workspace, fakeCodex, fakeGH)
+	env := baseEnv(t, root, workspace, fakeCodex, fakeGH)
 	env = append(env,
 		"FAKE_CODEX_WRITE_DOC_LOCAL_PATH_CHANGE=1",
 		"FAKE_CODEX_DECISION=continue",
@@ -3218,7 +3220,7 @@ func TestInvalidStageOutputsStopBeforePromptTwo(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			workspace := t.TempDir()
-			env := append(baseEnv(root, workspace, fakeCodex, fakeGH), tc.env...)
+			env := append(baseEnv(t, root, workspace, fakeCodex, fakeGH), tc.env...)
 			before := runCmd(t, td, nil, "git", "-C", userClone, "rev-parse", "origin/feature/test")
 			output := runCmdExpectFailure(t, root, env,
 				bin,
@@ -3263,7 +3265,7 @@ func TestInvalidStageOutputsStopBeforePromptTwo(t *testing.T) {
 
 	t.Run("explicit no-op reaches prompt 2", func(t *testing.T) {
 		workspace := t.TempDir()
-		env := append(baseEnv(root, workspace, fakeCodex, fakeGH),
+		env := append(baseEnv(t, root, workspace, fakeCodex, fakeGH),
 			"FAKE_CODEX_TRIAGE_FIXTURE=noop",
 			"FAKE_CODEX_SKIP_CODE_CHANGE=1",
 		)
