@@ -319,7 +319,7 @@ func isPlannableStage(name string) bool {
 }
 
 func plannedTimelineRows(snapshot ProgressSnapshot) ([]StageSnapshot, bool) {
-	if snapshot.MaxRounds <= 0 {
+	if snapshot.MaxRounds < 1 || snapshot.MaxRounds > maxReviewRounds {
 		return nil, false
 	}
 

@@ -6,6 +6,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -29,6 +30,8 @@ type ParsedArgs struct {
 const (
 	defaultConcurrency         = 4
 	defaultMaxRounds           = 5
+	maxConcurrency             = 64
+	maxReviewRounds            = 100
 	defaultCodexTimeoutSeconds = 3600
 	defaultReviewInactivitySec = 300
 	defaultReviewActivityPollS = 15
@@ -79,11 +82,11 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 	if finalMode != ModePR && finalMode != ModeYolo {
 		return ParsedArgs{}, NewDeepReviewError("--mode must be one of: pr, yolo")
 	}
-	if *concurrency < 1 {
-		return ParsedArgs{}, NewDeepReviewError("--concurrency must be >= 1")
+	if *concurrency < 1 || *concurrency > maxConcurrency {
+		return ParsedArgs{}, NewDeepReviewError("--concurrency must be from 1 to %d", maxConcurrency)
 	}
-	if *maxRounds < 1 {
-		return ParsedArgs{}, NewDeepReviewError("--max-rounds must be >= 1")
+	if *maxRounds < 1 || *maxRounds > maxReviewRounds {
+		return ParsedArgs{}, NewDeepReviewError("--max-rounds must be from 1 to %d", maxReviewRounds)
 	}
 	reviewInactivitySec, err := envNonNegativeInt("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", defaultReviewInactivitySec)
 	if err != nil {
@@ -94,6 +97,18 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		return ParsedArgs{}, err
 	}
 	reviewMaxRestarts, err := envNonNegativeInt("DEEPREVIEW_REVIEW_MAX_RESTARTS", defaultReviewMaxRestarts)
+	if err != nil {
+		return ParsedArgs{}, err
+	}
+	reviewInactivity, err := durationFromSeconds("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", reviewInactivitySec)
+	if err != nil {
+		return ParsedArgs{}, err
+	}
+	reviewActivityPoll, err := durationFromSeconds("DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS", reviewActivityPollS)
+	if err != nil {
+		return ParsedArgs{}, err
+	}
+	codexTimeout, err := durationFromSeconds("codex timeout", defaultCodexTimeoutSeconds)
 	if err != nil {
 		return ParsedArgs{}, err
 	}
@@ -130,12 +145,60 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		CodexBin:            envOrDefault("DEEPREVIEW_CODEX_BIN", "codex"),
 		GhBin:               envOrDefault("DEEPREVIEW_GH_BIN", "gh"),
 		CodexTimeoutSeconds: defaultCodexTimeoutSeconds,
-		CodexTimeout:        defaultCodexTimeoutSeconds * time.Second,
-		ReviewInactivity:    time.Duration(reviewInactivitySec) * time.Second,
-		ReviewActivityPoll:  time.Duration(reviewActivityPollS) * time.Second,
+		CodexTimeout:        codexTimeout,
+		ReviewInactivity:    reviewInactivity,
+		ReviewActivityPoll:  reviewActivityPoll,
 	}
 
 	return ParsedArgs{Config: cfg, NoTUI: *noTUI}, nil
+}
+
+func durationFromSeconds(name string, seconds int) (time.Duration, error) {
+	if seconds < 0 {
+		return 0, NewDeepReviewError("%s must be >= 0", name)
+	}
+	limit := int64(math.MaxInt64) / int64(time.Second)
+	if int64(seconds) > limit {
+		return 0, NewDeepReviewError("%s overflows a duration", name)
+	}
+	return time.Duration(seconds) * time.Second, nil
+}
+
+func validateReviewLimits(cfg *ReviewConfig) error {
+	if cfg.Concurrency < 1 || cfg.Concurrency > maxConcurrency {
+		return NewDeepReviewError("--concurrency must be from 1 to %d", maxConcurrency)
+	}
+	if cfg.MaxRounds < 1 || cfg.MaxRounds > maxReviewRounds {
+		return NewDeepReviewError("--max-rounds must be from 1 to %d", maxReviewRounds)
+	}
+	if _, err := durationFromSeconds("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", cfg.ReviewInactivitySec); err != nil {
+		return err
+	}
+	if _, err := durationFromSeconds("DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS", cfg.ReviewActivityPollS); err != nil {
+		return err
+	}
+	timeout, err := durationFromSeconds("codex timeout", cfg.CodexTimeoutSeconds)
+	if err != nil {
+		return err
+	}
+	if cfg.CodexTimeout <= 0 {
+		cfg.CodexTimeout = timeout
+	}
+	if cfg.ReviewInactivity <= 0 && cfg.ReviewInactivitySec > 0 {
+		inactivity, err := durationFromSeconds("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", cfg.ReviewInactivitySec)
+		if err != nil {
+			return err
+		}
+		cfg.ReviewInactivity = inactivity
+	}
+	if cfg.ReviewActivityPoll <= 0 && cfg.ReviewActivityPollS > 0 {
+		poll, err := durationFromSeconds("DEEPREVIEW_REVIEW_ACTIVITY_POLL_SECONDS", cfg.ReviewActivityPollS)
+		if err != nil {
+			return err
+		}
+		cfg.ReviewActivityPoll = poll
+	}
+	return nil
 }
 
 func envOrDefault(key, fallback string) string {
@@ -236,12 +299,14 @@ Optional source branch:
     Source branch to review. If omitted, inferred from local repo context when available.
 
 Optional flags:
-  --concurrency <int>   (default: %d)
+  --concurrency <int>   (default: %d, maximum: %d)
     Number of independent review workers (separate worktrees).
     Higher means more parallel review coverage but more local load.
+    A value outside 1 to %d is rejected. deepreview does not reduce it.
 
-  --max-rounds <int>    (default: %d)
+  --max-rounds <int>    (default: %d, maximum: %d)
     Maximum review/execute rounds before stopping.
+    A value outside 1 to %d is rejected. deepreview does not reduce it.
     `+"`continue`"+` always requires another round.
     Repository changes require another review round even when the decision is `+"`stop`"+`.
     A `+"`stop`"+` with no repository changes ends the loop.
@@ -320,7 +385,7 @@ Troubleshooting:
   - Installed binaries use the embedded prompt pack. Set DEEPREVIEW_PROMPTS_ROOT to replace it. Set DEEPREVIEW_CALLER_CWD when a launcher changes directories. deepreview does not read OLDPWD.
   - To stop a run safely at any time, press Ctrl+C once (deepreview cancels and runs cleanup).
   - Invalid mode: allowed values are only pr or yolo (case-insensitive).
-`, defaultConcurrency, defaultMaxRounds, ModePR, defaultReviewInactivitySec, defaultReviewActivityPollS, defaultReviewMaxRestarts, defaultCodexTimeoutSeconds)
+`, defaultConcurrency, maxConcurrency, maxConcurrency, defaultMaxRounds, maxReviewRounds, maxReviewRounds, ModePR, defaultReviewInactivitySec, defaultReviewActivityPollS, defaultReviewMaxRestarts, defaultCodexTimeoutSeconds)
 }
 
 func DoctorHelpText() string {

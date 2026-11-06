@@ -171,6 +171,8 @@ func TestNewOrchestratorRejectsPRModeForFilesystemOriginRemote(t *testing.T) {
 		CodexBin:      "codex",
 		GhBin:         "gh",
 		Mode:          ModePR,
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}, &NullProgressReporter{})
 	if err == nil {
 		t.Fatalf("expected PR mode to reject filesystem origin remote")
@@ -200,6 +202,8 @@ func TestNewOrchestratorAllowsYoloModeForFilesystemOriginRemote(t *testing.T) {
 		CodexBin:      "codex",
 		GhBin:         "gh",
 		Mode:          ModeYolo,
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}, &NullProgressReporter{})
 	if err != nil {
 		t.Fatalf("expected yolo mode to allow filesystem origin remote, got: %v", err)
@@ -375,6 +379,8 @@ func TestNewOrchestratorCanonicalizesRelativeFilesystemOriginForDoctorAndClone(t
 			CodexBin:      "codex",
 			GhBin:         "gh",
 			Mode:          ModeYolo,
+			Concurrency:   defaultConcurrency,
+			MaxRounds:     defaultMaxRounds,
 		}, &NullProgressReporter{})
 		if err != nil {
 			t.Fatalf("NewOrchestrator failed: %v", err)
@@ -706,6 +712,8 @@ func TestNewOrchestratorDoesNotCreateRunDirectory(t *testing.T) {
 		CodexBin:      "codex",
 		GhBin:         "gh",
 		Mode:          ModePR,
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}, &NullProgressReporter{})
 	if err != nil {
 		t.Fatalf("NewOrchestrator failed: %v", err)
@@ -1126,6 +1134,8 @@ func TestNewOrchestratorIsolatesManagedRepoPathPerSourceBranch(t *testing.T) {
 		GitBin:        "git",
 		CodexBin:      "codex",
 		SourceBranch:  "feature/a",
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}
 
 	first, err := NewOrchestrator(base, reporter)
@@ -1165,6 +1175,8 @@ func TestNewOrchestratorIsolatesGitHubAndFilesystemNamespacePaths(t *testing.T) 
 		GitBin:        "git",
 		CodexBin:      "codex",
 		SourceBranch:  "feature/test",
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}
 	filesystemConfig := ReviewConfig{
 		Repo:          localRepo,
@@ -1173,6 +1185,8 @@ func TestNewOrchestratorIsolatesGitHubAndFilesystemNamespacePaths(t *testing.T) 
 		GitBin:        "git",
 		CodexBin:      "codex",
 		SourceBranch:  "feature/test",
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}
 
 	githubOrchestrator, err := NewOrchestrator(githubConfig, reporter)
@@ -1215,6 +1229,8 @@ func TestPreflightUsesResolvedMulticodexWithoutCodexOnPath(t *testing.T) {
 		CodexBin:      "codex",
 		GhBin:         ghPath,
 		Mode:          ModePR,
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}, &NullProgressReporter{})
 	if err != nil {
 		t.Fatalf("NewOrchestrator failed: %v", err)
@@ -1246,6 +1262,8 @@ func TestPreflightRequiresDeliveryTemplateInYoloMode(t *testing.T) {
 		CodexBin:      "codex",
 		GhBin:         "gh",
 		Mode:          ModeYolo,
+		Concurrency:   defaultConcurrency,
+		MaxRounds:     defaultMaxRounds,
 	}, &NullProgressReporter{})
 	if err != nil {
 		t.Fatalf("NewOrchestrator failed: %v", err)

@@ -78,6 +78,9 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	if !validPathSegment(config.RunID) {
 		return nil, NewDeepReviewError("run id must be one safe path segment")
 	}
+	if err := validateReviewLimits(&config); err != nil {
+		return nil, err
+	}
 	workspaceRoot, err := filepath.Abs(config.WorkspaceRoot)
 	if err != nil {
 		return nil, err
@@ -106,15 +109,6 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 			append(repoIdentity.NamespaceSegments(), "branches", FilesystemSafeKey(config.SourceBranch))...,
 		)...,
 	)
-	if config.CodexTimeout <= 0 {
-		config.CodexTimeout = time.Duration(config.CodexTimeoutSeconds) * time.Second
-	}
-	if config.ReviewInactivity <= 0 && config.ReviewInactivitySec > 0 {
-		config.ReviewInactivity = time.Duration(config.ReviewInactivitySec) * time.Second
-	}
-	if config.ReviewActivityPoll <= 0 && config.ReviewActivityPollS > 0 {
-		config.ReviewActivityPoll = time.Duration(config.ReviewActivityPollS) * time.Second
-	}
 	return &Orchestrator{
 		config:          config,
 		promptsRoot:     promptsRoot,
@@ -604,6 +598,9 @@ func (o *Orchestrator) commandContext() context.Context {
 func (o *Orchestrator) Run() (retErr error) {
 	if !o.config.TrustRepo {
 		return NewDeepReviewError("%s", repositoryTrustRequiredMessage)
+	}
+	if err := validateReviewLimits(&o.config); err != nil {
+		return err
 	}
 	if err := o.ensureRunRoot(); err != nil {
 		return err
@@ -1505,6 +1502,10 @@ Self-audit note:
 
 func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaultBranch string) (_ []string, err error) {
 	o.reporter.StageStarted("independent review stage", roundPtr(round), "launching independent reviewers in parallel")
+	if err := validateReviewLimits(&o.config); err != nil {
+		o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
+		return nil, err
+	}
 	reviewDir := filepath.Join(roundDir, "review")
 	if err := mkdirPrivate(reviewDir); err != nil {
 		o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))

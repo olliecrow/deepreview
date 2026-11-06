@@ -3,6 +3,7 @@ package deepreview
 import (
 	"errors"
 	"fmt"
+	"math"
 	"math/rand"
 	"strings"
 	"testing"
@@ -126,6 +127,19 @@ func TestPlannedTimelineRowsPrelistsStagesFromMaxRounds(t *testing.T) {
 	}
 	if rows[len(rows)-1].Name != "delivery" || rows[len(rows)-1].Status != "pending" {
 		t.Fatalf("expected pending delivery row, got %+v", rows[len(rows)-1])
+	}
+}
+
+func TestPlannedTimelineRowsRejectsUnboundedMaxRounds(t *testing.T) {
+	for _, rounds := range []int{0, -1, maxReviewRounds + 1, math.MaxInt} {
+		rows, ok := plannedTimelineRows(ProgressSnapshot{MaxRounds: rounds})
+		if ok || rows != nil {
+			t.Fatalf("max rounds %d planned %d rows", rounds, len(rows))
+		}
+	}
+	rows, ok := plannedTimelineRows(ProgressSnapshot{MaxRounds: maxReviewRounds})
+	if !ok || len(rows) != maxReviewRounds*2+2 {
+		t.Fatalf("ceiling timeline ok=%v rows=%d", ok, len(rows))
 	}
 }
 

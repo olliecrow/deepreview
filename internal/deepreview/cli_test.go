@@ -5,9 +5,11 @@ import (
 	"errors"
 	"flag"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -222,6 +224,141 @@ func TestParseReviewArgsRejectsInvalidReviewPolicyEnv(t *testing.T) {
 	}
 }
 
+func TestParseReviewArgsRejectsUnboundedCountsAndDurations(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	cases := []struct {
+		name string
+		args []string
+		want string
+	}{
+		{name: "concurrency zero", args: []string{"--concurrency", "0", "--max-rounds", "1"}, want: "--concurrency"},
+		{name: "concurrency negative", args: []string{"--concurrency", "-1", "--max-rounds", "1"}, want: "--concurrency"},
+		{name: "concurrency above ceiling", args: []string{"--concurrency", strconv.Itoa(maxConcurrency + 1), "--max-rounds", "1"}, want: "--concurrency"},
+		{name: "concurrency max int", args: []string{"--concurrency", strconv.Itoa(math.MaxInt), "--max-rounds", "1"}, want: "--concurrency"},
+		{name: "rounds zero", args: []string{"--concurrency", "1", "--max-rounds", "0"}, want: "--max-rounds"},
+		{name: "rounds negative", args: []string{"--concurrency", "1", "--max-rounds", "-1"}, want: "--max-rounds"},
+		{name: "rounds above ceiling", args: []string{"--concurrency", "1", "--max-rounds", strconv.Itoa(maxReviewRounds + 1)}, want: "--max-rounds"},
+		{name: "rounds max int", args: []string{"--concurrency", "1", "--max-rounds", strconv.Itoa(math.MaxInt)}, want: "--max-rounds"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := ParseReviewArgs(tc.args, now)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+		})
+	}
+
+	overflow := strconv.FormatInt(int64(math.MaxInt64)/int64(time.Second)+1, 10)
+	t.Setenv("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", overflow)
+	_, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature", "--concurrency", "1", "--max-rounds", "1"}, now)
+	if err == nil || !strings.Contains(err.Error(), "overflows a duration") {
+		t.Fatalf("expected duration overflow, got %v", err)
+	}
+}
+
+func TestParseReviewArgsAcceptsLimitBoundaries(t *testing.T) {
+	now := time.Unix(1700000000, 0)
+	parsed, err := ParseReviewArgs([]string{
+		"owner/repo",
+		"--source-branch", "feature",
+		"--concurrency", strconv.Itoa(maxConcurrency),
+		"--max-rounds", strconv.Itoa(maxReviewRounds),
+	}, now)
+	if err != nil {
+		t.Fatalf("ParseReviewArgs failed: %v", err)
+	}
+	if parsed.Config.Concurrency != maxConcurrency || parsed.Config.MaxRounds != maxReviewRounds {
+		t.Fatalf("expected ceilings %d and %d, got %d and %d", maxConcurrency, maxReviewRounds, parsed.Config.Concurrency, parsed.Config.MaxRounds)
+	}
+
+	omitted, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature"}, now)
+	if err != nil {
+		t.Fatalf("ParseReviewArgs defaults failed: %v", err)
+	}
+	if omitted.Config.Concurrency != defaultConcurrency || omitted.Config.MaxRounds != defaultMaxRounds {
+		t.Fatalf("expected defaults %d and %d, got %d and %d", defaultConcurrency, defaultMaxRounds, omitted.Config.Concurrency, omitted.Config.MaxRounds)
+	}
+
+	limitSeconds := int64(math.MaxInt64) / int64(time.Second)
+	t.Setenv("DEEPREVIEW_REVIEW_INACTIVITY_SECONDS", strconv.FormatInt(limitSeconds, 10))
+	bounded, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature", "--concurrency", "1", "--max-rounds", "1"}, now)
+	if err != nil {
+		t.Fatalf("max safe duration failed: %v", err)
+	}
+	if bounded.Config.ReviewInactivity != time.Duration(limitSeconds)*time.Second {
+		t.Fatalf("expected max safe inactivity, got %s", bounded.Config.ReviewInactivity)
+	}
+
+	help := ReviewHelpText()
+	for _, want := range []string{"maximum: 64", "maximum: 100", "does not reduce it"} {
+		if !strings.Contains(help, want) {
+			t.Fatalf("review help missing %q", want)
+		}
+	}
+}
+
+func TestNewOrchestratorRejectsUnboundedCountsBeforeWork(t *testing.T) {
+	workspace := t.TempDir()
+	base := ReviewConfig{
+		Repo:          "example-org/example-repo",
+		SourceBranch:  "main",
+		Mode:          ModePR,
+		RunID:         "run-1",
+		WorkspaceRoot: workspace,
+		GitBin:        "git",
+		MaxRounds:     1,
+	}
+	cases := []struct {
+		name        string
+		concurrency int
+		maxRounds   int
+		timeoutSec  int
+		want        string
+	}{
+		{name: "concurrency zero", concurrency: 0, maxRounds: 1, want: "--concurrency"},
+		{name: "concurrency negative", concurrency: -1, maxRounds: 1, want: "--concurrency"},
+		{name: "concurrency above ceiling", concurrency: maxConcurrency + 1, maxRounds: 1, want: "--concurrency"},
+		{name: "concurrency max int", concurrency: math.MaxInt, maxRounds: 1, want: "--concurrency"},
+		{name: "rounds zero", concurrency: 1, maxRounds: 0, want: "--max-rounds"},
+		{name: "rounds negative", concurrency: 1, maxRounds: -1, want: "--max-rounds"},
+		{name: "rounds above ceiling", concurrency: 1, maxRounds: maxReviewRounds + 1, want: "--max-rounds"},
+		{name: "rounds max int", concurrency: 1, maxRounds: math.MaxInt, want: "--max-rounds"},
+		{name: "timeout overflow", concurrency: 1, maxRounds: 1, timeoutSec: int(int64(math.MaxInt64)/int64(time.Second)) + 1, want: "overflows a duration"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := base
+			cfg.Concurrency = tc.concurrency
+			cfg.MaxRounds = tc.maxRounds
+			cfg.CodexTimeoutSeconds = tc.timeoutSec
+			_, err := NewOrchestrator(cfg, nil)
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected error containing %q, got %v", tc.want, err)
+			}
+			entries, readErr := os.ReadDir(workspace)
+			if readErr != nil || len(entries) != 0 {
+				t.Fatalf("constructor changed workspace: %v entries=%d", readErr, len(entries))
+			}
+		})
+	}
+
+	accepted := base
+	accepted.Concurrency = maxConcurrency
+	accepted.MaxRounds = maxReviewRounds
+	orchestrator, err := NewOrchestrator(accepted, nil)
+	if err != nil {
+		t.Fatalf("ceiling constructor failed: %v", err)
+	}
+	if orchestrator.config.Concurrency != maxConcurrency || orchestrator.config.MaxRounds != maxReviewRounds {
+		t.Fatalf("ceiling constructor stored %d and %d", orchestrator.config.Concurrency, orchestrator.config.MaxRounds)
+	}
+	entries, readErr := os.ReadDir(workspace)
+	if readErr != nil || len(entries) != 0 {
+		t.Fatalf("accepted constructor changed workspace: %v entries=%d", readErr, len(entries))
+	}
+}
+
 func TestParseReviewArgsHelp(t *testing.T) {
 	_, err := ParseReviewArgs([]string{"--help"}, time.Unix(1700000000, 0))
 	if !errors.Is(err, flag.ErrHelp) {
@@ -251,8 +388,9 @@ func TestMainHelpTextIncludesCoreSections(t *testing.T) {
 func TestReviewHelpTextIncludesDefaultsAndTroubleshooting(t *testing.T) {
 	help := ReviewHelpText()
 	for _, want := range []string{
-		"--concurrency <int>   (default: 4)",
-		"--max-rounds <int>    (default: 5)",
+		"--concurrency <int>   (default: 4, maximum: 64)",
+		"--max-rounds <int>    (default: 5, maximum: 100)",
+		"does not reduce it",
 		"--mode <pr|yolo>      (default: pr)",
 		"PR mode requires a GitHub-backed remote",
 		"DEEPREVIEW_WORKSPACE_ROOT",

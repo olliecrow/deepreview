@@ -47,8 +47,8 @@ exit 130 canceled
 - source branch (explicit or inferred current branch from local repo context)
 - default branch
 - mode (`pr` or `yolo`)
-- concurrency (default `4`)
-- max rounds (default `5`) for total execute rounds
+- concurrency (default `4`, maximum `64`). A value outside `1` to `64` is rejected and is not reduced.
+- max rounds (default `5`, maximum `100`) for total execute rounds. A value outside `1` to `100` is rejected and is not reduced.
 - UI mode (full-screen UI by default when terminal capabilities are valid; optional `--no-tui` force-off for structured text logs)
 - resolve Codex launcher: use `multicodex` whenever it is available on `PATH`, otherwise use `codex`; if `DEEPREVIEW_REQUIRE_MULTICODEX=1`, fail instead of falling back
 - multicodex routing is dynamic only for fresh prompt contexts; once deepreview needs to resume a multicodex-backed Codex thread, it reuses the profile that created that thread

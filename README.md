@@ -243,8 +243,8 @@ If you also keep `multicodex` under active development, expose it as a real comm
 Common options.
 
 - `--trust-repo` (required for `review`)
-- `--concurrency <n>`
-- `--max-rounds <n>`
+- `--concurrency <n>` from 1 to 64, default 4
+- `--max-rounds <n>` from 1 to 100, default 5
 - `--mode <pr|yolo>`
 - `--yolo`
 - `--no-tui` (disable full-screen terminal user interface)

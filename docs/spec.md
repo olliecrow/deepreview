@@ -33,9 +33,9 @@ This document defines the canonical runtime and product contract for `deepreview
 - fresh multicodex-backed prompt contexts use normal `multicodex exec` profile selection, but once a prompt creates a resumable Codex thread, later deepreview resumes for that logical context must stay on the same selected multicodex profile.
 - codex prompt executions use a fixed timeout of 3600 seconds per prompt.
 - deepreview runs must be interruptible via `Ctrl+C` at any point; on interrupt, active worker commands are terminated immediately, deepreview emits a failure summary for the interrupted run, then lock/worktree cleanup and final transient-worktree scrubbing run before process exit.
-- round loop runs up to `--max-rounds` (default `5`) total execute rounds and may stop early.
+- round loop runs up to `--max-rounds` (default `5`) total execute rounds and may stop early. A requested value outside `1` to `100` is rejected. deepreview does not reduce it.
 - independent reviews run in independent worktrees.
-- independent review concurrency defaults to `4` and is configurable.
+- independent review concurrency defaults to `4`. A requested value outside `1` to `64` is rejected. deepreview does not reduce it.
 - each successful independent-review worker must emit one markdown review report.
 - independent review rounds require full worker coverage: required successful workers = `concurrency`.
 - independent-review reports must stay focused on high-confidence, material issues or opportunities. Accepted change types may include bug fixes, security/safety fixes, substantial simplifications, high-value refactors, meaningful cleanup, and documentation alignment. Low-value polish, speculative hardening, and style churn are out of scope.
@@ -130,8 +130,8 @@ This document defines the canonical runtime and product contract for `deepreview
 - `DEEPREVIEW_REQUIRE_MULTICODEX=1` disables fallback to `codex exec` and fails preflight/doctor if `multicodex exec` is unavailable.
 - `DEEPREVIEW_CODEX_BIN` overrides only the codex fallback path used when `multicodex` is unavailable.
 - core options:
-  - `--concurrency <n>` default `4`
-  - `--max-rounds <n>` default `5`
+  - `--concurrency <n>` default `4`, maximum `64`
+  - `--max-rounds <n>` default `5`, maximum `100`
   - `--mode <pr|yolo>` default `pr` (case-insensitive value parsing)
   - `--yolo` alias for `--mode yolo`
   - full-screen terminal UI is enabled by default when terminal capabilities are valid
