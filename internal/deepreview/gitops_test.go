@@ -873,3 +873,56 @@ func TestAddDetachedWorktreeFailureLeavesRepositoryIntact(t *testing.T) {
 		t.Fatalf("stat failed worktree: %v", statErr)
 	}
 }
+
+func TestParseNulDiffNameStatusKeepsExactPaths(t *testing.T) {
+	raw := "R100\x00old name\x00new\nname\x00C50\x00copy src\x00copy dest\x00M\x00 spaced \x00"
+	got, err := parseNulDiffNameStatus(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"old name", "new\nname", "copy src", "copy dest", " spaced "}
+	if len(got) != len(want) {
+		t.Fatalf("paths = %#v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("path %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	if _, err := parseNulDiffNameStatus(""); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestParseNulDiffNameStatusRejectsTruncation(t *testing.T) {
+	for _, raw := range []string{"M\x00only", "R100\x00old\x00", "\x00", "M\x00\x00"} {
+		if _, err := parseNulDiffNameStatus(raw); err == nil {
+			t.Fatalf("expected truncation for %q", raw)
+		}
+	}
+}
+
+func TestListChangedFilesKeepsExactRenamePaths(t *testing.T) {
+	td := t.TempDir()
+	repo := filepath.Join(td, "repo")
+	initCommittedRepo(t, repo)
+	oldName := "my notes.txt"
+	newName := "other notes.txt"
+	if err := os.WriteFile(filepath.Join(repo, oldName), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, td, "-C", repo, "add", "--", oldName)
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "add notes")
+	base := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
+	runGitCommand(t, td, "-C", repo, "mv", "--", oldName, newName)
+	runGitCommand(t, td, "-C", repo, "commit", "-m", "rename notes")
+	head := strings.TrimSpace(runGitCommand(t, td, "-C", repo, "rev-parse", "HEAD"))
+
+	files, err := ListChangedFiles(repo, "git", base, head)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 2 || files[0] != oldName || files[1] != newName {
+		t.Fatalf("paths = %#v", files)
+	}
+}

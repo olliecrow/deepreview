@@ -94,6 +94,7 @@ This document defines the canonical runtime and product contract for `deepreview
 - final publishability validation must inspect every outgoing commit, including sensitive content and blocked operational artifacts introduced and removed before the current tip.
 - publication pushes that reviewed commit SHA to `refs/heads/<target>` and confirms the remote ref matches it. A candidate branch that moved after review is not published.
 - publication accepts only the prepared GitHub repository, over HTTPS or `git` SSH, or the prepared local origin path. A token, unexpected port, option-shaped locator, changed push URL, or a source or default branch that moved after preparation stops publication.
+- publication scans every changed path, including rename sources and unusual filenames, and accepts only placeholder or GitHub noreply author and committer identities. It does not rewrite commits.
 - sensitive-text policy failures report the rule, file, and line only. They do not print the matched text. A missing, unreadable, or unscannable input fails closed.
 - a tracked-content or outgoing-history publication blocker fails delivery before push; deepreview does not rewrite candidate history to repair it.
 - after PR creation in `pr` mode, deepreview may poll mergeability briefly to let transient GitHub states settle before reporting terminal success or failure.

@@ -84,6 +84,17 @@ func Git(repoPath, gitBin string, check bool, args ...string) (string, error) {
 	return strings.TrimSpace(completed.Stdout), nil
 }
 
+func gitRawStdout(repoPath, gitBin string, args ...string) (string, error) {
+	command := make([]string, 0, 1+len(args))
+	command = append(command, gitBin)
+	command = append(command, args...)
+	completed, err := RunCommand(command, repoPath, "", true, 0)
+	if err != nil {
+		return "", err
+	}
+	return completed.Stdout, nil
+}
+
 func managedPreparationArgs(gitBin string, args ...string) []string {
 	command := []string{
 		gitBin,
@@ -829,18 +840,55 @@ func CommitAllChanges(repoPath, gitBin, message string, identity CommitIdentity)
 }
 
 func ListChangedFiles(repoPath, gitBin, baseRef, headRef string) ([]string, error) {
-	out, err := Git(repoPath, gitBin, true, "diff", "--name-only", baseRef+".."+headRef)
+	out, err := gitRawStdout(
+		repoPath,
+		gitBin,
+		"diff",
+		"-z",
+		"--name-status",
+		"--find-renames=0",
+		baseRef+".."+headRef,
+	)
 	if err != nil {
 		return nil, err
 	}
-	var files []string
-	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line != "" {
-			files = append(files, line)
-		}
+	return parseNulDiffNameStatus(out)
+}
+
+// parseNulDiffNameStatus reads `git diff -z --name-status`.
+// Rename and copy records contain the old path and then the new path.
+func parseNulDiffNameStatus(raw string) ([]string, error) {
+	if raw == "" {
+		return nil, nil
 	}
-	return files, nil
+	if !strings.HasSuffix(raw, "\x00") {
+		return nil, NewDeepReviewError("git diff path record is truncated")
+	}
+	fields := strings.Split(raw[:len(raw)-1], "\x00")
+	paths := make([]string, 0, len(fields))
+	for i := 0; i < len(fields); {
+		status := fields[i]
+		if status == "" {
+			return nil, NewDeepReviewError("git diff path record is truncated")
+		}
+		pathCount := 1
+		switch status[0] {
+		case 'R', 'C':
+			pathCount = 2
+		}
+		if i+pathCount >= len(fields) {
+			return nil, NewDeepReviewError("git diff path record is truncated")
+		}
+		for n := 1; n <= pathCount; n++ {
+			path := fields[i+n]
+			if path == "" {
+				return nil, NewDeepReviewError("git diff path record is truncated")
+			}
+			paths = append(paths, path)
+		}
+		i += 1 + pathCount
+	}
+	return paths, nil
 }
 
 func ChangedFileStatusBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (string, error) {

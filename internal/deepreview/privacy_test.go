@@ -589,6 +589,206 @@ func TestSecretHygieneScanFailsClosedWhenBinaryContentReadFails(t *testing.T) {
 	}
 }
 
+func githubNoreplyFixture() string {
+	return strings.Join([]string{"1+octocat", githubNoreplyEmailDomain}, "@")
+}
+
+func TestSecretHygieneScanRejectsSensitivePathWithoutEchoingIt(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	name := sensitiveEmailFixture()
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := os.WriteFile(filepath.Join(repoPath, name), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "--", name)
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add named file")
+
+	err := o.secretHygieneScan("candidate")
+	if err == nil {
+		t.Fatal("expected a sensitive path to fail the privacy scan")
+	}
+	if strings.Contains(err.Error(), name) {
+		t.Fatalf("changed path leaked into the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "changed path") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestSecretHygieneScanRejectsSensitiveRenameSource(t *testing.T) {
+	o, repoPath, _ := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	name := sensitiveEmailFixture()
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "feature/test")
+	if err := os.WriteFile(filepath.Join(repoPath, name), []byte("ok\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "add", "--", name)
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "seed named file")
+	sourceSHA := runGitTest(t, repoParent, "-C", repoPath, "rev-parse", "HEAD")
+	runGitTest(t, repoParent, "-C", repoPath, "update-ref", "refs/remotes/origin/feature/test", sourceSHA)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	runGitTest(t, repoParent, "-C", repoPath, "mv", "--", name, "clean-name.txt")
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "rename named file")
+
+	err := o.secretHygieneScan("candidate")
+	if err == nil {
+		t.Fatal("expected a sensitive rename source to fail the privacy scan")
+	}
+	if strings.Contains(err.Error(), name) {
+		t.Fatalf("changed path leaked into the error: %v", err)
+	}
+}
+
+func TestSecretHygieneScanRejectsRenameToSensitivePath(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	name := sensitiveEmailFixture()
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	runGitTest(t, repoParent, "-C", repoPath, "mv", "--", "feature.txt", name)
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "rename to named file")
+
+	err := o.secretHygieneScan("candidate")
+	if err == nil {
+		t.Fatal("expected a rename onto a sensitive path to fail")
+	}
+	if strings.Contains(err.Error(), name) {
+		t.Fatalf("changed path leaked into the error: %v", err)
+	}
+}
+
+func TestSecretHygieneScanAllowsUnusualCleanPaths(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	names := []string{"my notes.txt", "my\tnotes.txt", " notes.txt", "文件.txt", "notes\nfile.txt"}
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	for _, name := range names {
+		if err := os.WriteFile(filepath.Join(repoPath, name), []byte("ok\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		runGitTest(t, repoParent, "-C", repoPath, "add", "--", name)
+	}
+	runGitTest(t, repoParent, "-C", repoPath, "commit", "-m", "add unusual names")
+
+	if err := o.secretHygieneScan("candidate"); err != nil {
+		t.Fatalf("expected unusual clean paths to pass, got: %v", err)
+	}
+	files, err := ListChangedFiles(repoPath, "git", sourceSHA, "candidate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range names {
+		found := false
+		for _, file := range files {
+			if file == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("missing exact path %q in %#v", name, files)
+		}
+	}
+}
+
+func TestDeliveryCommitIdentityAllowsPlaceholderAndNoreply(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	if err := o.deliveryCommitIdentityScan("candidate"); err != nil {
+		t.Fatalf("expected an empty range to pass, got: %v", err)
+	}
+	runGitTest(
+		t,
+		repoParent,
+		"-C", repoPath,
+		"-c", "user.name=Octocat",
+		"-c", "user.email="+githubNoreplyFixture(),
+		"commit", "--allow-empty", "-m", "noreply identity",
+	)
+	if err := o.deliveryCommitIdentityScan("candidate"); err != nil {
+		t.Fatalf("expected a GitHub noreply identity to pass, got: %v", err)
+	}
+}
+
+func TestDeliveryCommitIdentityRejectsSensitiveAuthor(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	email := sensitiveEmailFixture()
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	runGitTest(
+		t,
+		repoParent,
+		"-C", repoPath,
+		"-c", "user.name=Test User",
+		"-c", "user.email="+email,
+		"commit", "--allow-empty", "-m", "sensitive identity",
+	)
+
+	err := o.deliveryCommitIdentityScan("candidate")
+	if err == nil {
+		t.Fatal("expected a sensitive author identity to fail")
+	}
+	if strings.Contains(err.Error(), email) {
+		t.Fatalf("commit identity leaked into the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not an approved public identity") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPublicCommitIdentityAllowsPlaceholderAndNoreply(t *testing.T) {
+	if err := validatePublicCommitIdentity(CommitIdentity{Name: "Test User", Email: "test@example.com"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := validatePublicCommitIdentity(CommitIdentity{Name: "Octocat", Email: githubNoreplyFixture()}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestPublicCommitIdentityRejectsUnsuitableAddress(t *testing.T) {
+	email := sensitiveEmailFixture()
+	err := validatePublicCommitIdentity(CommitIdentity{Name: "Test User", Email: email})
+	if err == nil {
+		t.Fatal("expected an unsuitable commit identity to fail")
+	}
+	if strings.Contains(err.Error(), email) {
+		t.Fatalf("commit identity leaked into the error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "not approved for public delivery") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseDeliveryIdentityRecordsRejectsIncompleteRecord(t *testing.T) {
+	records, err := parseDeliveryIdentityRecords("Test User\n\nTest User\ntest@example.com\x00")
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = publicDeliveryIdentityError(records[0][0], records[0][1])
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("expected an empty author email to fail, got %v", err)
+	}
+	if strings.Contains(err.Error(), "test@example.com") {
+		t.Fatalf("commit identity leaked into the error: %v", err)
+	}
+	_, err = parseDeliveryIdentityRecords("Test User\ntest@example.com")
+	if err == nil || !strings.Contains(err.Error(), "incomplete") {
+		t.Fatalf("expected a truncated identity record to fail, got %v", err)
+	}
+	if strings.Contains(err.Error(), "test@example.com") {
+		t.Fatalf("commit identity leaked into the error: %v", err)
+	}
+}
+
 func TestSummarizePrivacyScanIssues(t *testing.T) {
 	commitErr := NewDeepReviewError("privacy scan failed: disallowed sensitive content detected in delivery commit message")
 	fileErr := NewDeepReviewError("privacy scan failed: local path pattern matched in docs/example.md")

@@ -625,6 +625,10 @@ func (o *Orchestrator) Run() (retErr error) {
 		}
 		identity = resolvedIdentity
 	}
+	if err := validatePublicCommitIdentity(identity); err != nil {
+		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
+		return err
+	}
 	if err := ConfigureManagedGitIdentity(o.managedRepoPath, o.config.GitBin, identity); err != nil {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
@@ -2485,6 +2489,9 @@ func (o *Orchestrator) secretHygieneScanDiff(baseRef, headRef string) error {
 	}
 
 	for _, rel := range changedFiles {
+		if err := privacyScanText(rel, "changed path"); err != nil {
+			return NewDeepReviewError("privacy scan failed: disallowed sensitive content detected in a changed path")
+		}
 		addedLines, err := AddedLinesBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
 		if err != nil {
 			return privacyScanReadFailure(rel, "read added lines")
@@ -2623,6 +2630,110 @@ func hasNewExactMatch(baseMatches, headMatches []string) bool {
 
 func (o *Orchestrator) deliveryCommitMessageScan(candidateBranch string) error {
 	return o.deliveryCommitMessageScanBetween("origin/"+o.config.SourceBranch, candidateBranch)
+}
+
+func (o *Orchestrator) deliveryCommitIdentityScan(candidateBranch string) error {
+	return o.deliveryCommitIdentityScanBetween("origin/"+o.config.SourceBranch, candidateBranch)
+}
+
+func (o *Orchestrator) deliveryCommitIdentityScanBetween(baseRef, headRef string) error {
+	out, err := gitRawStdout(
+		o.managedRepoPath,
+		o.config.GitBin,
+		"log",
+		"-z",
+		"--format=%aN%n%aE%n%cN%n%cE",
+		baseRef+".."+headRef,
+	)
+	if err != nil {
+		return err
+	}
+	records, err := parseDeliveryIdentityRecords(out)
+	if err != nil {
+		return err
+	}
+	for _, record := range records {
+		if err := publicDeliveryIdentityError(record[0], record[1]); err != nil {
+			return err
+		}
+		if err := publicDeliveryIdentityError(record[2], record[3]); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func parseDeliveryIdentityRecords(raw string) ([][4]string, error) {
+	if raw == "" {
+		return nil, nil
+	}
+	if !strings.HasSuffix(raw, "\x00") {
+		return nil, NewDeepReviewError("privacy scan failed: delivery commit identity is incomplete")
+	}
+	records := strings.Split(raw[:len(raw)-1], "\x00")
+	parsed := make([][4]string, 0, len(records))
+	for _, record := range records {
+		parts := strings.Split(record, "\n")
+		if len(parts) != 4 {
+			return nil, NewDeepReviewError("privacy scan failed: delivery commit identity is incomplete")
+		}
+		parsed = append(parsed, [4]string{parts[0], parts[1], parts[2], parts[3]})
+	}
+	return parsed, nil
+}
+
+type identityDisposition int
+
+const (
+	identityOK identityDisposition = iota
+	identityIncomplete
+	identityRejected
+)
+
+const githubNoreplyEmailDomain = "users.noreply.github.com"
+
+func classifyPublicDeliveryIdentity(name, email string) identityDisposition {
+	if strings.TrimSpace(name) == "" || strings.TrimSpace(email) == "" {
+		return identityIncomplete
+	}
+	if textHasDisallowedSensitivePattern(name) || !isApprovedPublicationEmail(email) || textHasNonEmailSensitivePattern(email) {
+		return identityRejected
+	}
+	return identityOK
+}
+
+func publicDeliveryIdentityError(name, email string) error {
+	switch classifyPublicDeliveryIdentity(name, email) {
+	case identityOK:
+		return nil
+	case identityIncomplete:
+		return NewDeepReviewError("privacy scan failed: delivery commit identity is incomplete")
+	default:
+		return NewDeepReviewError("privacy scan failed: delivery commit identity is not an approved public identity")
+	}
+}
+
+func validatePublicCommitIdentity(identity CommitIdentity) error {
+	switch classifyPublicDeliveryIdentity(identity.Name, identity.Email) {
+	case identityOK:
+		return nil
+	case identityIncomplete:
+		return NewDeepReviewError("git commit identity is incomplete; configure both user.name and user.email before running deepreview")
+	default:
+		return NewDeepReviewError("git commit identity is not approved for public delivery; use a placeholder address or a GitHub noreply address")
+	}
+}
+
+func isApprovedPublicationEmail(email string) bool {
+	email = strings.TrimSpace(email)
+	if isAllowedPlaceholderEmail(email) {
+		return true
+	}
+	local, domain, ok := strings.Cut(email, "@")
+	if !ok || local == "" || strings.Contains(domain, "@") {
+		return false
+	}
+	return strings.EqualFold(domain, githubNoreplyEmailDomain)
 }
 
 func (o *Orchestrator) deliveryCommitMessageScanBetween(baseRef, headRef string) error {
@@ -2852,6 +2963,9 @@ func (o *Orchestrator) validatePublishableDeliveryRef(defaultBranch, baseRef, ca
 		return nil, err
 	}
 	if err := o.deliveryCommitMessageScanBetween(baseRef, publishRef); err != nil {
+		return nil, err
+	}
+	if err := o.deliveryCommitIdentityScanBetween(baseRef, publishRef); err != nil {
 		return nil, err
 	}
 	if err := o.secretHygieneScanBetween(baseRef, publishRef); err != nil {
@@ -3859,9 +3973,10 @@ func containsDisallowedEmail(text string) bool {
 }
 
 func textHasDisallowedSensitivePattern(text string) bool {
-	if containsDisallowedEmail(text) {
-		return true
-	}
+	return containsDisallowedEmail(text) || textHasNonEmailSensitivePattern(text)
+}
+
+func textHasNonEmailSensitivePattern(text string) bool {
 	for _, pattern := range allSecretRiskyPatterns() {
 		if pattern.MatchString(text) {
 			return true
