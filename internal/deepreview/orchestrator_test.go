@@ -501,6 +501,101 @@ func TestParseOwnerRepoRejectsSuffixOnlyNonGitHubRemotes(t *testing.T) {
 	}
 }
 
+func TestPublicationEndpointAcceptsEquivalentGitHubTransports(t *testing.T) {
+	recorded := "https://github.com/example-org/example-repo.git"
+	for _, effective := range []string{
+		"https://github.com/example-org/example-repo",
+		"https://github.com/example-org/example-repo.git",
+		githubSSHCloneURL("example-org", "example-repo"),
+		githubSCPLikeCloneURL("example-org", "example-repo"),
+	} {
+		if err := publicationEndpointsMatch(recorded, effective); err != nil {
+			t.Fatalf("expected %q to match the prepared repository: %v", effective, err)
+		}
+	}
+}
+
+func TestPublicationEndpointRejectsTokensPortsAndRewrites(t *testing.T) {
+	recorded := "https://github.com/example-org/example-repo.git"
+	secret := "ghp_" + strings.Repeat("a", 20)
+	tokenURL := "https://git:" + secret + "@github.com/example-org/example-repo.git"
+	cases := []string{
+		tokenURL,
+		"https://github.com:8443/example-org/example-repo.git",
+		"http://github.com/example-org/example-repo.git",
+		"ssh://git" + "@" + "github.com:2222/example-org/example-repo.git",
+		"https://github.com/other-org/example-repo.git",
+		"-upload-pack=touch",
+		"git://github.com/example-org/example-repo.git",
+		"ssh://github.com/example-org/example-repo.git",
+	}
+	for i, effective := range cases {
+		err := publicationEndpointsMatch(recorded, effective)
+		if err == nil {
+			t.Fatalf("case %d was accepted", i)
+		}
+		if strings.Contains(err.Error(), secret) {
+			t.Fatal("publication error included a credential")
+		}
+	}
+	if err := publicationEndpointsMatch(tokenURL, tokenURL); err == nil {
+		t.Fatal("expected a token URL to be rejected as a prepared endpoint")
+	}
+}
+
+func TestPublicationEndpointRejectsChangedLocalPushURL(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	other := filepath.Join(td, "other.git")
+	repo := filepath.Join(td, "repo")
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", "--bare", other)
+	runGitTest(t, td, "clone", remote, repo)
+	runGitTest(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitTest(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitTest(t, td, "-C", repo, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", repo, "add", "README.md")
+	runGitTest(t, td, "-C", repo, "commit", "-m", "seed")
+	runGitTest(t, td, "-C", repo, "push", "-u", "origin", "main")
+	sourceSHA := strings.TrimSpace(runGitTest(t, td, "-C", repo, "rev-parse", "HEAD"))
+
+	orchestrator := &Orchestrator{
+		config:                ReviewConfig{GitBin: "git", SourceBranch: "main"},
+		managedRepoPath:       repo,
+		publicationEndpoint:   remote,
+		preparedSourceSHA:     sourceSHA,
+		preparedDefaultSHA:    sourceSHA,
+		preparedDefaultBranch: "main",
+	}
+	if err := orchestrator.confirmPreparedPublication(); err != nil {
+		t.Fatalf("prepared endpoint should match: %v", err)
+	}
+
+	runGitTest(t, td, "-C", repo, "remote", "set-url", "--push", "origin", other)
+	err := orchestrator.confirmPreparedPublication()
+	if err == nil || !strings.Contains(err.Error(), "does not match the prepared endpoint") {
+		t.Fatalf("expected changed push URL to fail, got %v", err)
+	}
+	if strings.Contains(err.Error(), other) {
+		t.Fatalf("publication error included the push URL: %s", err.Error())
+	}
+
+	runGitTest(t, td, "-C", repo, "remote", "set-url", "--push", "origin", remote)
+	if err := os.WriteFile(filepath.Join(repo, "moved.txt"), []byte("moved\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", repo, "add", "moved.txt")
+	runGitTest(t, td, "-C", repo, "commit", "-m", "move source")
+	runGitTest(t, td, "-C", repo, "push", "origin", "main")
+	err = orchestrator.confirmPreparedPublication()
+	if err == nil || !strings.Contains(err.Error(), "source branch moved") {
+		t.Fatalf("expected moved source branch to fail, got %v", err)
+	}
+}
+
 func TestPromptWatchdogPolicyClampsToSafeValues(t *testing.T) {
 	o := &Orchestrator{
 		config: ReviewConfig{

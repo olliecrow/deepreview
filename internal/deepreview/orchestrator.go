@@ -37,6 +37,10 @@ type Orchestrator struct {
 	runLockPath           string
 	commitIdentity        CommitIdentity
 	reviewedCandidateHead string
+	preparedSourceSHA     string
+	preparedDefaultSHA    string
+	preparedDefaultBranch string
+	publicationEndpoint   string
 	commandCtx            context.Context
 }
 
@@ -375,6 +379,154 @@ func allSecretRiskyPatterns() []*regexp.Regexp {
 	return patterns
 }
 
+func readGitRemoteURL(repoPath, gitBin string, push bool) (string, error) {
+	args := []string{gitBin, "-C", repoPath, "remote", "get-url"}
+	if push {
+		args = append(args, "--push")
+	}
+	args = append(args, "origin")
+	completed, err := RunCommand(args, "", "", true, 0)
+	if err != nil {
+		return "", NewDeepReviewError("publication remote URL is unavailable")
+	}
+	return strings.TrimSpace(completed.Stdout), nil
+}
+
+func validatePublicationLocator(raw string) error {
+	_, _, _, _, err := classifyPublicationLocator(raw)
+	return err
+}
+
+func publicationEndpointsMatch(recorded, effective string) error {
+	recordedKind, recordedOwner, recordedName, recordedPath, err := classifyPublicationLocator(recorded)
+	if err != nil {
+		return err
+	}
+	effectiveKind, effectiveOwner, effectiveName, effectivePath, err := classifyPublicationLocator(effective)
+	if err != nil {
+		return err
+	}
+	if recordedKind != effectiveKind {
+		return NewDeepReviewError("publication push URL does not match the prepared endpoint")
+	}
+	switch recordedKind {
+	case "github":
+		if recordedOwner != effectiveOwner || recordedName != effectiveName {
+			return NewDeepReviewError("publication push URL does not match the prepared endpoint")
+		}
+	case "path":
+		if !samePathAfterSymlinks(recordedPath, effectivePath) {
+			return NewDeepReviewError("publication push URL does not match the prepared endpoint")
+		}
+	default:
+		return NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+	}
+	return nil
+}
+
+func classifyPublicationLocator(raw string) (kind, owner, name, path string, err error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || strings.HasPrefix(trimmed, "-") || strings.ContainsAny(trimmed, " \t\r\n") {
+		return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+	}
+	if m := githubSCPLikeRemoteRe.FindStringSubmatch(trimmed); m != nil {
+		owner, name, ok := canonicalOwnerRepoSegments(m[1], m[2])
+		if !ok {
+			return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+		}
+		return "github", owner, name, "", nil
+	}
+	if strings.Contains(trimmed, "://") {
+		parsed, parseErr := url.Parse(trimmed)
+		if parseErr != nil || parsed.RawQuery != "" || parsed.Fragment != "" || parsed.User != nil && passwordSet(parsed.User) {
+			return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+		}
+		switch strings.ToLower(parsed.Scheme) {
+		case "https", "ssh":
+			scheme := strings.ToLower(parsed.Scheme)
+			if !strings.EqualFold(parsed.Hostname(), "github.com") {
+				return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+			}
+			port := parsed.Port()
+			if scheme == "https" && port != "" && port != "443" {
+				return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+			}
+			if scheme == "ssh" && port != "" && port != "22" {
+				return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+			}
+			if parsed.User != nil {
+				username := parsed.User.Username()
+				if scheme == "https" || (username != "" && username != "git") {
+					return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+				}
+			}
+			if scheme == "ssh" && (parsed.User == nil || parsed.User.Username() != "git") {
+				return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+			}
+			owner, name, ok := parseGitHubOwnerRepoPath(parsed.Path)
+			if !ok {
+				return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+			}
+			return "github", owner, name, "", nil
+		case "file":
+			if parsed.User != nil || parsed.Host != "" {
+				return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+			}
+			abs, absErr := filepath.Abs(filepath.Clean(parsed.Path))
+			if absErr != nil || abs == "" || abs == string(filepath.Separator) {
+				return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+			}
+			return "path", "", "", abs, nil
+		default:
+			return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+		}
+	}
+	if filepath.IsAbs(trimmed) {
+		abs, absErr := filepath.Abs(filepath.Clean(trimmed))
+		if absErr != nil || abs == "" || abs == string(filepath.Separator) {
+			return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+		}
+		return "path", "", "", abs, nil
+	}
+	return "", "", "", "", NewDeepReviewError("publication URL is not an allowed GitHub or local filesystem endpoint")
+}
+
+func passwordSet(user *url.Userinfo) bool {
+	if user == nil {
+		return false
+	}
+	_, ok := user.Password()
+	return ok
+}
+
+func (o *Orchestrator) confirmPreparedPublication() error {
+	if strings.TrimSpace(o.publicationEndpoint) == "" || strings.TrimSpace(o.preparedSourceSHA) == "" || strings.TrimSpace(o.preparedDefaultSHA) == "" || strings.TrimSpace(o.preparedDefaultBranch) == "" {
+		return NewDeepReviewError("publication endpoint was not recorded")
+	}
+	pushURL, err := readGitRemoteURL(o.managedRepoPath, o.config.GitBin, true)
+	if err != nil {
+		return err
+	}
+	if err := publicationEndpointsMatch(o.publicationEndpoint, pushURL); err != nil {
+		return err
+	}
+	sourceSHA, err := remoteBranchSHA(o.managedRepoPath, o.config.GitBin, o.config.SourceBranch)
+	if err != nil {
+		return err
+	}
+	if sourceSHA != strings.ToLower(strings.TrimSpace(o.preparedSourceSHA)) {
+		return NewDeepReviewError("source branch moved after preparation; rerun deepreview instead of publishing against a changed baseline")
+	}
+	defaultSHA, err := remoteBranchSHA(o.managedRepoPath, o.config.GitBin, o.preparedDefaultBranch)
+	if err != nil {
+		return err
+	}
+	if defaultSHA != strings.ToLower(strings.TrimSpace(o.preparedDefaultSHA)) {
+		return NewDeepReviewError("default branch moved after preparation; rerun deepreview instead of publishing against a changed baseline")
+	}
+	return nil
+}
+
 func tryReadRemoteURL(gitBin, repoPath string) (string, error) {
 	completed, err := RunCommand([]string{gitBin, "-C", repoPath, "config", "--get", "remote.origin.url"}, "", "", false, 0)
 	if err != nil {
@@ -493,6 +645,24 @@ func (o *Orchestrator) Run() (retErr error) {
 		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
 		return err
 	}
+	defaultSHA, err := RequireRemoteBranch(o.managedRepoPath, o.config.GitBin, defaultBranch)
+	if err != nil {
+		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
+		return err
+	}
+	endpoint, err := readGitRemoteURL(o.managedRepoPath, o.config.GitBin, false)
+	if err != nil {
+		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
+		return err
+	}
+	if err := validatePublicationLocator(endpoint); err != nil {
+		o.reporter.StageFinished(prepareStage, nil, false, progressMessage(err))
+		return err
+	}
+	o.preparedSourceSHA = sourceSHA
+	o.preparedDefaultSHA = defaultSHA
+	o.preparedDefaultBranch = defaultBranch
+	o.publicationEndpoint = endpoint
 
 	candidateBranch = o.candidateBranchName(o.config.SourceBranch, o.config.RunID)
 	if err := CreateBranchAtRef(o.managedRepoPath, o.config.GitBin, candidateBranch, sourceSHA); err != nil {
@@ -831,6 +1001,9 @@ func (o *Orchestrator) candidateBranchName(sourceBranch, runID string) string {
 }
 
 func (o *Orchestrator) verifyYoloDefaultBranchPushAllowed(candidateBranch, defaultBranch string) error {
+	if err := o.confirmPreparedPublication(); err != nil {
+		return err
+	}
 	sha, err := RevParse(o.managedRepoPath, o.config.GitBin, candidateBranch)
 	if err != nil {
 		return err
@@ -3093,6 +3266,9 @@ func (o *Orchestrator) deliveryBranchName() string {
 }
 
 func (o *Orchestrator) pushReviewedCommit(candidateBranch, destinationBranch string) (string, error) {
+	if err := o.confirmPreparedPublication(); err != nil {
+		return "", err
+	}
 	reviewed, err := o.reviewedCandidateHeadForPublish(candidateBranch)
 	if err != nil {
 		return "", err

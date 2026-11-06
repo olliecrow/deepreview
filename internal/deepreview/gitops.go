@@ -976,23 +976,29 @@ func PushVerifiedRef(repoPath, gitBin, commitSHA, branch string) (string, error)
 }
 
 func requireRemoteBranchSHA(repoPath, gitBin, branch, want string) error {
+	got, err := remoteBranchSHA(repoPath, gitBin, branch)
+	if err != nil {
+		return err
+	}
+	if got != strings.ToLower(strings.TrimSpace(want)) {
+		return NewDeepReviewError("remote ref %s does not match the reviewed commit after publication", "refs/heads/"+branch)
+	}
+	return nil
+}
+
+func remoteBranchSHA(repoPath, gitBin, branch string) (string, error) {
 	ref := "refs/heads/" + branch
 	completed, err := RunCommand([]string{gitBin, "-C", repoPath, "ls-remote", "--exit-code", "origin", ref}, "", "", true, 0)
 	if err != nil {
-		return NewDeepReviewError("publication could not confirm remote ref %s", ref)
+		return "", NewDeepReviewError("publication could not confirm remote ref %s", ref)
 	}
-	got := ""
 	for _, line := range strings.Split(completed.Stdout, "\n") {
 		fields := strings.Fields(line)
 		if len(fields) >= 2 && fields[1] == ref {
-			got = strings.ToLower(fields[0])
-			break
+			return strings.ToLower(fields[0]), nil
 		}
 	}
-	if got != want {
-		return NewDeepReviewError("remote ref %s does not match the reviewed commit after publication", ref)
-	}
-	return nil
+	return "", NewDeepReviewError("publication could not confirm remote ref %s", ref)
 }
 
 func DryRunPushRefspec(repoPath, gitBin, refspec string) error {
