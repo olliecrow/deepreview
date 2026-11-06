@@ -269,24 +269,49 @@ func yesNo(v bool) string {
 	return "no"
 }
 
-func writeRunHealthArtifacts(runRoot string, report runHealthReport) error {
-	jsonPath := filepath.Join(runRoot, runHealthJSONName)
-	mdPath := filepath.Join(runRoot, runHealthMDName)
+func sanitizeRunHealthReport(report runHealthReport) runHealthReport {
+	report.RunID = sanitizePublicText(report.RunID)
+	report.Mode = sanitizePublicText(report.Mode)
+	report.GeneratedAt = sanitizePublicText(report.GeneratedAt)
+	if report.FinalStatus != nil {
+		status := *report.FinalStatus
+		status.Decision = sanitizePublicText(status.Decision)
+		status.Reason = sanitizePublicText(status.Reason)
+		if status.NextFocus != nil {
+			nextFocus := sanitizePublicText(*status.NextFocus)
+			status.NextFocus = &nextFocus
+		}
+		report.FinalStatus = &status
+	}
+	if len(report.Stderr.NonEmptyLogSet) > 0 {
+		logs := make([]runHealthStderrFile, len(report.Stderr.NonEmptyLogSet))
+		for i, file := range report.Stderr.NonEmptyLogSet {
+			file.Path = sanitizePublicText(file.Path)
+			logs[i] = file
+		}
+		report.Stderr.NonEmptyLogSet = logs
+	}
+	return report
+}
 
-	payload, err := json.MarshalIndent(report, "", "  ")
+func writeRunHealthArtifacts(runRoot string, report runHealthReport) error {
+	sanitized := sanitizeRunHealthReport(report)
+	payload, err := json.MarshalIndent(sanitized, "", "  ")
 	if err != nil {
 		return err
 	}
 	payload = append(payload, '\n')
-	if err := os.WriteFile(jsonPath, payload, 0o644); err != nil {
+	if err := assertPublicTextSafe(string(payload), "run health"); err != nil {
 		return err
 	}
-
-	markdown := buildRunHealthMarkdown(report)
+	markdown := buildRunHealthMarkdown(sanitized)
 	if err := assertPublicTextSafe(markdown, "run health"); err != nil {
 		return err
 	}
-	return os.WriteFile(mdPath, []byte(markdown), 0o644)
+	if err := writePrivateFile(filepath.Join(runRoot, runHealthJSONName), payload); err != nil {
+		return err
+	}
+	return writePrivateFile(filepath.Join(runRoot, runHealthMDName), []byte(markdown))
 }
 
 func runHealthArtifactsExist(runRoot string) bool {

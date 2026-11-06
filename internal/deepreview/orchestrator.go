@@ -98,7 +98,10 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 	}
 
 	runRoot := filepath.Join(workspaceRoot, "runs", config.RunID)
-	if err := os.MkdirAll(runRoot, 0o755); err != nil {
+	if err := mkdirPrivate(filepath.Dir(runRoot)); err != nil {
+		return nil, err
+	}
+	if err := mkdirPrivate(runRoot); err != nil {
 		return nil, err
 	}
 	managedRepoPath := filepath.Join(
@@ -125,8 +128,9 @@ func NewOrchestrator(config ReviewConfig, reporter ProgressReporter) (*Orchestra
 		repoIdentity:    repoIdentity,
 		managedRepoPath: managedRepoPath,
 		codexRunner: CodexRunner{
-			CodexBin: config.CodexBin,
-			Timeout:  config.CodexTimeout,
+			CodexBin:      config.CodexBin,
+			Timeout:       config.CodexTimeout,
+			RetainRawLogs: config.RetainRawLogs,
 		},
 		reporter: reporter,
 	}, nil
@@ -568,8 +572,11 @@ func (o *Orchestrator) Run() (retErr error) {
 		return err
 	}
 	defer o.releaseRunLock()
-	if err := os.MkdirAll(filepath.Join(o.runRoot, "logs"), 0o755); err != nil {
+	if err := mkdirPrivate(filepath.Join(o.runRoot, "logs")); err != nil {
 		return err
+	}
+	if o.config.RetainRawLogs {
+		fmt.Fprintf(os.Stderr, "deepreview: retaining raw Codex logs for this run. These files can contain source, credentials, and prompts. Delete this run's directory under runs/ when you no longer need them.\n")
 	}
 	if err := o.writeRunConfig(); err != nil {
 		return err
@@ -690,7 +697,7 @@ func (o *Orchestrator) Run() (retErr error) {
 
 	for round := 1; round <= o.config.MaxRounds; round++ {
 		roundDir := filepath.Join(o.runRoot, fmt.Sprintf("round-%02d", round))
-		if err := os.MkdirAll(roundDir, 0o755); err != nil {
+		if err := mkdirPrivate(roundDir); err != nil {
 			return err
 		}
 
@@ -877,10 +884,10 @@ func (o *Orchestrator) runLockFilePath() string {
 
 func (o *Orchestrator) acquireRunLock() error {
 	lockPath := o.runLockFilePath()
-	if err := os.MkdirAll(filepath.Dir(lockPath), 0o755); err != nil {
+	if err := mkdirPrivate(filepath.Dir(lockPath)); err != nil {
 		return err
 	}
-	guard, err := os.OpenFile(lockPath+".guard", os.O_CREATE|os.O_RDWR, 0o644)
+	guard, err := openPrivateFile(lockPath+".guard", os.O_CREATE|os.O_RDWR)
 	if err != nil {
 		return err
 	}
@@ -905,7 +912,7 @@ func (o *Orchestrator) acquireRunLock() error {
 	}
 
 	writeLock := func() error {
-		file, err := os.OpenFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
+		file, err := openPrivateFile(lockPath, os.O_WRONLY|os.O_CREATE|os.O_EXCL)
 		if err != nil {
 			return err
 		}
@@ -1421,7 +1428,7 @@ Self-audit note:
 func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaultBranch string) (_ []string, err error) {
 	o.reporter.StageStarted("independent review stage", roundPtr(round), "launching independent reviewers in parallel")
 	reviewDir := filepath.Join(roundDir, "review")
-	if err := os.MkdirAll(reviewDir, 0o755); err != nil {
+	if err := mkdirPrivate(reviewDir); err != nil {
 		o.reporter.StageFinished("independent review stage", roundPtr(round), false, progressMessage(err))
 		return nil, err
 	}
@@ -1479,7 +1486,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		reviewPath := filepath.Join(roundDir, fmt.Sprintf("review-%02d.md", workerID))
 		workerReviewPath := filepath.Join(worktreePath, ".deepreview", fmt.Sprintf("review-%02d.md", workerID))
 		workerNotesPath := filepath.Join(worktreePath, ".deepreview", fmt.Sprintf("review-%02d.notes.md", workerID))
-		if err := os.MkdirAll(workerDir, 0o755); err != nil {
+		if err := mkdirPrivate(workerDir); err != nil {
 			return nil, err
 		}
 		if err := AddDetachedWorktree(o.managedRepoPath, o.config.GitBin, worktreePath, candidateHead); err != nil {
@@ -1489,7 +1496,7 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 		if err := EnsureWorktreeOperationalExcludes(worktreePath, o.config.GitBin); err != nil {
 			return nil, err
 		}
-		if err := os.MkdirAll(filepath.Dir(workerReviewPath), 0o755); err != nil {
+		if err := mkdirPrivate(filepath.Dir(workerReviewPath)); err != nil {
 			return nil, err
 		}
 		reviewPaths = append(reviewPaths, reviewPath)
@@ -1541,12 +1548,10 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 					codexContext: nil,
 					logPrefix:    logPrefix,
 					useGitStatus: true,
-					monitoredPaths: []string{
-						workerReviewPath,
-						workerNotesPath,
-						logPrefix + ".stdout.jsonl",
-						logPrefix + ".stderr.log",
-					},
+					monitoredPaths: append(
+						[]string{workerReviewPath, workerNotesPath},
+						o.codexRunner.rawLogPaths(logPrefix)...,
+					),
 				},
 				monitoredPromptCallbacks{
 					onBeforeRetry: func(_ int, _ int, _ *promptInactivityError) error {
@@ -1679,7 +1684,7 @@ func prepareReviewWorkerRetry(repoPath, worktreePath, gitBin, baselineRef, revie
 		if err := os.Remove(trimmed); err != nil && !os.IsNotExist(err) {
 			return err
 		}
-		if err := os.MkdirAll(filepath.Dir(trimmed), 0o755); err != nil {
+		if err := mkdirPrivate(filepath.Dir(trimmed)); err != nil {
 			return err
 		}
 	}
@@ -1695,7 +1700,7 @@ func (o *Orchestrator) runExecuteStage(
 	o.reporter.StageStarted("execute stage", roundPtr(round), "running execute workflow (triage+plan, implement+verify+finalize)")
 	executeDir := filepath.Join(roundDir, "execute")
 	executeWorktree := filepath.Join(executeDir, "worktree")
-	if err := os.MkdirAll(executeDir, 0o755); err != nil {
+	if err := mkdirPrivate(executeDir); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1721,7 +1726,7 @@ func (o *Orchestrator) runExecuteStage(
 	roundTriageJSONWorktreePath := filepath.Join(executeArtifactsDir, "round-triage.json")
 	roundPlanWorktreePath := filepath.Join(executeArtifactsDir, "round-plan.md")
 	roundVerificationWorktreePath := filepath.Join(executeArtifactsDir, "round-verification.md")
-	if err := os.MkdirAll(executeArtifactsDir, 0o755); err != nil {
+	if err := mkdirPrivate(executeArtifactsDir); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1733,7 +1738,7 @@ func (o *Orchestrator) runExecuteStage(
 	}
 
 	reviewInputsDir := filepath.Join(executeArtifactsDir, "review-inputs")
-	if err := os.MkdirAll(reviewInputsDir, 0o755); err != nil {
+	if err := mkdirPrivate(reviewInputsDir); err != nil {
 		o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 		return RoundStatus{}, "", err
 	}
@@ -1745,7 +1750,7 @@ func (o *Orchestrator) runExecuteStage(
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
 		}
-		if err := os.WriteFile(dst, content, 0o644); err != nil {
+		if err := writePrivateFile(dst, content); err != nil {
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
 		}
@@ -1970,7 +1975,7 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 			resetContextOnRetry: resetContextOnRetry,
 			logPrefix:           logPrefix,
 			useGitStatus:        true,
-			monitoredPaths:      append(append([]string{}, monitoredPaths...), logPrefix+".stdout.jsonl", logPrefix+".stderr.log"),
+			monitoredPaths:      append(append([]string{}, monitoredPaths...), o.codexRunner.rawLogPaths(logPrefix)...),
 		},
 		monitoredPromptCallbacks{
 			onHeartbeat: func(elapsed, silence time.Duration) {
@@ -2018,14 +2023,11 @@ func (o *Orchestrator) runPromptWithHeartbeat(
 }
 
 func writeRoundRecord(path string, record RoundRecord) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
 	payload, err := json.MarshalIndent(record, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, append(payload, '\n'), 0o644)
+	return writePrivateFile(path, append(payload, '\n'))
 }
 
 func readRoundRecord(path string) (RoundRecord, error) {
@@ -2180,7 +2182,7 @@ func snapshotPaths(basePath string, preservePaths []string, snapshotParent strin
 	if strings.TrimSpace(snapshotParent) == "" {
 		return "", NewDeepReviewError("retry snapshot parent is required")
 	}
-	if err := os.MkdirAll(snapshotParent, 0o700); err != nil {
+	if err := mkdirPrivate(snapshotParent); err != nil {
 		return "", err
 	}
 	snapshotDir, err := os.MkdirTemp(snapshotParent, "retry-")
@@ -2223,9 +2225,15 @@ func snapshotOnePath(basePath, snapshotDir, preservePath string) error {
 		return NewDeepReviewError("preserved path exceeds %d bytes", maxArtifactBytes)
 	}
 	if info.IsDir() {
-		return copyDirectory(preservePath, dstPath)
+		if err := copyDirectory(preservePath, dstPath); err != nil {
+			return err
+		}
+		return chmodPrivateTree(dstPath)
 	}
-	return copyFileWithMode(preservePath, dstPath, info.Mode())
+	if err := copyFileWithMode(preservePath, dstPath, info.Mode()); err != nil {
+		return err
+	}
+	return os.Chmod(dstPath, privateFileMode)
 }
 
 func restoreSnapshot(basePath, snapshotDir string) error {
@@ -2921,7 +2929,7 @@ func (o *Orchestrator) validatePreparedDeliveryRef(candidateHead, candidateBranc
 
 func (o *Orchestrator) addTemporaryPolicyWorktree(ref string) (string, func() error, error) {
 	worktreeRoot := filepath.Join(o.runRoot, "tmp")
-	if err := os.MkdirAll(worktreeRoot, 0o755); err != nil {
+	if err := mkdirPrivate(worktreeRoot); err != nil {
 		return "", nil, err
 	}
 	worktreePath, err := os.MkdirTemp(worktreeRoot, "push-range-policy-")
@@ -3093,7 +3101,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	o.reviewedCandidateHead = candidateHead
 	deliveryDir := filepath.Join(o.runRoot, "delivery")
 	deliveryWorktree := filepath.Join(deliveryDir, "worktree")
-	if err := os.MkdirAll(deliveryDir, 0o755); err != nil {
+	if err := mkdirPrivate(deliveryDir); err != nil {
 		return DeliveryResult{}, err
 	}
 	if err := AddDetachedWorktree(o.managedRepoPath, o.config.GitBin, deliveryWorktree, candidateHead); err != nil {
@@ -3113,7 +3121,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	}
 
 	deliveryArtifactsDir := filepath.Join(deliveryWorktree, ".deepreview", "artifacts")
-	if err := os.MkdirAll(deliveryArtifactsDir, 0o755); err != nil {
+	if err := mkdirPrivate(deliveryArtifactsDir); err != nil {
 		return DeliveryResult{}, err
 	}
 	resultWorktreePath := filepath.Join(deliveryArtifactsDir, "delivery-result.json")
@@ -3318,16 +3326,16 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 	prTitlePath := filepath.Join(o.runRoot, "pr-title.txt")
 	prBodyBasePath := filepath.Join(o.runRoot, "pr-body.base.md")
 	prBodyPath := filepath.Join(o.runRoot, "pr-body.md")
-	if err := os.WriteFile(prTitleBasePath, []byte(prTitle+"\n"), 0o644); err != nil {
+	if err := writePrivateFile(prTitleBasePath, []byte(prTitle+"\n")); err != nil {
 		return DeliveryResult{}, err
 	}
-	if err := os.WriteFile(prTitlePath, []byte(prTitle+"\n"), 0o644); err != nil {
+	if err := writePrivateFile(prTitlePath, []byte(prTitle+"\n")); err != nil {
 		return DeliveryResult{}, err
 	}
-	if err := os.WriteFile(prBodyBasePath, []byte(prBody), 0o644); err != nil {
+	if err := writePrivateFile(prBodyBasePath, []byte(prBody)); err != nil {
 		return DeliveryResult{}, err
 	}
-	if err := os.WriteFile(prBodyPath, []byte(prBody), 0o644); err != nil {
+	if err := writePrivateFile(prBodyPath, []byte(prBody)); err != nil {
 		return DeliveryResult{}, err
 	}
 
@@ -3894,7 +3902,7 @@ func (o *Orchestrator) writeFinalSummary(delivery DeliveryResult, summaries []st
 	if err := assertPublicTextSafe(finalText, "final summary"); err != nil {
 		return err
 	}
-	if err := os.WriteFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText), 0o644); err != nil {
+	if err := writePrivateFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText)); err != nil {
 		return err
 	}
 	return writeRunHealthArtifacts(o.runRoot, health)
@@ -4085,6 +4093,7 @@ func (o *Orchestrator) writeRunConfig() error {
 		"review_max_restarts":   o.config.ReviewMaxRestarts,
 		"mode":                  o.config.Mode,
 		"trust_repo":            o.config.TrustRepo,
+		"retain_raw_logs":       o.config.RetainRawLogs,
 		"workspace_root":        sanitizePublicText(o.workspaceRoot),
 		"run_id":                o.config.RunID,
 		"git_bin":               sanitizePublicText(o.config.GitBin),
@@ -4096,5 +4105,5 @@ func (o *Orchestrator) writeRunConfig() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(o.runRoot, "run-config.json"), append(b, '\n'), 0o644)
+	return writePrivateFile(filepath.Join(o.runRoot, "run-config.json"), append(b, '\n'))
 }

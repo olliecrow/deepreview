@@ -1684,7 +1684,7 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"o
 			ReviewMaxRestarts:  1,
 			CodexBin:           "codex",
 		},
-		codexRunner: CodexRunner{CodexBin: "codex", Timeout: 8 * time.Second},
+		codexRunner: CodexRunner{CodexBin: "codex", Timeout: 8 * time.Second, RetainRawLogs: true},
 	}
 	result, restarts, err := o.runPromptWithWatchdog(
 		context.Background(),

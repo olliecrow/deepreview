@@ -187,7 +187,9 @@ Each run must produce:
 Cleanup policy:
 - aggressively remove review/execute/delivery worktrees and transient round artifacts once they are no longer needed.
 - keep canonical markdown/json artifacts by default.
-- raw machine logs (`*.stdout.jsonl`, stderr captures, profiler-like metadata) may be retained for debugging, but should be optional or debug-oriented rather than the primary artifact surface.
+- workspace `runs/` directories, each run directory, and lock directories are mode 0700. Private artifacts, including canonical reports, metadata, and locks, are mode 0600.
+- raw Codex logs (`*.stdout.jsonl` and stderr captures) are off unless `--retain-raw-logs`. When retained, they stay private inside the run directory and can contain source, credentials, and prompts. Delete that run's directory under `runs/` when you no longer need them.
+- `run-health.json` and `run-health.md` use the same sanitized public text.
 
 ## Safety contract
 - never commit tokens, credentials, or private keys.

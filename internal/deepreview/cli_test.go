@@ -161,6 +161,9 @@ func TestParseReviewArgsDefaults(t *testing.T) {
 	if parsed.Config.TrustRepo {
 		t.Fatalf("expected --trust-repo default to false")
 	}
+	if parsed.Config.RetainRawLogs {
+		t.Fatalf("expected --retain-raw-logs default to false")
+	}
 }
 
 func TestParseReviewArgsTrustRepo(t *testing.T) {
@@ -170,6 +173,16 @@ func TestParseReviewArgsTrustRepo(t *testing.T) {
 	}
 	if !parsed.Config.TrustRepo {
 		t.Fatal("expected --trust-repo to set repository execution trust")
+	}
+}
+
+func TestParseReviewArgsRetainRawLogs(t *testing.T) {
+	parsed, err := ParseReviewArgs([]string{"owner/repo", "--source-branch", "feature", "--retain-raw-logs"}, time.Unix(1700000000, 0))
+	if err != nil {
+		t.Fatalf("ParseReviewArgs failed: %v", err)
+	}
+	if !parsed.Config.RetainRawLogs {
+		t.Fatal("expected --retain-raw-logs to keep raw Codex logs")
 	}
 }
 

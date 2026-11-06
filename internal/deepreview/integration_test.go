@@ -3168,6 +3168,7 @@ func TestInvalidStageOutputsStopBeforePromptTwo(t *testing.T) {
 				"--max-rounds", "1",
 				"--mode", "pr",
 				"--trust-repo",
+				"--retain-raw-logs",
 				"--no-tui",
 			)
 			if !strings.Contains(output, tc.wantOutput) {
@@ -3214,6 +3215,7 @@ func TestInvalidStageOutputsStopBeforePromptTwo(t *testing.T) {
 			"--max-rounds", "1",
 			"--mode", "pr",
 			"--trust-repo",
+			"--retain-raw-logs",
 			"--no-tui",
 		)
 		if !strings.Contains(output, "delivery skipped: no deliverable repository changes were produced") {

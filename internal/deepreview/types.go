@@ -24,6 +24,7 @@ type ReviewConfig struct {
 	ReviewMaxRestarts   int            `json:"review_max_restarts"`
 	Mode                string         `json:"mode"`
 	TrustRepo           bool           `json:"trust_repo"`
+	RetainRawLogs       bool           `json:"retain_raw_logs"`
 	WorkspaceRoot       string         `json:"workspace_root"`
 	RunID               string         `json:"run_id"`
 	GitBin              string         `json:"git_bin"`

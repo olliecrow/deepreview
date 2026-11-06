@@ -123,8 +123,10 @@ func CloneOrFetch(repoPath, cloneSource, gitBin string) error {
 		return err
 	}
 
-	_, err := RunCommand(managedPreparationArgs(gitBin, "-C", repoPath, "fetch", "--all", "--prune"), "", "", true, 0)
-	return err
+	if _, err := RunCommand(managedPreparationArgs(gitBin, "-C", repoPath, "fetch", "--all", "--prune"), "", "", true, 0); err != nil {
+		return err
+	}
+	return chmodOwnedDirectory(repoPath)
 }
 
 func ResolveDefaultBranch(repoPath, gitBin string) (string, error) {
@@ -232,8 +234,32 @@ func RefsHaveSameTree(repoPath, gitBin, leftRef, rightRef string) (bool, error) 
 	return strings.TrimSpace(leftTree) == strings.TrimSpace(rightTree), nil
 }
 
+func ensureWorktreeParent(path string) error {
+	info, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return mkdirPrivate(path)
+	}
+	if err != nil {
+		return err
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		target, statErr := os.Stat(path)
+		if statErr != nil {
+			return statErr
+		}
+		if !target.IsDir() {
+			return errors.New("worktree parent is not a directory")
+		}
+		return nil
+	}
+	if !info.IsDir() {
+		return errors.New("worktree parent is not a directory")
+	}
+	return nil
+}
+
 func AddDetachedWorktree(repoPath, gitBin, worktreePath, ref string) error {
-	if err := os.MkdirAll(filepath.Dir(worktreePath), 0o755); err != nil {
+	if err := ensureWorktreeParent(filepath.Dir(worktreePath)); err != nil {
 		return err
 	}
 	_, err := RunCommand(managedPreparationArgs(gitBin, "-C", repoPath, "worktree", "add", "--detach", worktreePath, ref), "", "", true, 0)

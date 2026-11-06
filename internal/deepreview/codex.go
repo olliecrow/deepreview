@@ -18,12 +18,20 @@ const envMulticodexSelectedProfilePath = "MULTICODEX_SELECTED_PROFILE_PATH"
 const maxCodexEventBytes = 1 << 20
 
 var openPromptLogFile = func(path string) (io.WriteCloser, error) {
-	return os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	return openPrivateFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC)
 }
 
 type CodexRunner struct {
-	CodexBin string
-	Timeout  time.Duration
+	CodexBin      string
+	Timeout       time.Duration
+	RetainRawLogs bool
+}
+
+func (c CodexRunner) rawLogPaths(prefix string) []string {
+	if !c.RetainRawLogs || strings.TrimSpace(prefix) == "" {
+		return nil
+	}
+	return []string{prefix + ".stdout.jsonl", prefix + ".stderr.log"}
 }
 
 type codexLauncher struct {
@@ -129,22 +137,34 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 	}
 	command := c.buildCommandWithLauncher(launcher, ctx)
 
+	needsProfileFile := launcher.Display == "multicodex" && (ctx == nil || strings.TrimSpace(ctx.MulticodexProfile) == "")
+	if (c.RetainRawLogs || needsProfileFile) && strings.TrimSpace(logPrefixPath) == "" {
+		return CodexRunResult{}, NewDeepReviewError("raw log prefix is required")
+	}
 	stdoutPath := logPrefixPath + ".stdout.jsonl"
 	stderrPath := logPrefixPath + ".stderr.log"
 	selectedProfilePath := logPrefixPath + ".multicodex-profile.json"
-	if err := os.MkdirAll(filepath.Dir(stdoutPath), 0o755); err != nil {
-		return CodexRunResult{}, err
+	if c.RetainRawLogs || needsProfileFile {
+		if err := mkdirPrivate(filepath.Dir(stdoutPath)); err != nil {
+			return CodexRunResult{}, err
+		}
 	}
-	stdoutFile, err := openPromptLogFile(stdoutPath)
-	if err != nil {
-		return CodexRunResult{}, err
+	var stdoutFile io.WriteCloser = discardWriteCloser{}
+	var stderrFile io.WriteCloser = discardWriteCloser{}
+	if c.RetainRawLogs {
+		openedStdout, err := openPromptLogFile(stdoutPath)
+		if err != nil {
+			return CodexRunResult{}, err
+		}
+		defer openedStdout.Close()
+		stdoutFile = openedStdout
+		openedStderr, err := openPromptLogFile(stderrPath)
+		if err != nil {
+			return CodexRunResult{}, err
+		}
+		defer openedStderr.Close()
+		stderrFile = openedStderr
 	}
-	defer stdoutFile.Close()
-	stderrFile, err := openPromptLogFile(stderrPath)
-	if err != nil {
-		return CodexRunResult{}, err
-	}
-	defer stderrFile.Close()
 
 	parser := &codexEventParser{}
 	if ctx != nil {
@@ -203,6 +223,10 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 		commandEnv = withEnvOverride(commandEnv, envMulticodexSelectedProfilePath, selectedProfilePath)
 	}
 	completed, err := RunCommandContextWithEnvAndCallbacks(runCtx, command, cwd, commandEnv, prompt, true, c.Timeout, streamCallbacks)
+	var profileModeErr error
+	if needsProfileFile {
+		profileModeErr = chmodRegularPrivateFile(selectedProfilePath)
+	}
 	streamMu.Lock()
 	if streamErr == nil {
 		streamErr = parser.finish()
@@ -217,12 +241,15 @@ func (c *CodexRunner) RunPromptWithHooks(cwd, prompt string, ctx *CodexContext, 
 	if err != nil {
 		return CodexRunResult{}, err
 	}
+	if profileModeErr != nil {
+		return CodexRunResult{}, profileModeErr
+	}
 
 	discoveredProfile := ""
 	if ctx != nil {
 		discoveredProfile = strings.TrimSpace(ctx.MulticodexProfile)
 	}
-	if launcher.Display == "multicodex" && discoveredProfile == "" {
+	if needsProfileFile {
 		discoveredProfile = readSelectedMulticodexProfile(selectedProfilePath)
 	}
 	if threadID == "" {

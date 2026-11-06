@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
@@ -30,6 +31,8 @@ func TestFilesystemSafeKeyIsStableDistinctAndPathSafe(t *testing.T) {
 }
 
 func TestCloneOrFetchReplacesStaleDirectory(t *testing.T) {
+	oldMask := syscall.Umask(0o022)
+	t.Cleanup(func() { syscall.Umask(oldMask) })
 	td := t.TempDir()
 	remote := filepath.Join(td, "remote.git")
 	seed := filepath.Join(td, "seed")
@@ -63,6 +66,13 @@ func TestCloneOrFetchReplacesStaleDirectory(t *testing.T) {
 	}
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatalf("expected stale file removal, got err=%v", err)
+	}
+	info, err := os.Lstat(managed)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != privateDirMode {
+		t.Fatalf("managed repo mode = %o", info.Mode().Perm())
 	}
 }
 

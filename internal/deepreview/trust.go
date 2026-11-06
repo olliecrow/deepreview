@@ -2,7 +2,6 @@ package deepreview
 
 import (
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -75,8 +74,5 @@ func (o *Orchestrator) writePolicyScriptRecord(ref string, present bool, blobSHA
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(o.runRoot, 0o755); err != nil {
-		return err
-	}
-	return os.WriteFile(filepath.Join(o.runRoot, "policy-script.json"), append(body, '\n'), 0o644)
+	return writePrivateFile(filepath.Join(o.runRoot, "policy-script.json"), append(body, '\n'))
 }

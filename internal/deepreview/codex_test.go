@@ -248,7 +248,8 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
 	t.Setenv("FAKE_SELECTED_PROFILE", "beta")
 
 	runner := CodexRunner{CodexBin: "codex", Timeout: time.Second}
-	result, err := runner.RunPrompt(t.TempDir(), "hello", nil, filepath.Join(t.TempDir(), "logs", "codex"))
+	logPrefix := filepath.Join(t.TempDir(), "logs", "codex")
+	result, err := runner.RunPrompt(t.TempDir(), "hello", nil, logPrefix)
 	if err != nil {
 		t.Fatalf("RunPrompt failed: %s", describeRunPromptError(err))
 	}
@@ -265,6 +266,10 @@ printf '{"type":"item.completed","item":{"type":"agent_message","text":"ok"}}\n'
 	log := string(data)
 	if !strings.Contains(log, "profile=beta") {
 		t.Fatalf("expected beta profile in codex env, got %q", log)
+	}
+	assertPerm(t, logPrefix+".multicodex-profile.json", privateFileMode)
+	if _, err := os.Stat(logPrefix + ".stdout.jsonl"); !os.IsNotExist(err) {
+		t.Fatalf("raw stdout log exists without retention, err=%v", err)
 	}
 }
 
@@ -403,8 +408,10 @@ func TestCodexRunPromptCancelsOnLogWriteFailure(t *testing.T) {
 	openPromptLogFile = func(path string) (io.WriteCloser, error) {
 		return failingLogWriter{}, nil
 	}
+	runner, prefix := fakeCodexRunner(t, script)
+	runner.RetainRawLogs = true
 	started := time.Now()
-	_, err := runFakeCodexPrompt(t, script)
+	_, err := runner.RunPrompt(t.TempDir(), "hello", nil, prefix)
 	if time.Since(started) > 5*time.Second {
 		t.Fatalf("log write failure returned in %s", time.Since(started))
 	}
@@ -431,6 +438,7 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"d
 	logDir := t.TempDir()
 	prefix := filepath.Join(logDir, "codex")
 	runner, _ := fakeCodexRunner(t, script)
+	runner.RetainRawLogs = true
 	result, err := runner.RunPrompt(t.TempDir(), "hello", nil, prefix)
 	if err != nil {
 		t.Fatalf("RunPrompt failed: %s", describeRunPromptError(err))
@@ -450,6 +458,29 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"d
 	}
 	if info.Size() <= int64(commandDiagnosticTailBytes) {
 		t.Fatalf("on-disk log is %d bytes", info.Size())
+	}
+	if info.Mode().Perm() != privateFileMode {
+		t.Fatalf("log mode = %o", info.Mode().Perm())
+	}
+}
+
+func TestCodexRunPromptOmitsRawLogsByDefault(t *testing.T) {
+	script := "#!/bin/sh\nset -eu\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"thread-quiet\"}'\nprintf '%s\\n' '{\"type\":\"item.completed\",\"item\":{\"type\":\"agent_message\",\"text\":\"ok\"}}'\n"
+	runner, prefix := fakeCodexRunner(t, script)
+	result, err := runner.RunPrompt(t.TempDir(), "hello", nil, prefix)
+	if err != nil {
+		t.Fatalf("RunPrompt failed: %s", describeRunPromptError(err))
+	}
+	if result.ThreadID != "thread-quiet" {
+		t.Fatalf("thread id = %q", result.ThreadID)
+	}
+	if len(result.Stdout) > commandDiagnosticTailBytes {
+		t.Fatalf("retained stdout = %d", len(result.Stdout))
+	}
+	for _, path := range []string{prefix + ".stdout.jsonl", prefix + ".stderr.log"} {
+		if _, err := os.Stat(path); !os.IsNotExist(err) {
+			t.Fatalf("raw log %s exists without retention, err=%v", filepath.Base(path), err)
+		}
 	}
 }
 

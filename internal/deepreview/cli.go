@@ -56,6 +56,7 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 	yolo := fs.Bool("yolo", false, "alias for --mode yolo")
 	noTUI := fs.Bool("no-tui", false, "disable terminal UI")
 	trustRepo := fs.Bool("trust-repo", false, "run repository code with operator privileges")
+	retainRawLogs := fs.Bool("retain-raw-logs", false, "keep raw Codex stdout and stderr logs")
 
 	if err := fs.Parse(flagArgs); err != nil {
 		return ParsedArgs{}, err
@@ -122,6 +123,7 @@ func ParseReviewArgs(args []string, now time.Time) (ParsedArgs, error) {
 		ReviewMaxRestarts:   reviewMaxRestarts,
 		Mode:                finalMode,
 		TrustRepo:           *trustRepo,
+		RetainRawLogs:       *retainRawLogs,
 		WorkspaceRoot:       workspaceRoot,
 		RunID:               runID,
 		GitBin:              gitBin,
@@ -204,7 +206,7 @@ What this command does:
      - mode=yolo: pushes directly to source branch
 
 Usage:
-  deepreview review [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--no-tui] [--trust-repo]
+  deepreview review [<repo>] [--source-branch <branch>] [--concurrency N] [--max-rounds N] [--mode pr|yolo] [--yolo] [--no-tui] [--trust-repo] [--retain-raw-logs]
 
 Arguments:
   <repo>
@@ -262,6 +264,11 @@ Optional flags:
     Required before review runs repository instructions, tests, hooks, filters,
     and policy scripts with your user privileges. deepreview is not a sandbox.
     doctor and dry-run show this state and do not execute those scripts.
+
+  --retain-raw-logs     (default: false)
+    Keep raw Codex stdout JSONL and stderr logs under this run's directory.
+    Those files can contain source, credentials, and prompts. Delete the run
+    directory under runs/ when you no longer need them.
 
 	Environment overrides:
   DEEPREVIEW_WORKSPACE_ROOT   (default: ~/deepreview)
@@ -473,7 +480,7 @@ _deepreview_completion() {
       COMPREPLY=( $(compgen -W "bash zsh" -- "${cur}") )
       ;;
     review|doctor|dry-run)
-      COMPREPLY=( $(compgen -W "--source-branch --concurrency --max-rounds --mode --yolo --no-tui --trust-repo" -- "${cur}") )
+      COMPREPLY=( $(compgen -W "--source-branch --concurrency --max-rounds --mode --yolo --no-tui --trust-repo --retain-raw-logs" -- "${cur}") )
       ;;
     *)
       COMPREPLY=( $(compgen -W "${commands}" -- "${cur}") )
@@ -502,7 +509,7 @@ _deepreview() {
       _values 'shell' bash zsh
       ;;
     review|doctor|dry-run)
-      _values 'flag' --source-branch --concurrency --max-rounds --mode --yolo --no-tui --trust-repo
+      _values 'flag' --source-branch --concurrency --max-rounds --mode --yolo --no-tui --trust-repo --retain-raw-logs
       ;;
   esac
 }
@@ -571,7 +578,12 @@ func runReviewCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
-	if err := os.MkdirAll(filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID), 0o755); err != nil {
+	runRoot := filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID)
+	if err := mkdirPrivate(filepath.Dir(runRoot)); err != nil {
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
+		return 1
+	}
+	if err := mkdirPrivate(runRoot); err != nil {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
@@ -1060,7 +1072,7 @@ func cleanupInterruptedRunArtifacts(runRoot, gitBin string) error {
 	if strings.TrimSpace(gitBin) == "" {
 		gitBin = "git"
 	}
-	_ = os.MkdirAll(runRoot, 0o755)
+	_ = mkdirPrivate(runRoot)
 	waitForActiveCommandsToExit(15 * time.Second)
 	deadline := time.Now().Add(worktreeCleanupBudget)
 	var lastErr error
