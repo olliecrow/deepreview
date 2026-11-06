@@ -3,15 +3,35 @@ title = "deepreview gitleaks policy"
 [extend]
 useDefault = true
 
+# Keep these paths and placeholders in sync with
+# scripts/security/check-sensitive-text.sh.
+
+# The secret is the path without its leading slash. The default global
+# allowlist skips a secret that starts with /home/ or /Users/<name>/, so a
+# secret with the slash would never be reported.
 [[rules]]
-id = "local-system-paths"
-description = "Do not commit local absolute system paths in this public-ready repository."
-regex = '''(/Users/[A-Za-z0-9._-]+|/home/[A-Za-z0-9._-]+|[A-Za-z]:\\+Users\\+[A-Za-z0-9._-]+)'''
+id = "local-unix-home-path"
+description = "Do not commit local home directory paths in this public repository."
+regex = '''/(Users/[A-Za-z0-9._-]+|home/[A-Za-z0-9._-]+)'''
+secretGroup = 1
 tags = ["policy", "privacy"]
 
 [[rules.allowlists]]
-description = "Allow explicit placeholder examples used in policy/docs."
-regexTarget = "match"
+description = "Allow a match only when the whole path is a placeholder. Other paths on the same line are still reported."
+regexTarget = "secret"
 regexes = [
-  '''(/Users/(YOU|USER|username)|/home/(user|USER|username)|[A-Za-z]:\\+Users\\+(YOU|USER|USERNAME|username))'''
+  '''^(Users/(YOU|USER|username)|home/(user|USER|username))$'''
+]
+
+[[rules]]
+id = "local-windows-home-path"
+description = "Do not commit local Windows user paths in this public repository."
+regex = '''[A-Za-z]:\\+[Uu][Ss][Ee][Rr][Ss]\\+[A-Za-z0-9._-]+'''
+tags = ["policy", "privacy"]
+
+[[rules.allowlists]]
+description = "Allow a match only when the whole path is a placeholder. Other paths on the same line are still reported."
+regexTarget = "secret"
+regexes = [
+  '''^[A-Za-z]:\\+[Uu][Ss][Ee][Rr][Ss]\\+(YOU|USER|USERNAME|username)$'''
 ]
