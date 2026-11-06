@@ -970,3 +970,56 @@ func TestSecretHygieneScanRawDiff(t *testing.T) {
 		})
 	}
 }
+
+func TestSecretHygieneScanTokenShapes(t *testing.T) {
+	fixtures := []string{
+		"sk-" + "ant-oat01-" + strings.Repeat("A", 24),
+		"sk-" + "ant-api03-" + strings.Repeat("B", 24),
+		"sk-" + "ant-admin01-" + strings.Repeat("C", 24),
+		"eyJ" + strings.Repeat("a", 12) + "." + strings.Repeat("b", 8) + "." + strings.Repeat("c", 20),
+	}
+	for i, payload := range fixtures {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			o, repo, base := newPrivacyScanOrchestrator(t)
+			if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("value: "+payload+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, repo, "add", "notes.txt")
+			runGitTest(t, repo, "commit", "-m", "add notes")
+			if err := o.secretHygieneScanBetween(base, "HEAD"); err == nil {
+				t.Fatal("scan accepted sensitive token shape")
+			} else if strings.Contains(err.Error(), payload) {
+				t.Fatal("scan disclosed token value")
+			}
+			for _, prefix := range []string{"x", "_", "-"} {
+				if err := privacyScanText(prefix+payload, "notes.txt"); err != nil {
+					t.Fatal("token matched without a left boundary")
+				}
+			}
+		})
+	}
+}
+
+func TestPrivacyScanTokenBoundaries(t *testing.T) {
+	for i, payload := range []string{
+		"AKIA" + strings.Repeat("A", 16),
+		"ghp_" + strings.Repeat("A", 24),
+		"github_pat_" + strings.Repeat("A", 24),
+		"sk-" + strings.Repeat("A", 24),
+		"sk-" + "proj-" + strings.Repeat("A", 24),
+		"xoxb-" + strings.Repeat("A", 24),
+	} {
+		t.Run(fmt.Sprint(i), func(t *testing.T) {
+			for _, prefix := range []string{"", " ", "\n", "\""} {
+				if err := privacyScanText(prefix+payload, "notes.txt"); err == nil {
+					t.Fatal("scan accepted a bounded token")
+				}
+			}
+			for _, prefix := range []string{"task-", "risk-", "x", "_"} {
+				if err := privacyScanText(prefix+payload, "notes.txt"); err != nil {
+					t.Fatal("scan matched inside a word")
+				}
+			}
+		})
+	}
+}

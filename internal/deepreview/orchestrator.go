@@ -326,12 +326,13 @@ var ownerRepoSlugRe = regexp.MustCompile(`^([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+)$`
 var ownerRepoSegmentRe = regexp.MustCompile(`^[A-Za-z0-9_.-]+$`)
 var githubSCPLikeRemoteRe = regexp.MustCompile(`^git@github\.com:([A-Za-z0-9_.-]+)/([A-Za-z0-9_.-]+?)(?:\.git)?$`)
 var secretRiskyPatterns = []*regexp.Regexp{
-	regexp.MustCompile(`AKIA[0-9A-Z]{16}`),
-	regexp.MustCompile(`(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}`),
-	regexp.MustCompile(`github_pat_[A-Za-z0-9_]{20,}`),
-	regexp.MustCompile(`sk(?:-[A-Za-z0-9]+)?-[A-Za-z0-9]{20,}`),
+	regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])AKIA[0-9A-Z]{16}`),
+	regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9]{20,}`),
+	regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])github_pat_[A-Za-z0-9_]{20,}`),
+	regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])sk-(?:(?:ant-(?:oat01|api03|admin01)-|proj-|svcacct-|admin-|None-)[A-Za-z0-9_-]{20,}|[A-Za-z0-9]{20,})`),
+	regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])eyJ[A-Za-z0-9_-]{8,}\.[A-Za-z0-9_-]{3,}\.[A-Za-z0-9_-]{16,}`),
 	regexp.MustCompile(`-----BEGIN [A-Z ]*PRIVATE KEY-----`),
-	regexp.MustCompile(`xox[baprs]-[A-Za-z0-9-]{10,}`),
+	regexp.MustCompile(`(?:^|[^A-Za-z0-9_-])xox[baprs]-[A-Za-z0-9-]{10,}`),
 }
 var secretAssignmentRiskyPatterns = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)\b(?:api[_-]?key|token|password|secret)\b[[:space:]]*[:=][[:space:]]*["']?[A-Za-z0-9_./+=-]{12,}`),
