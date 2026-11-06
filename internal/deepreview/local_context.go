@@ -65,7 +65,10 @@ func resolveCallerCWDRepoState(gitBin string, cwdState *LocalGitHubRepoState) (*
 }
 
 func detectLocalRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
-	completed, err := RunCommand([]string{gitBin, "-C", path, "rev-parse", "--show-toplevel"}, "", "", false, 0)
+	if st, err := os.Stat(path); err != nil || !st.IsDir() {
+		return nil, nil
+	}
+	completed, err := inspectGit(gitBin, path, 0, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return nil, err
 	}
@@ -105,7 +108,7 @@ func detectLocalRepoState(gitBin, path string) (*LocalGitHubRepoState, error) {
 		state.Name = name
 	}
 
-	branchResult, err := RunCommand([]string{gitBin, "-C", topLevel, "symbolic-ref", "--quiet", "--short", "HEAD"}, "", "", false, 0)
+	branchResult, err := inspectGit(gitBin, topLevel, 0, "symbolic-ref", "--quiet", "--short", "HEAD")
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +200,7 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 		return NewDeepReviewError("unable to validate local branch readiness: no local repository context")
 	}
 
-	status, err := Git(state.Path, gitBin, true, "status", "--porcelain", "--untracked-files=no")
+	status, err := inspectGitOutput(gitBin, state.Path, "status", "--porcelain", "--untracked-files=no", "--ignore-submodules=dirty")
 	if err != nil {
 		return err
 	}
@@ -210,7 +213,7 @@ func ensureBranchReadyForRemoteReview(gitBin string, state *LocalGitHubRepoState
 		return err
 	}
 
-	localSHA, err := Git(state.Path, gitBin, true, "rev-parse", "--verify", "HEAD")
+	localSHA, err := inspectGitOutput(gitBin, state.Path, "rev-parse", "--verify", "HEAD")
 	if err != nil {
 		return err
 	}
@@ -243,30 +246,21 @@ func remoteRefSHA(gitBin, repoPath, upstreamRef string) (string, error) {
 		return "", NewDeepReviewError("unable to query upstream ref `%s`: unsupported upstream format", upstreamRef)
 	}
 
-	remoteResult, err := RunCommand(
-		[]string{gitBin, "-C", repoPath, "ls-remote", "--exit-code", "--heads", parts[0], "refs/heads/" + parts[1]},
-		"",
-		"",
-		false,
-		branchReadinessRemoteTimeout,
-	)
+	remoteURL, err := inspectGitOutput(gitBin, repoPath, "remote", "get-url", "--", parts[0])
 	if err != nil {
 		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check: %s", upstreamRef, err.Error())
 	}
-	if remoteResult.ReturnCode != 0 {
-		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check", upstreamRef)
+	sha, err := inspectRemoteRef(gitBin, remoteURL, "refs/heads/"+parts[1], branchReadinessRemoteTimeout)
+	if err != nil {
+		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check: %s", upstreamRef, err.Error())
 	}
-	fields := strings.Fields(strings.TrimSpace(remoteResult.Stdout))
-	if len(fields) == 0 || strings.TrimSpace(fields[0]) == "" {
-		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check", upstreamRef)
-	}
-	return strings.TrimSpace(fields[0]), nil
+	return sha, nil
 }
 
 func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {
 	expected := "origin/" + branch
 	currentUpstream := ""
-	upstreamResult, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}"}, "", "", false, 0)
+	upstreamResult, err := inspectGit(gitBin, repoPath, 0, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
 	if err != nil {
 		return "", err
 	}
@@ -277,7 +271,7 @@ func resolveUpstreamRef(gitBin, repoPath, branch string) (string, error) {
 		}
 	}
 
-	fallbackResult, err := RunCommand([]string{gitBin, "-C", repoPath, "rev-parse", "--verify", "--quiet", expected}, "", "", false, 0)
+	fallbackResult, err := inspectGit(gitBin, repoPath, 0, "rev-parse", "--verify", "--quiet", expected)
 	if err != nil {
 		return "", err
 	}
@@ -307,10 +301,10 @@ func branchDivergenceAgainstCommit(gitBin, repoPath, commit string) (behind int,
 	if trimmed == "" {
 		return 0, 0, false
 	}
-	if _, err := Git(repoPath, gitBin, false, "cat-file", "-e", trimmed+"^{commit}"); err != nil {
+	if _, err := inspectGitOutput(gitBin, repoPath, "cat-file", "-e", trimmed+"^{commit}"); err != nil {
 		return 0, 0, false
 	}
-	out, err := Git(repoPath, gitBin, false, "rev-list", "--left-right", "--count", trimmed+"...HEAD")
+	out, err := inspectGitOutput(gitBin, repoPath, "rev-list", "--left-right", "--count", trimmed+"...HEAD")
 	if err != nil {
 		return 0, 0, false
 	}

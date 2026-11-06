@@ -676,7 +676,7 @@ func TestRunReviewCommandKeepsReadinessValidation(t *testing.T) {
 		runGitCommand(t, repo, "commit", "-m", "ahead")
 
 		code, stdout, stderr := captureCommandOutput(t, func() int {
-			return runReviewCommand([]string{"--no-tui"})
+			return runReviewCommand([]string{"--no-tui", "--trust-repo"})
 		})
 		if code != 1 {
 			t.Fatalf("expected review to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
@@ -697,7 +697,7 @@ func TestRunReviewCommandRejectsTrackedChangesForFilesystemOriginRepo(t *testing
 		}
 
 		code, stdout, stderr := captureCommandOutput(t, func() int {
-			return runReviewCommand([]string{repo, "--source-branch", "feature/test", "--no-tui"})
+			return runReviewCommand([]string{repo, "--source-branch", "feature/test", "--no-tui", "--trust-repo"})
 		})
 		if code != 1 {
 			t.Fatalf("expected review to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)
@@ -720,7 +720,7 @@ func TestRunReviewCommandRejectsAheadOfRemoteForFilesystemOriginRepo(t *testing.
 		runGitCommand(t, repo, "commit", "-m", "ahead")
 
 		code, stdout, stderr := captureCommandOutput(t, func() int {
-			return runReviewCommand([]string{repo, "--source-branch", "feature/test", "--no-tui"})
+			return runReviewCommand([]string{repo, "--source-branch", "feature/test", "--no-tui", "--trust-repo"})
 		})
 		if code != 1 {
 			t.Fatalf("expected review to fail, got code=%d stdout=\n%s\nstderr=\n%s", code, stdout, stderr)

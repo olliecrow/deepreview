@@ -644,6 +644,10 @@ func runReviewCommand(args []string) int {
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		return 1
 	}
+	if !parsed.Config.TrustRepo {
+		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", repositoryTrustRequiredMessage)
+		return 1
+	}
 	if err := validateLocalBranchReadyForRemoteReview(parsed.Config.GitBin, parsed.Config.Repo, parsed.Config.SourceBranch); err != nil {
 		if isInterruptError(err) || interruptCount.Load() > 0 {
 			reportCanceledRun(nil, parsed.Config, filepath.Join(parsed.Config.WorkspaceRoot, "runs", parsed.Config.RunID), parsed.Config.GitBin)
@@ -927,7 +931,7 @@ func buildDoctorChecks(o *Orchestrator) []doctorCheck {
 	}
 
 	sourceRef := "refs/heads/" + cfg.SourceBranch
-	lsRemote, lsRemoteErr := RunCommand([]string{cfg.GitBin, "ls-remote", "--exit-code", o.repoIdentity.CloneSource, sourceRef}, "", "", false, 30*time.Second)
+	lsRemote, lsRemoteErr := inspectRemote(cfg.GitBin, o.repoIdentity.CloneSource, sourceRef, 30*time.Second)
 	if lsRemoteErr != nil {
 		checks = append(checks, doctorCheck{
 			Name:   "remote source branch reachable",
