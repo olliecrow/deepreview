@@ -60,6 +60,11 @@ func runCmdCapture(t *testing.T, cwd string, env []string, cmd ...string) (strin
 
 func runCmdExpectFailure(t *testing.T, cwd string, env []string, cmd ...string) string {
 	t.Helper()
+	return runCmdExpectExit(t, 1, cwd, env, cmd...)
+}
+
+func runCmdExpectExit(t *testing.T, wantExit int, cwd string, env []string, cmd ...string) string {
+	t.Helper()
 	c := exec.Command(cmd[0], cmd[1:]...)
 	c.Dir = cwd
 	if env != nil {
@@ -69,10 +74,28 @@ func runCmdExpectFailure(t *testing.T, cwd string, env []string, cmd ...string) 
 	var stderr bytes.Buffer
 	c.Stdout = &stdout
 	c.Stderr = &stderr
-	if err := c.Run(); err == nil {
-		t.Fatalf("expected command failure but succeeded\ncmd=%v\nstdout=\n%s\nstderr=\n%s", cmd, stdout.String(), stderr.String())
+	err := c.Run()
+	code := 0
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) {
+			t.Fatalf("command failed: %v\ncmd=%v\nstdout=\n%s\nstderr=\n%s", err, cmd, stdout.String(), stderr.String())
+		}
+		code = exitErr.ExitCode()
+	}
+	if code != wantExit {
+		t.Fatalf("exit %d, want %d\ncmd=%v\nstdout=\n%s\nstderr=\n%s", code, wantExit, cmd, stdout.String(), stderr.String())
 	}
 	return strings.TrimSpace(stdout.String() + "\n" + stderr.String())
+}
+
+func remoteDeepreviewRefCount(t *testing.T, repo string) int {
+	t.Helper()
+	out := strings.TrimSpace(runCmd(t, repo, nil, "git", "-C", repo, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin/deepreview"))
+	if out == "" {
+		return 0
+	}
+	return len(strings.Split(out, "\n"))
 }
 
 func startCmd(t *testing.T, cwd string, env []string, cmd ...string) (*exec.Cmd, *bytes.Buffer, *bytes.Buffer) {
@@ -532,7 +555,7 @@ func TestEndToEndYOLOModeRejectsIncompletePromptResult(t *testing.T) {
 		"FAKE_CODEX_DELIVERY_INCOMPLETE=1",
 		"FAKE_CODEX_DELIVERY_INCOMPLETE_REASON=yolo should not publish",
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectExit(t, 2, root, env,
 		bin,
 		"review",
 		userClone,
@@ -548,6 +571,15 @@ func TestEndToEndYOLOModeRejectsIncompletePromptResult(t *testing.T) {
 	}
 	if !strings.Contains(output, "delivery status: incomplete (yolo should not publish)") {
 		t.Fatalf("expected incomplete yolo status output, got: %s", output)
+	}
+	if !strings.Contains(output, "outcome: incomplete") {
+		t.Fatalf("expected incomplete outcome, got: %s", output)
+	}
+	if strings.Contains(output, "deepreview completed:") {
+		t.Fatalf("incomplete yolo run reported success: %s", output)
+	}
+	if strings.Contains(output, "delivery commits:") || strings.Contains(output, "latest delivery commits:") {
+		t.Fatalf("incomplete yolo run advertised a commits URL: %s", output)
 	}
 
 	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
@@ -936,7 +968,7 @@ func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testi
 		"FAKE_GH_PR_CREATE_SILENT=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectExit(t, 2, root, env,
 		bin,
 		"review",
 		userClone,
@@ -955,6 +987,13 @@ func TestEndToEndPRModeRecoversIncompleteDraftWhenPRURLMissingAfterPush(t *testi
 	}
 	if !strings.Contains(output, "delivery commits: https://github.com/example-org/example-repo/commits/deepreview/feature/test/") {
 		t.Fatalf("expected delivery commits summary output, got: %s", output)
+	}
+	if !strings.Contains(output, "outcome: incomplete") || strings.Contains(output, "deepreview completed:") {
+		t.Fatalf("expected incomplete outcome rather than success, got: %s", output)
+	}
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	if got := remoteDeepreviewRefCount(t, userClone); got != 1 {
+		t.Fatalf("expected 1 delivery ref after incomplete recovery, got %d", got)
 	}
 	argsBytes, err := os.ReadFile(ghArgsPath)
 	if err != nil {
@@ -1021,7 +1060,7 @@ func TestEndToEndPRModeSupportsIncompletePromptResult(t *testing.T) {
 		"FAKE_CODEX_DELIVERY_INCOMPLETE_REASON=waiting on mergeability signal",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectExit(t, 2, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1037,6 +1076,9 @@ func TestEndToEndPRModeSupportsIncompletePromptResult(t *testing.T) {
 	}
 	if !strings.Contains(output, "delivery status: incomplete (waiting on mergeability signal)") {
 		t.Fatalf("expected incomplete prompt reason in output, got: %s", output)
+	}
+	if !strings.Contains(output, "outcome: incomplete") || strings.Contains(output, "deepreview completed:") {
+		t.Fatalf("expected incomplete outcome rather than success, got: %s", output)
 	}
 
 	argsBytes, err := os.ReadFile(ghArgsPath)
@@ -1117,6 +1159,9 @@ func TestEndToEndPRModeFailsBeforePublishingSecretChange(t *testing.T) {
 	if !strings.Contains(output, "privacy scan failed: secret-like pattern matched in deepreview_test_round.txt") {
 		t.Fatalf("expected delivery privacy failure before publish, got:\n%s", output)
 	}
+	if strings.Contains(output, "delivery commits:") || strings.Contains(output, "latest delivery commits:") {
+		t.Fatalf("publication failure advertised a commits URL: %s", output)
+	}
 	if _, err := os.Stat(ghArgsPath); !os.IsNotExist(err) {
 		t.Fatalf("did not expect gh pr create to run before privacy validation, err=%v", err)
 	}
@@ -1160,7 +1205,7 @@ func TestEndToEndPRModeRejectsDeliveryMutationAndPublishesReviewedDraft(t *testi
 		"FAKE_CODEX_DELIVERY_RESET_TO_MAIN=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectExit(t, 2, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1287,7 +1332,7 @@ func TestEndToEndPRModeRejectsSeparatePreparedDeliveryBranch(t *testing.T) {
 		"FAKE_CODEX_DELIVERY_BRANCH_SECRET=1",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectExit(t, 2, root, env,
 		bin,
 		"review",
 		userClone,
@@ -1608,6 +1653,13 @@ func TestEndToEndPRModeReportsExistingPRAfterMergeabilityFailure(t *testing.T) {
 	}
 	if strings.Contains(output, "run exited before delivery; no push or PR was created.") {
 		t.Fatalf("expected delivery-aware failure summary, got:\n%s", output)
+	}
+	if !strings.Contains(output, "outcome: failed") {
+		t.Fatalf("expected failed outcome, got:\n%s", output)
+	}
+	runCmd(t, td, nil, "git", "-C", userClone, "fetch", "origin")
+	if got := remoteDeepreviewRefCount(t, userClone); got != 1 {
+		t.Fatalf("expected 1 delivery ref after mergeability failure, got %d", got)
 	}
 
 	runsGlob, err := filepath.Glob(filepath.Join(workspace, "runs", "*"))
@@ -2853,7 +2905,7 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 		"FAKE_CODEX_DECISION=continue",
 		"FAKE_GH_CAPTURE_ARGS_PATH="+ghArgsPath,
 	)
-	output := runCmd(t, root, env,
+	output := runCmdExpectExit(t, 2, root, env,
 		bin,
 		"review",
 		userClone,
@@ -2869,6 +2921,12 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 	}
 	if !strings.Contains(output, "delivery status: incomplete") {
 		t.Fatalf("expected incomplete delivery status output, got: %s", output)
+	}
+	if !strings.Contains(output, "requires another review round") {
+		t.Fatalf("expected the original max-rounds blocker, got: %s", output)
+	}
+	if strings.Contains(output, "deepreview completed:") {
+		t.Fatalf("max-rounds incomplete draft reported success: %s", output)
 	}
 
 	argsBytes, err := os.ReadFile(ghArgsPath)
@@ -2919,6 +2977,9 @@ func TestRunPRModePublishesIncompleteDraftPRWhenAnotherRoundIsStillRequiredAtMax
 	}
 	if deliveryRef == "" {
 		t.Fatalf("expected deepreview delivery ref, got: %s", refsOut)
+	}
+	if got := remoteDeepreviewRefCount(t, userClone); got != 1 {
+		t.Fatalf("expected 1 delivery ref at max rounds, got %d", got)
 	}
 	finalSummaryBytes, err := os.ReadFile(filepath.Join(runDir, "final-summary.md"))
 	if err != nil {

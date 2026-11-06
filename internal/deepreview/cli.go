@@ -635,6 +635,17 @@ func runReviewCommand(args []string) int {
 			reportCanceledRun(orchestrator, parsed.Config, orchestrator.RunRoot(), parsed.Config.GitBin)
 			return 130
 		}
+		if isIncompleteRunError(err) {
+			fmt.Fprintf(os.Stderr, "deepreview: run ended incomplete: %s\n", err.Error())
+			if diag := orchestrator.SummaryDiagnostic(); diag != nil {
+				fmt.Fprintf(os.Stderr, "deepreview: run summary diagnostic: %s\n", diag.Error())
+			}
+			if enableTUI {
+				clearTerminalForCompletionSummary(os.Stdout)
+			}
+			printCompletionSummary(orchestrator, parsed.Config)
+			return exitCodeIncomplete
+		}
 		fmt.Fprintf(os.Stderr, "deepreview error: %s\n", err.Error())
 		if shouldPrintFailureArtifactSummary(err) {
 			printFailureArtifactSummary(os.Stderr, orchestrator, parsed.Config)
@@ -647,6 +658,9 @@ func runReviewCommand(args []string) int {
 	}
 	if enableTUI {
 		clearTerminalForCompletionSummary(os.Stdout)
+	}
+	if diag := orchestrator.SummaryDiagnostic(); diag != nil {
+		fmt.Fprintf(os.Stderr, "deepreview: run summary diagnostic: %s\n", diag.Error())
 	}
 	printCompletionSummary(orchestrator, parsed.Config)
 	return 0
@@ -1180,6 +1194,7 @@ func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, conf
 	reviewSnapshot := readCompletionReviewSnapshot(runRoot)
 
 	_, _ = fmt.Fprintln(out, "deepreview failure summary:")
+	_, _ = fmt.Fprintf(out, "outcome: %s\n", outcomeFailed)
 	if strings.TrimSpace(config.RunID) != "" {
 		_, _ = fmt.Fprintf(out, "run: `%s`\n", config.RunID)
 	}
@@ -1202,15 +1217,24 @@ func printFailureArtifactSummary(out io.Writer, orchestrator *Orchestrator, conf
 	if orchestrator != nil {
 		delivery = orchestrator.LastDelivery()
 	}
+	state := publicationNotAttempted
+	if delivery != nil {
+		state = delivery.publicationState()
+	}
 	switch {
-	case delivery == nil || delivery.Skipped:
+	case delivery == nil || delivery.Skipped || state == publicationNotAttempted:
 		_, _ = fmt.Fprintln(out, "run exited before delivery; no push or PR was created.")
+	case state == publicationPushed:
+		_, _ = fmt.Fprintln(out, "delivery branch was pushed; pull request was not created.")
+		if delivery.showCommitsURL() {
+			_, _ = fmt.Fprintf(out, "latest delivery commits: %s\n", delivery.CommitsURL)
+		}
 	default:
 		_, _ = fmt.Fprintln(out, "run failed after delivery artifacts were created.")
-		if strings.TrimSpace(delivery.PRURL) != "" {
+		if delivery.showPRURL() {
 			_, _ = fmt.Fprintf(out, "latest PR: %s\n", delivery.PRURL)
 		}
-		if strings.TrimSpace(delivery.CommitsURL) != "" {
+		if delivery.showCommitsURL() {
 			_, _ = fmt.Fprintf(out, "latest delivery commits: %s\n", delivery.CommitsURL)
 		}
 	}
@@ -1247,7 +1271,17 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 		_, _ = fmt.Fprintf(os.Stdout, "run health: %s\n", runHealthPath)
 	}
 
-	_, _ = fmt.Fprintf(os.Stdout, "deepreview completed: run `%s`\n", config.RunID)
+	label := "completed"
+	outcomeName := outcomeComplete
+	if delivery != nil && delivery.Skipped {
+		outcomeName = outcomeNoChange
+	}
+	if delivery != nil && delivery.Incomplete {
+		label = "incomplete"
+		outcomeName = outcomeIncomplete
+	}
+	_, _ = fmt.Fprintf(os.Stdout, "deepreview %s: run `%s`\n", label, config.RunID)
+	_, _ = fmt.Fprintf(os.Stdout, "outcome: %s\n", outcomeName)
 	if repoSlug != "" {
 		_, _ = fmt.Fprintf(os.Stdout, "repository reviewed: `%s`\n", repoSlug)
 	}
@@ -1284,7 +1318,7 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 	}
 
 	if delivery.Incomplete {
-		if strings.TrimSpace(delivery.PRURL) != "" {
+		if delivery.showPRURL() {
 			_, _ = fmt.Fprintf(os.Stdout, "Draft PR created: %s\n", delivery.PRURL)
 		}
 		if strings.TrimSpace(delivery.IncompleteReason) != "" {
@@ -1292,7 +1326,7 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 		} else {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery status: incomplete\n")
 		}
-		if strings.TrimSpace(delivery.CommitsURL) != "" {
+		if delivery.showCommitsURL() {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery commits: %s\n", delivery.CommitsURL)
 		}
 		printArtifactPaths()
@@ -1301,14 +1335,14 @@ func printCompletionSummary(orchestrator *Orchestrator, config ReviewConfig) {
 
 	switch delivery.Mode {
 	case ModePR:
-		if strings.TrimSpace(delivery.PRURL) != "" {
+		if delivery.showPRURL() {
 			_, _ = fmt.Fprintf(os.Stdout, "PR created: %s\n", delivery.PRURL)
 		}
-		if strings.TrimSpace(delivery.CommitsURL) != "" {
+		if delivery.showCommitsURL() {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery commits: %s\n", delivery.CommitsURL)
 		}
 	case ModeYolo:
-		if strings.TrimSpace(delivery.CommitsURL) != "" {
+		if delivery.showCommitsURL() {
 			_, _ = fmt.Fprintf(os.Stdout, "changes pushed: %s\n", delivery.CommitsURL)
 		} else {
 			_, _ = fmt.Fprintf(os.Stdout, "delivery completed in YOLO mode.\n")

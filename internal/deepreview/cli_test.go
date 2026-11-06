@@ -975,6 +975,67 @@ func TestPrintFailureArtifactSummaryMentionsExistingDeliveryArtifacts(t *testing
 	}
 }
 
+func TestPrintFailureArtifactSummaryHidesUnpushedCommitsURL(t *testing.T) {
+	var out strings.Builder
+	config := ReviewConfig{
+		WorkspaceRoot: t.TempDir(),
+		RunID:         "20260228T002535Z-39dab37e",
+		Repo:          "owner/repo",
+		SourceBranch:  "main",
+	}
+	orchestrator := &Orchestrator{
+		runRoot: filepath.Join(config.WorkspaceRoot, "runs", config.RunID),
+		lastDelivery: &DeliveryResult{
+			Mode:        ModeYolo,
+			CommitsURL:  "https://example.com/owner/repo/commits/main",
+			Publication: publicationNotAttempted,
+		},
+	}
+
+	printFailureArtifactSummary(&out, orchestrator, config)
+	text := out.String()
+	if strings.Contains(text, "https://example.com/owner/repo/commits/main") {
+		t.Fatalf("failure summary advertised a commits URL before push:\n%s", text)
+	}
+	if !strings.Contains(text, "run exited before delivery; no push or PR was created.") {
+		t.Fatalf("expected no-publication failure text, got:\n%s", text)
+	}
+	if !strings.Contains(text, "outcome: failed\n") {
+		t.Fatalf("expected failed outcome, got:\n%s", text)
+	}
+}
+
+func TestPrintFailureArtifactSummaryShowsPushWithoutPullRequest(t *testing.T) {
+	var out strings.Builder
+	config := ReviewConfig{
+		WorkspaceRoot: t.TempDir(),
+		RunID:         "20260228T002535Z-39dab37e",
+		Repo:          "owner/repo",
+		SourceBranch:  "main",
+	}
+	orchestrator := &Orchestrator{
+		runRoot: filepath.Join(config.WorkspaceRoot, "runs", config.RunID),
+		lastDelivery: &DeliveryResult{
+			Mode:        ModePR,
+			CommitsURL:  "https://example.com/owner/repo/commits/deepreview/main/run",
+			PRURL:       "https://example.com/owner/repo/pull/123",
+			Publication: publicationPushed,
+		},
+	}
+
+	printFailureArtifactSummary(&out, orchestrator, config)
+	text := out.String()
+	if !strings.Contains(text, "delivery branch was pushed; pull request was not created.") {
+		t.Fatalf("expected pushed-only failure text, got:\n%s", text)
+	}
+	if !strings.Contains(text, "latest delivery commits: https://example.com/owner/repo/commits/deepreview/main/run") {
+		t.Fatalf("expected commits URL after push, got:\n%s", text)
+	}
+	if strings.Contains(text, "latest PR:") {
+		t.Fatalf("failure summary advertised a pull request before creation:\n%s", text)
+	}
+}
+
 func TestPrintCompletionSummaryMentionsRunHealthArtifact(t *testing.T) {
 	runRoot := t.TempDir()
 	roundDir := filepath.Join(runRoot, "round-01")

@@ -33,6 +33,8 @@ type Orchestrator struct {
 	reporter              ProgressReporter
 	pushCount             int
 	lastDelivery          *DeliveryResult
+	outcome               terminalOutcome
+	summaryDiagnostic     error
 	prDelivery            prDeliveryState
 	runLockPath           string
 	commitIdentity        CommitIdentity
@@ -593,24 +595,46 @@ func (o *Orchestrator) Run() (retErr error) {
 		successMessage  string
 	)
 	defer func() {
+		if isIncompleteRunError(retErr) {
+			if summaryErr := o.ensureTerminalFinalSummary(defaultBranch, candidateBranch, roundSummaries); summaryErr != nil {
+				o.noteSummaryDiagnostic(summaryErr)
+			}
+			o.outcome = outcomeIncomplete
+			o.reporter.RunFinished(false, "run ended incomplete: "+progressMessage(retErr))
+			return
+		}
 		if retErr != nil {
 			published, publishErr := o.tryPublishIncompleteDraftPR(defaultBranch, candidateBranch, roundSummaries, retErr)
 			switch {
 			case publishErr != nil:
 				retErr = errors.Join(retErr, publishErr)
+				o.outcome = outcomeFailed
+				o.reporter.RunFinished(false, retErr.Error())
 			case published:
-				successMessage = "run completed with incomplete draft PR"
-				retErr = nil
+				retErr = newIncompleteRunError(retErr)
+				if summaryErr := o.ensureTerminalFinalSummary(defaultBranch, candidateBranch, roundSummaries); summaryErr != nil {
+					o.noteSummaryDiagnostic(summaryErr)
+				}
+				o.outcome = outcomeIncomplete
+				o.reporter.RunFinished(false, "run ended incomplete: "+progressMessage(retErr))
+			default:
+				o.outcome = outcomeFailed
+				o.reporter.RunFinished(false, retErr.Error())
 			}
-		}
-		if retErr == nil {
-			if err := o.ensureTerminalFinalSummary(defaultBranch, candidateBranch, roundSummaries); err != nil {
-				retErr = err
-			}
-		}
-		if retErr != nil {
-			o.reporter.RunFinished(false, retErr.Error())
 			return
+		}
+		if summaryErr := o.ensureTerminalFinalSummary(defaultBranch, candidateBranch, roundSummaries); summaryErr != nil {
+			if kept := o.noteObservationalSummaryError(summaryErr); kept != nil {
+				retErr = kept
+				o.outcome = outcomeFailed
+				o.reporter.RunFinished(false, retErr.Error())
+				return
+			}
+		}
+		if o.lastDelivery != nil && o.lastDelivery.Skipped {
+			o.outcome = outcomeNoChange
+		} else {
+			o.outcome = outcomeComplete
 		}
 		if successMessage != "" {
 			o.reporter.RunFinished(true, successMessage)
@@ -795,15 +819,25 @@ func (o *Orchestrator) Run() (retErr error) {
 	}
 	delivery, err := o.runDeliveryStage(defaultBranch, candidateBranch, roundSummaries, changedFiles)
 	if err != nil {
+		if isIncompleteRunError(err) && strings.TrimSpace(delivery.Mode) != "" {
+			o.lastDelivery = &delivery
+		}
+		if isIncompleteRunError(err) {
+			o.reporter.StageFinished(deliveryStage, nil, false, "delivery ended incomplete")
+		} else {
+			o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
+		}
+		return err
+	}
+	if err := o.acceptDeliverySummary(delivery, roundSummaries); err != nil {
 		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
 		return err
 	}
-	o.lastDelivery = &delivery
-	if err := o.writeFinalSummary(delivery, roundSummaries); err != nil {
-		o.reporter.StageFinished(deliveryStage, nil, false, progressMessage(err))
-		return err
+	stageMessage := fmt.Sprintf("delivery completed in `%s` mode", delivery.Mode)
+	if o.summaryDiagnostic != nil {
+		stageMessage = "delivery published; run summary diagnostic recorded"
 	}
-	o.reporter.StageFinished(deliveryStage, nil, true, fmt.Sprintf("delivery completed in `%s` mode", delivery.Mode))
+	o.reporter.StageFinished(deliveryStage, nil, true, stageMessage)
 	successMessage = "run completed successfully"
 	return nil
 }
@@ -3243,21 +3277,37 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 		if err != nil {
 			return DeliveryResult{}, err
 		}
-		if !result.Incomplete {
-			if err := o.validateMergeReadyPR(delivery.PRURL); err != nil {
-				return DeliveryResult{}, err
+		if result.Incomplete {
+			reason := strings.TrimSpace(delivery.IncompleteReason)
+			if reason == "" {
+				reason = strings.TrimSpace(result.IncompleteReason)
 			}
+			if reason == "" {
+				reason = "delivery preparation is incomplete"
+			}
+			delivery.Incomplete = true
+			delivery.IncompleteReason = reason
+			o.lastDelivery = &delivery
+			return delivery, newIncompleteRunError(NewDeepReviewError("%s", reason))
+		}
+		if err := o.validateMergeReadyPR(delivery.PRURL); err != nil {
+			return delivery, err
 		}
 		return delivery, nil
 	}
 	if result.Incomplete {
+		reason := strings.TrimSpace(result.IncompleteReason)
+		if reason == "" {
+			reason = "delivery preparation is incomplete"
+		}
 		delivery := DeliveryResult{
 			Mode:             result.Mode,
 			Incomplete:       true,
-			IncompleteReason: result.IncompleteReason,
+			IncompleteReason: reason,
+			Publication:      publicationNotAttempted,
 		}
 		o.lastDelivery = &delivery
-		return delivery, nil
+		return delivery, newIncompleteRunError(NewDeepReviewError("%s", reason))
 	}
 
 	reviewedHead, err := o.reviewedCandidateHeadForPublish(candidateBranch)
@@ -3268,12 +3318,7 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	if err != nil {
 		return DeliveryResult{}, err
 	}
-	partialDelivery := DeliveryResult{
-		Mode:          result.Mode,
-		PushedRefspec: pushRefspec,
-		CommitsURL:    fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(commitsBranch)),
-	}
-	o.lastDelivery = &partialDelivery
+	commitsURL := fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(commitsBranch))
 	if _, err := o.pushReviewedCommit(candidateBranch, commitsBranch); err != nil {
 		return DeliveryResult{}, err
 	}
@@ -3281,7 +3326,8 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 	delivery := DeliveryResult{
 		Mode:          result.Mode,
 		PushedRefspec: pushRefspec,
-		CommitsURL:    partialDelivery.CommitsURL,
+		CommitsURL:    commitsURL,
+		Publication:   publicationPushed,
 	}
 	o.lastDelivery = &delivery
 	return delivery, nil
@@ -3307,6 +3353,7 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 		CommitsURL:       fmt.Sprintf("https://github.com/%s/commits/%s", o.repoIdentity.Slug(), escapeBranchForURL(deliveryBranch)),
 		Incomplete:       opts.incomplete,
 		IncompleteReason: strings.TrimSpace(opts.incompleteReason),
+		Publication:      publicationPushed,
 	}
 	o.lastDelivery = &partialDelivery
 
@@ -3378,6 +3425,7 @@ func (o *Orchestrator) deliverPR(defaultBranch, candidateBranch string, summarie
 		CommitsURL:       partialDelivery.CommitsURL,
 		Incomplete:       opts.incomplete,
 		IncompleteReason: strings.TrimSpace(opts.incompleteReason),
+		Publication:      publicationPRCreated,
 	}
 	o.lastDelivery = &delivery
 	return delivery, nil
@@ -3483,8 +3531,7 @@ func (o *Orchestrator) tryPublishIncompleteDraftPR(defaultBranch, candidateBranc
 	}
 	o.lastDelivery = &delivery
 	if err := o.writeFinalSummary(delivery, summaries); err != nil {
-		o.reporter.StageFinished("delivery", nil, false, "incomplete draft PR final summary failed: "+progressMessage(err))
-		return false, err
+		o.noteSummaryDiagnostic(err)
 	}
 	o.reporter.StageFinished("delivery", nil, true, "incomplete draft PR created to preserve work")
 	return true, nil
@@ -3874,16 +3921,16 @@ func (o *Orchestrator) writeFinalSummary(delivery DeliveryResult, summaries []st
 		rel := filepath.ToSlash(filepath.Join(filepath.Base(filepath.Dir(path)), "round-status.json"))
 		lines = append(lines, fmt.Sprintf("- `%s`: decision=`%s`, confidence=`%s`, reason=%s", rel, status.Decision, confidence, sanitizePublicText(reason)))
 	}
-	health, err := collectRunHealth(o.runRoot, o.config.RunID, delivery.Mode)
-	if err != nil {
-		return err
+	health, healthErr := collectRunHealth(o.runRoot, o.config.RunID, delivery.Mode)
+	if healthErr != nil {
+		lines = append(lines, "- health diagnostic: `run health collection was incomplete`")
 	}
 	lines = append(lines,
 		"",
 		"## run health",
 		fmt.Sprintf("- artifact: `%s`", runHealthMDName),
 		fmt.Sprintf("- stderr logs: `%d` total, `%d` non-empty", health.Artifacts.StderrLogs, health.Stderr.NonEmptyFiles),
-		fmt.Sprintf("- stderr signal counts: warnings=`%d`, errors=`%d`", health.Stderr.WarningLines, health.Stderr.ErrorLines),
+		fmt.Sprintf("- stderr signal counts: warnings=`%d`, errors=`%d`, long_lines=`%d`", health.Stderr.WarningLines, health.Stderr.ErrorLines, health.Stderr.LongLines),
 		fmt.Sprintf(
 			"- canonical artifacts: reviews=`%d`, round-summaries=`%d`, round-records=`%d`",
 			health.Artifacts.ReviewReports,
@@ -3902,11 +3949,16 @@ func (o *Orchestrator) writeFinalSummary(delivery DeliveryResult, summaries []st
 	if err := assertPublicTextSafe(finalText, "final summary"); err != nil {
 		return err
 	}
-	if err := writePrivateFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText)); err != nil {
+	if err := writeFinalSummaryFile(filepath.Join(o.runRoot, "final-summary.md"), []byte(finalText)); err != nil {
 		return err
+	}
+	if healthErr != nil {
+		return nil
 	}
 	return writeRunHealthArtifacts(o.runRoot, health)
 }
+
+var writeFinalSummaryFile = writePrivateFile
 
 func (o *Orchestrator) discoverCompletedRoundSummaries() ([]string, error) {
 	recordPaths, err := filepath.Glob(filepath.Join(o.runRoot, "round-*", "round.json"))

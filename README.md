@@ -24,7 +24,7 @@ Give you a reliable review loop that finds issues, applies fixes safely, and del
 7. If execute says `continue`, or if execute changed the repository, deepreview runs another review round.
 8. If execute says `stop` and made no repository changes, the review loop ends without a redundant confirmation round.
 9. In `pr` mode (default), it runs one fresh Codex delivery stage to confirm merge-ready local state without mutating tracked repository content or history. deepreview then validates every outgoing commit and either opens one pull request back into your source branch or fails before publication.
-10. If completed execute rounds made validated repository changes but the run did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`.
+10. If completed execute rounds made validated repository changes but the run did not finish cleanly, that PR is still opened as a draft marked `[INCOMPLETE]`. That result exits 2. It is not a successful run.
 11. The final PR title/body are deepreview-generated, human-readable summaries with clear change motivation, round outcomes, and verification highlights, while excluding raw worker/artifact dumps for privacy and size safety.
 12. In yolo mode, it pushes directly to your source branch.
 13. At completion, TUI mode exits automatically, clears terminal output, and prints a plain-text completion summary with final status and artifact paths.
@@ -71,6 +71,13 @@ Optional launcher:
 - Candidate history is forward-only. deepreview does not rebase, reset, squash, amend, rebuild, or force-push it; an unsafe outgoing commit blocks delivery.
 - Local terminal output is intentionally unredacted so operators can see literal paths and command errors while running deepreview.
 - You can cancel at any time with `Ctrl+C`; deepreview prints an interrupt failure summary, cleans up locks/worktrees, and then exits.
+
+## Exit status
+
+- `0` means the run completed, or it found no deliverable repository changes.
+- `2` means the run ended incomplete. A draft pull request may already exist. Read the blocker before you merge or rerun. Exit 2 is not success.
+- `1` means the run failed.
+- `130` means you canceled the run.
 
 ## Known limitations
 

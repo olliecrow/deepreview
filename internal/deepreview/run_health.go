@@ -1,9 +1,10 @@
 package deepreview
 
 import (
-	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -13,8 +14,10 @@ import (
 )
 
 const (
-	runHealthJSONName = "run-health.json"
-	runHealthMDName   = "run-health.md"
+	runHealthJSONName    = "run-health.json"
+	runHealthMDName      = "run-health.md"
+	stderrReadChunkBytes = 32 * 1024
+	stderrClassifyLimit  = 64 * 1024
 )
 
 type runHealthReport struct {
@@ -26,6 +29,7 @@ type runHealthReport struct {
 	FinalStatus     *RoundStatus            `json:"final_status,omitempty"`
 	Artifacts       runHealthArtifactCounts `json:"artifacts"`
 	Stderr          runHealthStderrSummary  `json:"stderr"`
+	Diagnostics     []string                `json:"diagnostics,omitempty"`
 }
 
 type runHealthArtifactCounts struct {
@@ -47,6 +51,7 @@ type runHealthStderrSummary struct {
 	TotalLines     int                   `json:"total_lines"`
 	WarningLines   int                   `json:"warning_lines"`
 	ErrorLines     int                   `json:"error_lines"`
+	LongLines      int                   `json:"long_lines"`
 	NonEmptyLogSet []runHealthStderrFile `json:"non_empty_logs,omitempty"`
 }
 
@@ -56,6 +61,8 @@ type runHealthStderrFile struct {
 	Lines        int    `json:"lines"`
 	WarningLines int    `json:"warning_lines"`
 	ErrorLines   int    `json:"error_lines"`
+	LongLines    int    `json:"long_lines,omitempty"`
+	Unreadable   bool   `json:"unreadable,omitempty"`
 }
 
 func collectRunHealth(runRoot, runID, mode string) (runHealthReport, error) {
@@ -79,7 +86,11 @@ func collectRunHealth(runRoot, runID, mode string) (runHealthReport, error) {
 	var stderrFiles []runHealthStderrFile
 	err := filepath.WalkDir(runRoot, func(path string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
-			return walkErr
+			report.Diagnostics = append(report.Diagnostics, "a run-health entry could not be read")
+			if d != nil && d.IsDir() {
+				return fs.SkipDir
+			}
+			return nil
 		}
 		if d.IsDir() {
 			return nil
@@ -100,16 +111,17 @@ func collectRunHealth(runRoot, runID, mode string) (runHealthReport, error) {
 			report.Artifacts.StdoutLogs++
 		case strings.HasSuffix(base, ".stderr.log"):
 			report.Artifacts.StderrLogs++
-			fileSummary, err := summarizeStderrLog(rel, path)
-			if err != nil {
-				return err
-			}
+			fileSummary := summarizeStderrLog(rel, path)
 			report.Stderr.TotalFiles++
+			if fileSummary.Unreadable {
+				report.Diagnostics = append(report.Diagnostics, "a stderr log could not be read")
+			}
 			report.Stderr.TotalBytes += fileSummary.Bytes
 			report.Stderr.TotalLines += fileSummary.Lines
 			report.Stderr.WarningLines += fileSummary.WarningLines
 			report.Stderr.ErrorLines += fileSummary.ErrorLines
-			if fileSummary.Bytes > 0 {
+			report.Stderr.LongLines += fileSummary.LongLines
+			if fileSummary.Bytes > 0 && !fileSummary.Unreadable {
 				report.Stderr.NonEmptyFiles++
 				stderrFiles = append(stderrFiles, fileSummary)
 			}
@@ -149,41 +161,85 @@ func relativeRunPath(runRoot, path string) string {
 	return filepath.ToSlash(rel)
 }
 
-func summarizeStderrLog(relPath, path string) (runHealthStderrFile, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return runHealthStderrFile{}, err
+func summarizeStderrLog(relPath, path string) runHealthStderrFile {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		summary := runHealthStderrFile{Path: relPath, Unreadable: true}
+		if err == nil {
+			summary.Bytes = info.Size()
+		}
+		return summary
 	}
 	summary := runHealthStderrFile{
 		Path:  relPath,
 		Bytes: info.Size(),
 	}
 	if info.Size() == 0 {
-		return summary, nil
+		return summary
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return runHealthStderrFile{}, err
+		summary.Unreadable = true
+		return summary
 	}
 	defer f.Close()
 
-	scanner := bufio.NewScanner(f)
-	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
-	for scanner.Scan() {
-		line := scanner.Text()
+	buf := make([]byte, stderrReadChunkBytes)
+	line := make([]byte, 0, 256)
+	lineTooLong := false
+	finishLine := func() {
 		summary.Lines++
-		if looksLikeWarningLine(line) {
-			summary.WarningLines++
+		if lineTooLong {
+			summary.LongLines++
+		} else {
+			text := string(line)
+			if looksLikeWarningLine(text) {
+				summary.WarningLines++
+			}
+			if looksLikeErrorLine(text) {
+				summary.ErrorLines++
+			}
 		}
-		if looksLikeErrorLine(line) {
-			summary.ErrorLines++
+		line = line[:0]
+		lineTooLong = false
+	}
+	for {
+		n, readErr := f.Read(buf)
+		chunk := buf[:n]
+		for len(chunk) > 0 {
+			nl := bytes.IndexByte(chunk, '\n')
+			if nl < 0 {
+				if lineTooLong || len(line)+len(chunk) > stderrClassifyLimit {
+					lineTooLong = true
+					line = line[:0]
+				} else {
+					line = append(line, chunk...)
+				}
+				break
+			}
+			piece := chunk[:nl]
+			chunk = chunk[nl+1:]
+			if lineTooLong || len(line)+len(piece) > stderrClassifyLimit {
+				lineTooLong = true
+				line = line[:0]
+			} else {
+				line = append(line, piece...)
+			}
+			finishLine()
+		}
+		if readErr == io.EOF {
+			break
+		}
+		if readErr != nil {
+			summary.Unreadable = true
+			return summary
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return runHealthStderrFile{}, err
+	if lineTooLong || len(line) > 0 {
+		finishLine()
 	}
-	return summary, nil
+	return summary
 }
 
 func looksLikeWarningLine(line string) bool {
@@ -239,6 +295,7 @@ func buildRunHealthMarkdown(report runHealthReport) string {
 		fmt.Sprintf("- total stderr lines: `%d`", report.Stderr.TotalLines),
 		fmt.Sprintf("- warning lines: `%d`", report.Stderr.WarningLines),
 		fmt.Sprintf("- error lines: `%d`", report.Stderr.ErrorLines),
+		fmt.Sprintf("- long lines: `%d`", report.Stderr.LongLines),
 		"",
 		"## non-empty stderr logs",
 	)
@@ -248,14 +305,21 @@ func buildRunHealthMarkdown(report runHealthReport) string {
 		for _, file := range report.Stderr.NonEmptyLogSet {
 			lines = append(lines,
 				fmt.Sprintf(
-					"- `%s`: bytes=`%d`, lines=`%d`, warnings=`%d`, errors=`%d`",
+					"- `%s`: bytes=`%d`, lines=`%d`, warnings=`%d`, errors=`%d`, long_lines=`%d`",
 					file.Path,
 					file.Bytes,
 					file.Lines,
 					file.WarningLines,
 					file.ErrorLines,
+					file.LongLines,
 				),
 			)
+		}
+	}
+	if len(report.Diagnostics) > 0 {
+		lines = append(lines, "", "## diagnostics")
+		for _, item := range report.Diagnostics {
+			lines = append(lines, "- "+item)
 		}
 	}
 
@@ -290,6 +354,13 @@ func sanitizeRunHealthReport(report runHealthReport) runHealthReport {
 			logs[i] = file
 		}
 		report.Stderr.NonEmptyLogSet = logs
+	}
+	if len(report.Diagnostics) > 0 {
+		diags := make([]string, len(report.Diagnostics))
+		for i, item := range report.Diagnostics {
+			diags[i] = sanitizePublicText(item)
+		}
+		report.Diagnostics = diags
 	}
 	return report
 }

@@ -130,6 +130,7 @@ type DeliveryResult struct {
 	SkipReason       string
 	Incomplete       bool
 	IncompleteReason string
+	Publication      string
 }
 
 type CommitIdentity struct {

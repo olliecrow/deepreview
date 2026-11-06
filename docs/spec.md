@@ -72,12 +72,17 @@ This document defines the canonical runtime and product contract for `deepreview
 - if an execute round ends with status `continue`, deepreview must run another review round.
 - if execute changed the repository, deepreview must run another review round so those changes receive independent review, even when status is `stop`.
 - if an execute round ends with status `stop` and made no repository changes, deepreview stops without a redundant confirmation round.
-- if another round is still required after the configured `--max-rounds` limit, the run fails and should be rerun with a higher `--max-rounds`.
+- if another round is still required after the configured `--max-rounds` limit, `pr` mode preserves a publishable candidate as an incomplete draft and exits 2. Otherwise the run fails and should be rerun with a higher `--max-rounds`.
 - local commits are encouraged throughout rounds; pushes remain forbidden until final delivery.
 - deepreview must not push during intermediate rounds.
 - candidate history is forward-only: deepreview must never rebase, reset, squash, amend, rebuild, filter, or force-push candidate history.
 - final delivery pushes are allowed only after round execution completes and no blocking verification failures are reported.
-- PR mode has exactly four terminal outcomes: success with complete PR, success with incomplete draft PR, success with no deliverable repository changes (no push/PR), or failure.
+- Terminal outcomes are `complete`, `no-change`, `incomplete`, `failed`, and `canceled`.
+- Exit status is 0 for `complete` and `no-change`, 2 for `incomplete`, 1 for `failed`, and 130 for `canceled`. Exit 2 is not success.
+- An incomplete result can still preserve a draft pull request. The pull request URL and the original blocker stay visible.
+- Publication state is `not-attempted`, `pushed`, or `pr-created`. A commits URL is shown only after a successful push. A pull request URL is shown only after the pull request is created.
+- A recorded push or pull request stays recorded when a later summary or run-health write fails. Those writes are diagnostic and do not hide the remote mutation.
+- Run-health counts stderr in bounded chunks. A long line or a missing log is diagnostic. It does not fail a published run.
 - default delivery mode is `pr` and must not push source branch directly.
 - in delivery, Codex owns final local merge-readiness assessment inside the worktree, while deepreview owns final pre-publication validation, remote push / PR creation, and bounded post-create mergeability validation.
 - in `pr` mode, run one fresh Codex delivery prompt in a candidate-branch worktree. That prompt must:
@@ -206,7 +211,7 @@ Cleanup policy:
 - if execute verification fails, fail the run and do not deliver.
 - if `pr` mode delivery fails after final round succeeds, fail the run and do not perform fallback pushes.
 - in `yolo` mode, do not push when verification fails.
-- if another round is still required after `--max-rounds`, `pr` mode should publish an incomplete draft PR only when deliverable repository changes exist and final publishability validation passes; otherwise it fails without push/PR. `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
+- if another round is still required after `--max-rounds`, `pr` mode should publish an incomplete draft PR only when deliverable repository changes exist and final publishability validation passes; that preserved draft exits 2 and keeps the original blocker. Otherwise it fails without push/PR. `yolo` mode still fails with guidance to rerun deepreview using a higher `--max-rounds`.
 - verification strategy is codex-led: Codex should attempt repo tests, pre-commit checks, and locally runnable CI-like checks when available, then report what ran and outcomes.
 
 ## PR body contract (default PR mode)
