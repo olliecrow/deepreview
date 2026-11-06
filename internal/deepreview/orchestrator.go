@@ -419,8 +419,11 @@ func allSecretRiskyPatterns() []*regexp.Regexp {
 	return patterns
 }
 
+// readGitRemoteURL returns the one effective origin URL, after insteadOf and
+// pushInsteadOf rewrites. Git sends a push to every configured push URL, so
+// more than one URL fails.
 func readGitRemoteURL(repoPath, gitBin string, push bool) (string, error) {
-	args := []string{gitBin, "-C", repoPath, "remote", "get-url"}
+	args := []string{gitBin, "-C", repoPath, "remote", "get-url", "--all"}
 	if push {
 		args = append(args, "--push")
 	}
@@ -429,7 +432,11 @@ func readGitRemoteURL(repoPath, gitBin string, push bool) (string, error) {
 	if err != nil {
 		return "", NewDeepReviewError("publication remote URL is unavailable")
 	}
-	return strings.TrimSpace(completed.Stdout), nil
+	urls := strings.Fields(completed.Stdout)
+	if len(urls) != 1 {
+		return "", NewDeepReviewError("publication remote must have exactly one URL; found %d", len(urls))
+	}
+	return urls[0], nil
 }
 
 func validatePublicationLocator(raw string) error {
@@ -543,12 +550,14 @@ func (o *Orchestrator) confirmPreparedPublication() error {
 	if strings.TrimSpace(o.publicationEndpoint) == "" || strings.TrimSpace(o.preparedSourceSHA) == "" || strings.TrimSpace(o.preparedDefaultSHA) == "" || strings.TrimSpace(o.preparedDefaultBranch) == "" {
 		return NewDeepReviewError("publication endpoint was not recorded")
 	}
-	pushURL, err := readGitRemoteURL(o.managedRepoPath, o.config.GitBin, true)
-	if err != nil {
-		return err
-	}
-	if err := publicationEndpointsMatch(o.publicationEndpoint, pushURL); err != nil {
-		return err
+	for _, push := range []bool{false, true} {
+		effective, err := readGitRemoteURL(o.managedRepoPath, o.config.GitBin, push)
+		if err != nil {
+			return err
+		}
+		if err := publicationEndpointsMatch(o.publicationEndpoint, effective); err != nil {
+			return err
+		}
 	}
 	sourceSHA, err := remoteBranchSHA(o.managedRepoPath, o.config.GitBin, o.config.SourceBranch)
 	if err != nil {

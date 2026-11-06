@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -1768,5 +1769,81 @@ printf '%s\n' '{"type":"item.completed","item":{"type":"agent_message","text":"o
 	}
 	if !strings.Contains(string(second), "thread-ok") {
 		t.Fatalf("second attempt log = %q", second)
+	}
+}
+
+func TestPublicationEndpointRejectsExtraOrRewrittenDestinations(t *testing.T) {
+	td := t.TempDir()
+	remote := filepath.Join(td, "remote.git")
+	other := filepath.Join(td, "other.git")
+	repo := filepath.Join(td, "repo")
+	runGitTest(t, td, "init", "--bare", remote)
+	runGitTest(t, td, "init", "--bare", other)
+	runGitTest(t, td, "clone", remote, repo)
+	runGitTest(t, td, "-C", repo, "config", "user.email", "test@example.com")
+	runGitTest(t, td, "-C", repo, "config", "user.name", "Test User")
+	runGitTest(t, td, "-C", repo, "checkout", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("seed\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGitTest(t, td, "-C", repo, "add", "README.md")
+	runGitTest(t, td, "-C", repo, "commit", "-m", "seed")
+	runGitTest(t, td, "-C", repo, "push", "-u", "origin", "main")
+	sourceSHA := strings.TrimSpace(runGitTest(t, td, "-C", repo, "rev-parse", "HEAD"))
+	orchestrator := &Orchestrator{
+		config:                ReviewConfig{GitBin: "git", SourceBranch: "main"},
+		managedRepoPath:       repo,
+		publicationEndpoint:   remote,
+		preparedSourceSHA:     sourceSHA,
+		preparedDefaultSHA:    sourceSHA,
+		preparedDefaultBranch: "main",
+	}
+	if err := orchestrator.confirmPreparedPublication(); err != nil {
+		t.Fatalf("prepared endpoint should match: %v", err)
+	}
+
+	cases := []struct {
+		name  string
+		set   [][]string
+		unset [][]string
+	}{
+		{
+			name:  "second pushurl",
+			set:   [][]string{{"config", "--add", "remote.origin.pushurl", remote}, {"config", "--add", "remote.origin.pushurl", other}},
+			unset: [][]string{{"config", "--unset-all", "remote.origin.pushurl"}},
+		},
+		{
+			name:  "second url",
+			set:   [][]string{{"config", "--add", "remote.origin.url", other}},
+			unset: [][]string{{"config", "--unset", "remote.origin.url", "^" + regexp.QuoteMeta(other) + "$"}},
+		},
+		{
+			name:  "pushInsteadOf rewrite",
+			set:   [][]string{{"config", "url." + other + ".pushInsteadOf", remote}},
+			unset: [][]string{{"config", "--unset", "url." + other + ".pushInsteadOf"}},
+		},
+		{
+			name:  "insteadOf rewrite",
+			set:   [][]string{{"config", "url." + other + ".insteadOf", remote}},
+			unset: [][]string{{"config", "--unset", "url." + other + ".insteadOf"}},
+		},
+	}
+	for _, tc := range cases {
+		for _, args := range tc.set {
+			runGitTest(t, td, append([]string{"-C", repo}, args...)...)
+		}
+		err := orchestrator.confirmPreparedPublication()
+		if err == nil {
+			t.Fatalf("%s: publication was confirmed", tc.name)
+		}
+		if strings.Contains(err.Error(), other) {
+			t.Fatalf("%s: error included the destination: %s", tc.name, err.Error())
+		}
+		for _, args := range tc.unset {
+			runGitTest(t, td, append([]string{"-C", repo}, args...)...)
+		}
+		if err := orchestrator.confirmPreparedPublication(); err != nil {
+			t.Fatalf("%s: restored endpoint should match: %v", tc.name, err)
+		}
 	}
 }

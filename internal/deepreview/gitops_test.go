@@ -141,9 +141,15 @@ func TestPushVerifiedRefPushesTheRequestedCommit(t *testing.T) {
 	runGitCommand(t, td, "-C", repo, "add", "later.txt")
 	runGitCommand(t, td, "-C", repo, "commit", "-m", "later")
 
+	runGitCommand(t, td, "-C", repo, "config", "push.followTags", "true")
+	runGitCommand(t, td, "-C", repo, "tag", "-a", "-m", "extra", "extra-tag", reviewed)
+
 	refspec, err := PushVerifiedRef(repo, "git", reviewed, "release/topic")
 	if err != nil {
 		t.Fatalf("PushVerifiedRef failed: %v", err)
+	}
+	if tags := strings.TrimSpace(runGitCommand(t, td, "--git-dir", remote, "tag", "--list")); tags != "" {
+		t.Fatalf("publication pushed extra tags: %q", tags)
 	}
 	if !strings.HasPrefix(refspec, reviewed+":refs/heads/release/topic") {
 		t.Fatalf("unexpected refspec %q", refspec)

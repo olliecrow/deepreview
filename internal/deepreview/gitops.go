@@ -1014,7 +1014,7 @@ func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (
 }
 
 func PushRefspec(repoPath, gitBin, refspec string) error {
-	_, err := RunCommand([]string{gitBin, "-C", repoPath, "push", "origin", refspec}, "", "", true, 0)
+	_, err := RunCommand([]string{gitBin, "-C", repoPath, "push", "--no-follow-tags", "--recurse-submodules=no", "origin", refspec}, "", "", true, 0)
 	return err
 }
 
@@ -1076,6 +1076,6 @@ func remoteBranchSHA(repoPath, gitBin, branch string) (string, error) {
 }
 
 func DryRunPushRefspec(repoPath, gitBin, refspec string) error {
-	_, err := RunCommand([]string{gitBin, "-C", repoPath, "push", "--dry-run", "origin", refspec}, "", "", true, 0)
+	_, err := RunCommand([]string{gitBin, "-C", repoPath, "push", "--dry-run", "--no-follow-tags", "--recurse-submodules=no", "origin", refspec}, "", "", true, 0)
 	return err
 }
