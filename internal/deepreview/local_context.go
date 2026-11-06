@@ -250,6 +250,10 @@ func remoteRefSHA(gitBin, repoPath, upstreamRef string) (string, error) {
 	if err != nil {
 		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check: %s", upstreamRef, err.Error())
 	}
+	// ls-remote runs outside the checkout, so resolve a relative path here.
+	if localPath, ok := localCloneSource(remoteURL, repoPath); ok {
+		remoteURL = localPath
+	}
 	sha, err := inspectRemoteRef(gitBin, remoteURL, "refs/heads/"+parts[1], branchReadinessRemoteTimeout)
 	if err != nil {
 		return "", NewDeepReviewError("unable to query upstream ref `%s` before readiness check: %s", upstreamRef, err.Error())

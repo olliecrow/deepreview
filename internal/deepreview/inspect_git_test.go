@@ -183,3 +183,20 @@ func TestInspectionRemoteRejectsOptionShapedLocator(t *testing.T) {
 		t.Fatal("expected an option-shaped locator to be rejected")
 	}
 }
+
+func TestInspectionReadinessResolvesRelativeOriginPath(t *testing.T) {
+	repo := createSyncedFilesystemRepo(t, "feature/test")
+	remote := strings.TrimSpace(runGitCommand(t, repo, "remote", "get-url", "origin"))
+	rel, err := filepath.Rel(repo, remote)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, repo, "remote", "set-url", "origin", rel)
+	state, err := detectLocalRepoState("git", repo)
+	if err != nil || state == nil {
+		t.Fatalf("detect state: %v %+v", err, state)
+	}
+	if err := ensureBranchReadyForRemoteReview("git", state, "feature/test"); err != nil {
+		t.Fatalf("expected a relative origin path to resolve from the checkout: %v", err)
+	}
+}
