@@ -172,12 +172,16 @@ func TestRunArtifactWritersUsePrivateModes(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(artifactDir, "keep.txt"), []byte("kept\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	snapshotDir, err := snapshotPaths(base, []string{artifactDir}, filepath.Join(root, "snaps"))
+	snapshot, err := snapshotPaths(base, []string{artifactDir})
 	if err != nil {
 		t.Fatal(err)
 	}
-	assertPerm(t, filepath.Join(snapshotDir, "artifacts"), privateDirMode)
-	assertPerm(t, filepath.Join(snapshotDir, "artifacts", "keep.txt"), privateFileMode)
+	restored := t.TempDir()
+	if err := restoreSnapshot(restored, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	assertPerm(t, filepath.Join(restored, "artifacts"), privateDirMode)
+	assertPerm(t, filepath.Join(restored, "artifacts", "keep.txt"), privateFileMode)
 }
 
 func TestWriteRunHealthArtifactsShareSanitizedContract(t *testing.T) {

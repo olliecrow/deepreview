@@ -149,22 +149,154 @@ func TestReadQueueRejectsEscapeEntry(t *testing.T) {
 	}
 }
 
-func TestSnapshotPathsStayUnderRequestedParent(t *testing.T) {
-	base := t.TempDir()
-	parent := filepath.Join(base, "tmp")
-	kept := filepath.Join(base, "keep.txt")
-	if err := os.WriteFile(kept, []byte("kept\n"), 0o644); err != nil {
+func TestSnapshotRoundTripsPreservedTree(t *testing.T) {
+	src := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(src, ".deepreview", "inputs", "nested"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	snapshotDir, err := snapshotPaths(base, []string{kept}, parent)
+	files := map[string]string{
+		".deepreview/inputs/review-01.md":     "one\n",
+		".deepreview/inputs/nested/notes.txt": "two\n",
+		".deepreview/plan.md":                 "plan\n",
+	}
+	for rel, body := range files {
+		if err := os.WriteFile(filepath.Join(src, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	snapshot, err := snapshotPaths(src, []string{
+		filepath.Join(src, ".deepreview", "inputs"),
+		filepath.Join(src, ".deepreview", "plan.md"),
+		filepath.Join(src, ".deepreview", "missing.md"),
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	rel, err := filepath.Rel(parent, snapshotDir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		t.Fatalf("snapshot %s escaped parent %s", snapshotDir, parent)
-	}
-	if _, err := os.Stat(filepath.Join(snapshotDir, "keep.txt")); err != nil {
+	dst := t.TempDir()
+	if err := restoreSnapshot(dst, snapshot); err != nil {
 		t.Fatal(err)
+	}
+	for rel, want := range files {
+		got, err := os.ReadFile(filepath.Join(dst, rel))
+		if err != nil || string(got) != want {
+			t.Fatalf("%s = %q, %v; want %q", rel, got, err, want)
+		}
+	}
+}
+
+func TestSnapshotRejectsSymlinkedParent(t *testing.T) {
+	root := t.TempDir()
+	base := filepath.Join(root, "work")
+	outside := filepath.Join(root, "outside")
+	for _, dir := range []string{base, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(outside, "review.md"), []byte("outside\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, filepath.Join(base, ".deepreview")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshotPaths(base, []string{filepath.Join(base, ".deepreview", "review.md")}); err == nil {
+		t.Fatal("expected a symlinked parent to be rejected")
+	}
+	if err := os.Symlink(filepath.Join(outside, "review.md"), filepath.Join(base, "link.md")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshotPaths(base, []string{filepath.Join(base, "link.md")}); err == nil {
+		t.Fatal("expected a symlinked file to be rejected")
+	}
+}
+
+func TestSnapshotRejectsOversizedAndTooMuchContent(t *testing.T) {
+	base := t.TempDir()
+	inputs := filepath.Join(base, "inputs")
+	if err := os.MkdirAll(inputs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inputs, "big.md"), make([]byte, maxArtifactBytes+1), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := snapshotPaths(base, []string{inputs}); err == nil {
+		t.Fatal("expected a nested file over the artifact limit to be rejected")
+	}
+	if err := os.Remove(filepath.Join(inputs, "big.md")); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"a.md", "b.md", "c.md"} {
+		if err := os.WriteFile(filepath.Join(inputs, name), make([]byte, 40), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	previousBytes, previousEntries := maxSnapshotBytes, maxSnapshotEntries
+	t.Cleanup(func() { maxSnapshotBytes, maxSnapshotEntries = previousBytes, previousEntries })
+	maxSnapshotBytes = 100
+	if _, err := snapshotPaths(base, []string{inputs}); err == nil {
+		t.Fatal("expected the total byte limit to be enforced")
+	}
+	maxSnapshotBytes, maxSnapshotEntries = previousBytes, 3
+	if _, err := snapshotPaths(base, []string{inputs}); err == nil {
+		t.Fatal("expected the entry limit to be enforced")
+	}
+}
+
+func TestSnapshotRejectsFIFOWithoutBlocking(t *testing.T) {
+	base := t.TempDir()
+	inputs := filepath.Join(base, "inputs")
+	if err := os.MkdirAll(inputs, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := syscall.Mkfifo(filepath.Join(inputs, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := snapshotPaths(base, []string{inputs})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expected a FIFO to be rejected")
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("snapshot blocked on a FIFO")
+	}
+}
+
+func TestRestoreSnapshotRejectsSymlinkedDestination(t *testing.T) {
+	root := t.TempDir()
+	dst := filepath.Join(root, "dst")
+	outside := filepath.Join(root, "outside")
+	for _, dir := range []string{dst, outside} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Symlink(outside, filepath.Join(dst, ".deepreview")); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := []snapshotEntry{{rel: filepath.Join(".deepreview", "plan.md"), body: []byte("plan\n")}}
+	if err := restoreSnapshot(dst, snapshot); err == nil {
+		t.Fatal("expected restore through a symlinked parent to fail")
+	}
+	assertMarkerAbsent(t, filepath.Join(outside, "plan.md"))
+}
+
+func TestReadRoundRecordRejectsSymlink(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "elsewhere.json")
+	body := []byte("{\"round\":1,\"summary\":\"round-summary.md\",\"status\":{\"decision\":\"stop\",\"reason\":\"ok\"}}\n")
+	if err := os.WriteFile(target, body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(dir, "round.json")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readRoundRecord(link); err == nil {
+		t.Fatal("expected a symlinked round record to be rejected")
 	}
 }

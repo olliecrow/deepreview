@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -1641,7 +1640,6 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 							candidateHead,
 							workerReviewPath,
 							workerNotesPath,
-							filepath.Join(o.runRoot, "tmp"),
 						)
 					},
 					onRestart: func(nextAttempt, maxAttempts int, inactivityErr *promptInactivityError) {
@@ -1751,8 +1749,8 @@ func (o *Orchestrator) runReviewStage(round int, roundDir, candidateHead, defaul
 	return selectedReviewPaths, nil
 }
 
-func prepareReviewWorkerRetry(repoPath, worktreePath, gitBin, baselineRef, reviewPath, notesPath, snapshotParent string) error {
-	if err := recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef, nil, snapshotParent); err != nil {
+func prepareReviewWorkerRetry(repoPath, worktreePath, gitBin, baselineRef, reviewPath, notesPath string) error {
+	if err := recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef, nil); err != nil {
 		return err
 	}
 	for _, path := range []string{reviewPath, notesPath} {
@@ -1824,7 +1822,7 @@ func (o *Orchestrator) runExecuteStage(
 	localReviewReports := make([]string, 0, len(reviewReports))
 	for idx, src := range reviewReports {
 		dst := filepath.Join(reviewInputsDir, fmt.Sprintf("review-%02d.md", idx+1))
-		content, err := os.ReadFile(src)
+		content, err := readArtifactFile(src)
 		if err != nil {
 			o.reporter.StageFinished("execute stage", roundPtr(round), false, progressMessage(err))
 			return RoundStatus{}, "", err
@@ -1914,7 +1912,6 @@ func (o *Orchestrator) runExecuteStage(
 					o.config.GitBin,
 					candidateHead,
 					preservePaths,
-					filepath.Join(o.runRoot, "tmp"),
 				)
 			},
 		)
@@ -2109,7 +2106,7 @@ func writeRoundRecord(path string, record RoundRecord) error {
 }
 
 func readRoundRecord(path string) (RoundRecord, error) {
-	body, err := os.ReadFile(path)
+	body, err := readArtifactFile(path)
 	if err != nil {
 		return RoundRecord{}, err
 	}
@@ -2253,178 +2250,21 @@ func summarizePrivacyScanIssues(commitScanErr, fileScanErr error) string {
 	return strings.Join(issues, " | ")
 }
 
-func snapshotPaths(basePath string, preservePaths []string, snapshotParent string) (string, error) {
-	if len(preservePaths) == 0 {
-		return "", nil
-	}
-	if strings.TrimSpace(snapshotParent) == "" {
-		return "", NewDeepReviewError("retry snapshot parent is required")
-	}
-	if err := mkdirPrivate(snapshotParent); err != nil {
-		return "", err
-	}
-	snapshotDir, err := os.MkdirTemp(snapshotParent, "retry-")
-	if err != nil {
-		return "", err
-	}
-	for _, preservePath := range preservePaths {
-		trimmed := strings.TrimSpace(preservePath)
-		if trimmed == "" {
-			continue
-		}
-		if err := snapshotOnePath(basePath, snapshotDir, trimmed); err != nil {
-			_ = os.RemoveAll(snapshotDir)
-			return "", err
-		}
-	}
-	return snapshotDir, nil
-}
-
-func snapshotOnePath(basePath, snapshotDir, preservePath string) error {
-	info, err := os.Lstat(preservePath)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return err
-	}
-	relPath, err := filepath.Rel(basePath, preservePath)
-	if err != nil {
-		return err
-	}
-	if relPath == "." || strings.HasPrefix(relPath, ".."+string(os.PathSeparator)) || relPath == ".." {
-		return NewDeepReviewError("preserved path must stay within worktree: %s", preservePath)
-	}
-	dstPath := filepath.Join(snapshotDir, relPath)
-	if info.Mode()&os.ModeSymlink != 0 || (!info.IsDir() && !info.Mode().IsRegular()) {
-		return NewDeepReviewError("preserved path must be a regular file or directory: %s", preservePath)
-	}
-	if !info.IsDir() && info.Size() > maxArtifactBytes {
-		return NewDeepReviewError("preserved path exceeds %d bytes", maxArtifactBytes)
-	}
-	if info.IsDir() {
-		if err := copyDirectory(preservePath, dstPath); err != nil {
-			return err
-		}
-		return chmodPrivateTree(dstPath)
-	}
-	if err := copyFileWithMode(preservePath, dstPath, info.Mode()); err != nil {
-		return err
-	}
-	return os.Chmod(dstPath, privateFileMode)
-}
-
-func restoreSnapshot(basePath, snapshotDir string) error {
-	if strings.TrimSpace(snapshotDir) == "" {
-		return nil
-	}
-	defer func() {
-		_ = os.RemoveAll(snapshotDir)
-	}()
-	return filepath.Walk(snapshotDir, func(current string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if current == snapshotDir {
-			return nil
-		}
-		relPath, err := filepath.Rel(snapshotDir, current)
-		if err != nil {
-			return err
-		}
-		dstPath := filepath.Join(basePath, relPath)
-		if info.IsDir() {
-			return os.MkdirAll(dstPath, info.Mode().Perm())
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			target, err := os.Readlink(current)
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
-				return err
-			}
-			_ = os.Remove(dstPath)
-			return os.Symlink(target, dstPath)
-		}
-		return copyFileWithMode(current, dstPath, info.Mode())
-	})
-}
-
-func copyDirectory(srcPath, dstPath string) error {
-	return filepath.Walk(srcPath, func(current string, info os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		relPath, err := filepath.Rel(srcPath, current)
-		if err != nil {
-			return err
-		}
-		targetPath := dstPath
-		if relPath != "." {
-			targetPath = filepath.Join(dstPath, relPath)
-		}
-		if info.IsDir() {
-			return os.MkdirAll(targetPath, info.Mode().Perm())
-		}
-		if info.Mode()&os.ModeSymlink != 0 {
-			linkTarget, err := os.Readlink(current)
-			if err != nil {
-				return err
-			}
-			if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
-				return err
-			}
-			return os.Symlink(linkTarget, targetPath)
-		}
-		return copyFileWithMode(current, targetPath, info.Mode())
-	})
-}
-
-func copyFileWithMode(srcPath, dstPath string, mode os.FileMode) error {
-	if err := os.MkdirAll(filepath.Dir(dstPath), 0o755); err != nil {
-		return err
-	}
-	src, err := os.Open(srcPath)
-	if err != nil {
-		return err
-	}
-	defer src.Close()
-	dst, err := os.OpenFile(dstPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode.Perm())
-	if err != nil {
-		return err
-	}
-	defer dst.Close()
-	if _, err := io.Copy(dst, src); err != nil {
-		return err
-	}
-	return nil
-}
-
-func recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef string, preservePaths []string, snapshotParent string) error {
-	snapshotDir, err := snapshotPaths(worktreePath, preservePaths, snapshotParent)
+func recreateDetachedPromptWorktree(repoPath, worktreePath, gitBin, baselineRef string, preservePaths []string) error {
+	snapshot, err := snapshotPaths(worktreePath, preservePaths)
 	if err != nil {
 		return err
 	}
 	if err := RemoveWorktree(repoPath, gitBin, worktreePath); err != nil {
-		if snapshotDir != "" {
-			_ = os.RemoveAll(snapshotDir)
-		}
 		return err
 	}
 	if err := AddDetachedWorktree(repoPath, gitBin, worktreePath, baselineRef); err != nil {
-		if snapshotDir != "" {
-			_ = os.RemoveAll(snapshotDir)
-		}
 		return err
 	}
 	if err := EnsureWorktreeOperationalExcludes(worktreePath, gitBin); err != nil {
-		if snapshotDir != "" {
-			_ = os.RemoveAll(snapshotDir)
-		}
 		return err
 	}
-	return restoreSnapshot(worktreePath, snapshotDir)
+	return restoreSnapshot(worktreePath, snapshot)
 }
 
 func executeRetryPreservePathsForPrompt(promptIdx int, reviewInputsDir, roundTriagePath, roundTriageJSONPath, roundPlanPath, roundVerificationPath string) []string {
@@ -2454,7 +2294,7 @@ func executePromptLabel(templateName string) string {
 func buildReviewInputManifest(reportPaths []string) (string, error) {
 	chunks := make([]string, 0, len(reportPaths))
 	for _, path := range reportPaths {
-		b, err := os.ReadFile(path)
+		b, err := readArtifactFile(path)
 		if err != nil {
 			return "", err
 		}
@@ -2942,7 +2782,7 @@ func trustedPublishRangePolicyRef(defaultBranch, baseRef string) string {
 }
 
 func readPromptDeliveryResult(path string, expectedMode string) (promptDeliveryResult, error) {
-	body, err := os.ReadFile(path)
+	body, err := readArtifactFile(path)
 	if err != nil {
 		return promptDeliveryResult{}, err
 	}
@@ -3244,7 +3084,6 @@ func (o *Orchestrator) runDeliveryStage(defaultBranch, candidateBranch string, s
 					o.config.GitBin,
 					candidateHead,
 					nil,
-					filepath.Join(o.runRoot, "tmp"),
 				)
 			},
 		)

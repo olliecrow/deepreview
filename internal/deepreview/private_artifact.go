@@ -2,7 +2,6 @@ package deepreview
 
 import (
 	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"syscall"
@@ -83,37 +82,6 @@ func chmodRegularPrivateFile(path string) error {
 		return errors.New("private artifact path is not a regular file")
 	}
 	return os.Chmod(path, privateFileMode)
-}
-
-func chmodPrivateTree(root string) error {
-	info, err := os.Lstat(root)
-	if err != nil {
-		return err
-	}
-	if info.Mode()&os.ModeSymlink != 0 {
-		return errors.New("private artifact path is a symlink")
-	}
-	if !info.IsDir() {
-		if !info.Mode().IsRegular() {
-			return errors.New("private artifact path is not a regular file")
-		}
-		return os.Chmod(root, privateFileMode)
-	}
-	return filepath.WalkDir(root, func(current string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return errors.New("private artifact path is a symlink")
-		}
-		mode := os.FileMode(privateFileMode)
-		if entry.IsDir() {
-			mode = privateDirMode
-		} else if !entry.Type().IsRegular() {
-			return errors.New("private artifact path is not a regular file")
-		}
-		return os.Chmod(current, mode)
-	})
 }
 
 type discardWriteCloser struct{}
