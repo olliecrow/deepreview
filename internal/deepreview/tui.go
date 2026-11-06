@@ -3,6 +3,7 @@ package deepreview
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -10,7 +11,6 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/charmbracelet/x/ansi"
-	"github.com/mattn/go-runewidth"
 )
 
 type workerResultMsg struct {
@@ -417,38 +417,44 @@ func (m tuiModel) View() string {
 			failedCount++
 		}
 	}
-	completedCount := doneCount + failedCount
-
 	contentWidth := effectiveContentWidth(m.width)
 	panelWidth := alignedPanelWidth(contentWidth)
 	if m.width > 0 && contentWidth < 28 {
-		compactTitle := fit(fmt.Sprintf("deepreview %s %s", spinner, fmtDuration(elapsed)), contentWidth)
-		latest := fit("latest: "+latestStageLine(snapshot), contentWidth)
+		label := runProgressLabel(snapshot)
+		roundLabel := "round " + currentRoundLabel(snapshot)
+		if m.cancelRequested && !m.done && ansi.StringWidth("canceling") <= contentWidth {
+			label = "canceling"
+		} else if ansi.StringWidth(label) > contentWidth {
+			label = roundLabel
+		}
+		compactTitle := fit(label, contentWidth)
+		latest := fit(latestStageLine(snapshot), contentWidth)
 		return finalizeView(strings.Join([]string{compactTitle, latest}, "\n"), m.width, m.height)
 	}
 
 	lines := make([]string, 0, 10)
-	totalStages := len(snapshot.Stages)
-	progressPercent := 0
-	if totalStages > 0 {
-		progressPercent = int((float64(completedCount) / float64(totalStages)) * 100)
-	}
-	progressBarWidth := clamp(panelWidth/6, 10, 20)
-	progressBar := renderProgressBar(completedCount, totalStages, progressBarWidth)
-	progressSummary := fmt.Sprintf("%s %d/%d (%d%%)", progressBar, completedCount, totalStages, progressPercent)
-	topPlain := fmt.Sprintf("deepreview %s  elapsed %s  %s", spinner, fmtDuration(elapsed), progressSummary)
 	headerInnerWidth := panelInnerWidth(headerStyle, panelWidth)
 	rightHintText := "ctrl+c to cancel"
+	if m.cancelRequested && !m.done {
+		rightHintText = "canceling..."
+	}
 	if m.done {
 		rightHintText = "finishing..."
 	}
 	rightHint := subtleStyle.Render(rightHintText)
+	hintWidth := lipgloss.Width(rightHint)
+	budget := headerInnerWidth - hintWidth - 1
+	topPlain := fitHeaderProgress(snapshot, elapsed, spinner, m.cancelRequested && !m.done, budget)
 	headerLine := joinHeaderWithRightHint(topPlain, rightHint, headerInnerWidth)
-	lines = append(lines, headerStyle.Render(headerLine))
+	styledHeader := headerStyle.Render(headerLine)
+	lines = append(lines, styledHeader)
 
 	runChipStyle := chipBaseStyle.Foreground(lipgloss.Color("231")).Background(lipgloss.Color("24"))
 	runState := "RUNNING"
-	if snapshot.Success != nil && *snapshot.Success {
+	if m.cancelRequested && snapshot.Success == nil {
+		runState = "CANCELING"
+		runChipStyle = chipBaseStyle.Foreground(lipgloss.Color("231")).Background(lipgloss.Color("172"))
+	} else if snapshot.Success != nil && *snapshot.Success {
 		runState = "SUCCESS"
 		runChipStyle = chipBaseStyle.Foreground(lipgloss.Color("22")).Background(lipgloss.Color("120"))
 	} else if snapshot.Success != nil && !*snapshot.Success {
@@ -493,14 +499,17 @@ func (m tuiModel) View() string {
 	lines = append(lines, valueStyle.Render(contextBox))
 
 	if m.width < 60 || m.height < 12 {
+		// The context panel is taller than a short terminal. Keep the fitted
+		// header, which leads with the current round, and the active stage.
+		compactView := []string{styledHeader}
 		timelineRows := snapshot.Stages
 		timelineTitle := "stage timeline"
 		if plannedRows, ok := plannedTimelineRows(snapshot); ok {
 			timelineRows = plannedRows
 			timelineTitle = "planned stage timeline"
 		}
-		compactRows := stageRowsLimit(lines, m.width, m.height)
-		rows, hiddenOlder := compactWindow(timelineRows, compactRows)
+		compactRows := stageRowsLimit(compactView, m.width, m.height)
+		rows, hiddenOlder := focusTimelineWindow(timelineRows, compactRows)
 		compactLines := make([]string, 0, len(rows)+2)
 		compactInner := panelInnerWidth(tableBorderStyle, panelWidth)
 		if len(rows) == 0 {
@@ -512,8 +521,8 @@ func (m tuiModel) View() string {
 		if hiddenOlder > 0 {
 			compactLines = append(compactLines, subtleStyle.Render(fit(fmt.Sprintf("history: %d older stage(s) hidden", hiddenOlder), compactInner)))
 		}
-		lines = append(lines, renderPanel(tableBorderStyle, fmt.Sprintf("%s (compact %d/%d)", timelineTitle, len(rows), len(timelineRows)), compactLines, panelWidth))
-		return finalizeView(joinSections(lines), m.width, m.height)
+		compactView = append(compactView, renderPanel(tableBorderStyle, fmt.Sprintf("%s (compact %d/%d)", timelineTitle, len(rows), len(timelineRows)), compactLines, panelWidth))
+		return finalizeView(joinSections(compactView), m.width, m.height)
 	}
 
 	tableInner := panelInnerWidth(tableBorderStyle, panelWidth)
@@ -529,7 +538,7 @@ func (m tuiModel) View() string {
 		timelineRows = plannedRows
 		timelineTitle = "planned stage timeline"
 	}
-	rows, hiddenOlder := compactWindow(timelineRows, availableRows)
+	rows, hiddenOlder := focusTimelineWindow(timelineRows, availableRows)
 	tableLines := []string{
 		tableHeaderStyle.Render(fit(head, tableInner)),
 		subtleStyle.Render(fit(sep, tableInner)),
@@ -545,8 +554,8 @@ func (m tuiModel) View() string {
 		status := fit(statusRaw, statusCol)
 		statusStyle := statusTextStyle(statusRaw)
 		stageStyle := valueStyle
-		isActive := idx == len(rows)-1 && statusRaw == "running"
-		if idx == len(rows)-1 && statusRaw == "running" {
+		isActive := statusRaw == "running"
+		if isActive {
 			stageStyle = highlightStyle
 		}
 		line := subtleStyle.Render(fmt.Sprintf("%s%4s  ", statusMarker(statusRaw, isActive), roundLabel)) +
@@ -798,13 +807,10 @@ func fit(text string, width int) string {
 	if width <= 0 {
 		return ""
 	}
-	if runewidth.StringWidth(text) <= width {
+	if ansi.StringWidth(text) <= width {
 		return text
 	}
-	if width <= 3 {
-		return runewidth.Truncate(text, width, "")
-	}
-	return runewidth.Truncate(text, width, "...")
+	return truncateANSIWithMarker(text, width)
 }
 
 func truncateANSIWithMarker(text string, width int) string {
@@ -854,29 +860,6 @@ func normalizeDisplayText(s string) string {
 	return strings.Join(strings.Fields(s), " ")
 }
 
-func renderProgressBar(done, total, width int) string {
-	if width < 3 {
-		width = 3
-	}
-	if total <= 0 {
-		return "[" + strings.Repeat("-", width) + "]"
-	}
-	if done < 0 {
-		done = 0
-	}
-	if done > total {
-		done = total
-	}
-	filled := int(float64(done) / float64(total) * float64(width))
-	if filled < 0 {
-		filled = 0
-	}
-	if filled > width {
-		filled = width
-	}
-	return "[" + strings.Repeat("=", filled) + strings.Repeat("-", width-filled) + "]"
-}
-
 func latestStageLine(snapshot ProgressSnapshot) string {
 	if len(snapshot.Stages) == 0 {
 		return "none"
@@ -893,7 +876,7 @@ func renderCompactRow(row StageSnapshot, width int) string {
 	name := normalizeDisplayText(row.Name)
 	status := normalizeDisplayText(row.Status)
 	message := normalizeDisplayText(row.Message)
-	base := fmt.Sprintf("%s r%s %s %s %s", statusMarker(status, status == "running"), stageRound(row.RoundNumber), status, fmtDuration(row.Elapsed), name)
+	base := fmt.Sprintf("%s r%s %s %s %s", statusMarker(status, status == "running"), stageRound(row.RoundNumber), name, status, fmtDuration(row.Elapsed))
 	if strings.TrimSpace(message) != "" {
 		base += " | " + message
 	}
@@ -901,20 +884,212 @@ func renderCompactRow(row StageSnapshot, width int) string {
 	return statusTextStyle(status).Render(base)
 }
 
-func compactWindow(rows []StageSnapshot, limit int) ([]StageSnapshot, int) {
+// focusTimelineWindow keeps the active stage on screen. A tail window would
+// hide that stage behind later pending rounds. Delivery is pinned only after
+// it starts, or when it is the next stage.
+func focusTimelineWindow(rows []StageSnapshot, limit int) ([]StageSnapshot, int) {
 	if limit <= 0 || len(rows) == 0 {
 		return nil, len(rows)
 	}
-	start := len(rows) - limit
-	if start < 0 {
-		start = 0
+	if len(rows) <= limit {
+		return rows, 0
 	}
-	end := start + limit
+	focus := focusTimelineIndex(rows)
+	end := focus + 2
 	if end > len(rows) {
 		end = len(rows)
 	}
-	window := rows[start:end]
-	return window, start
+	if end-focus > limit {
+		end = focus + limit
+	}
+	start := end - limit
+	if start < 0 {
+		start = 0
+	}
+	if end-start < limit {
+		end = start + limit
+		if end > len(rows) {
+			end = len(rows)
+			start = end - limit
+			if start < 0 {
+				start = 0
+			}
+		}
+	}
+	if focus < start {
+		start = focus
+		end = start + limit
+		if end > len(rows) {
+			end = len(rows)
+		}
+	}
+	if deliveryIdx, include := deliveryAnchor(rows, focus); include && (deliveryIdx < start || deliveryIdx >= end) {
+		if end-start >= limit && limit >= 2 {
+			if end-1 != focus && end > start {
+				end--
+			} else if start != focus && start+1 < end {
+				start++
+			}
+		}
+		window := make([]StageSnapshot, 0, limit)
+		if start < end {
+			window = append(window, rows[start:end]...)
+		}
+		window = append(window, rows[deliveryIdx])
+		if len(window) > limit {
+			window = window[len(window)-limit:]
+		}
+		return window, start
+	}
+	return rows[start:end], start
+}
+
+func focusTimelineIndex(rows []StageSnapshot) int {
+	lastRunning := -1
+	lastSettled := -1
+	for i, row := range rows {
+		switch row.Status {
+		case "running":
+			lastRunning = i
+		case "done", "failed":
+			lastSettled = i
+		}
+	}
+	if lastRunning >= 0 {
+		return lastRunning
+	}
+	if lastSettled >= 0 {
+		return lastSettled
+	}
+	return 0
+}
+
+func deliveryAnchor(rows []StageSnapshot, focus int) (int, bool) {
+	for i := len(rows) - 1; i >= 0; i-- {
+		if rows[i].Name != "delivery" {
+			continue
+		}
+		if rows[i].Status != "pending" {
+			return i, true
+		}
+		return i, focus >= i-1 && focus <= i
+	}
+	return -1, false
+}
+
+func fitHeaderProgress(snapshot ProgressSnapshot, elapsed time.Duration, spinner string, canceling bool, budget int) string {
+	round := "round " + currentRoundLabel(snapshot)
+	progress := runProgressLabel(snapshot)
+	if canceling {
+		round = "canceling " + round
+		progress = "canceling " + progress
+	}
+	candidates := []string{
+		fmt.Sprintf("deepreview %s  %s  elapsed %s", spinner, progress, fmtDuration(elapsed)),
+		fmt.Sprintf("%s  elapsed %s", progress, fmtDuration(elapsed)),
+		fmt.Sprintf("%s  elapsed %s", round, fmtDuration(elapsed)),
+		round,
+	}
+	if budget < 1 {
+		return fit(round, 1)
+	}
+	for _, candidate := range candidates {
+		if ansi.StringWidth(candidate) <= budget {
+			return candidate
+		}
+	}
+	return fit(round, budget)
+}
+
+func runProgressLabel(snapshot ProgressSnapshot) string {
+	label := "round " + currentRoundLabel(snapshot)
+	if completed, required, ok := reviewerCounts(snapshot); ok {
+		label += fmt.Sprintf("  reviewers %d/%d", completed, required)
+	}
+	return label
+}
+
+func currentRoundLabel(snapshot ProgressSnapshot) string {
+	var round *int
+	for i := len(snapshot.Stages) - 1; i >= 0; i-- {
+		row := snapshot.Stages[i]
+		if row.Status == "running" && row.RoundNumber != nil {
+			round = row.RoundNumber
+			break
+		}
+	}
+	if round == nil {
+		for i := len(snapshot.Stages) - 1; i >= 0; i-- {
+			if snapshot.Stages[i].RoundNumber != nil {
+				round = snapshot.Stages[i].RoundNumber
+				break
+			}
+		}
+	}
+	if round == nil {
+		if snapshot.MaxRounds > 0 {
+			return fmt.Sprintf("-/%d", snapshot.MaxRounds)
+		}
+		return "-"
+	}
+	if snapshot.MaxRounds > 0 {
+		return fmt.Sprintf("%d/%d", *round, snapshot.MaxRounds)
+	}
+	return fmt.Sprintf("%d", *round)
+}
+
+func reviewerCounts(snapshot ProgressSnapshot) (int, int, bool) {
+	fallback := ""
+	for i := len(snapshot.Stages) - 1; i >= 0; i-- {
+		row := snapshot.Stages[i]
+		if row.Name != "independent review stage" {
+			continue
+		}
+		if row.Status == "running" {
+			return firstCountFraction(row.Message)
+		}
+		if fallback == "" {
+			fallback = row.Message
+		}
+	}
+	if fallback == "" {
+		return 0, 0, false
+	}
+	return firstCountFraction(fallback)
+}
+
+func firstCountFraction(text string) (int, int, bool) {
+	for i := 0; i < len(text); i++ {
+		if text[i] < '0' || text[i] > '9' {
+			continue
+		}
+		j := i
+		for j < len(text) && text[j] >= '0' && text[j] <= '9' {
+			j++
+		}
+		if j >= len(text) || text[j] != '/' || j == i {
+			i = j
+			continue
+		}
+		k := j + 1
+		if k >= len(text) || text[k] < '0' || text[k] > '9' {
+			i = j
+			continue
+		}
+		end := k
+		for end < len(text) && text[end] >= '0' && text[end] <= '9' {
+			end++
+		}
+		completed, errCompleted := strconv.Atoi(text[i:j])
+		required, errRequired := strconv.Atoi(text[k:end])
+		if errCompleted == nil && errRequired == nil && required > 0 && completed >= 0 && completed <= required {
+			return completed, required, true
+		}
+		if end > i {
+			i = end - 1
+		}
+	}
+	return 0, 0, false
 }
 
 func stageRowsLimit(lines []string, viewportWidth, viewportHeight int) int {

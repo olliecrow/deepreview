@@ -13,34 +13,53 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestRenderProgressBarBounds(t *testing.T) {
-	bar := renderProgressBar(5, 10, 10)
-	if bar != "[=====-----]" {
-		t.Fatalf("unexpected bar: %s", bar)
+func TestTUIFocusTimelineWindowKeepsCurrentRound(t *testing.T) {
+	r1 := 1
+	snapshot := ProgressSnapshot{
+		MaxRounds: 5,
+		Stages: []StageSnapshot{
+			{Name: "prepare", Status: "done"},
+			{RoundNumber: &r1, Name: "independent review stage", Status: "running", Message: "waiting on reviewer workers: 1/4 complete, 3 pending, 0 restarts"},
+		},
 	}
-	bar = renderProgressBar(15, 10, 10)
-	if bar != "[==========]" {
-		t.Fatalf("expected capped full bar, got: %s", bar)
+	rows, ok := plannedTimelineRows(snapshot)
+	if !ok {
+		t.Fatal("expected planned rows")
 	}
-	bar = renderProgressBar(0, 0, 5)
-	if bar != "[-----]" {
-		t.Fatalf("expected empty bar when total=0, got: %s", bar)
+	window, hidden := focusTimelineWindow(rows, 4)
+	if hidden != 0 {
+		t.Fatalf("expected the current round to stay at the start, hidden=%d", hidden)
+	}
+	if len(window) != 4 {
+		t.Fatalf("expected 4 visible rows, got %d", len(window))
+	}
+	if window[1].Name != "independent review stage" || window[1].Status != "running" || window[1].RoundNumber == nil || *window[1].RoundNumber != 1 {
+		t.Fatalf("expected running round 1 in the window, got %+v", window[1])
+	}
+	for _, row := range window {
+		if row.RoundNumber != nil && *row.RoundNumber == 5 {
+			t.Fatalf("round 5 pending work hid the active round: %+v", window)
+		}
+		if row.Name == "delivery" {
+			t.Fatalf("future delivery hid the active round: %+v", window)
+		}
 	}
 }
 
-func TestCompactWindowTailsWithinBounds(t *testing.T) {
+func TestTUIFocusTimelineWindowPinsStartedDelivery(t *testing.T) {
+	r1 := 1
 	rows := []StageSnapshot{
-		{Name: "a"},
-		{Name: "b"},
-		{Name: "c"},
-		{Name: "d"},
+		{Name: "prepare", Status: "done"},
+		{RoundNumber: &r1, Name: "independent review stage", Status: "running"},
+		{RoundNumber: &r1, Name: "execute stage", Status: "pending"},
+		{Name: "delivery", Status: "failed"},
 	}
-	window, hidden := compactWindow(rows, 2)
-	if len(window) != 2 || window[0].Name != "c" || window[1].Name != "d" {
-		t.Fatalf("unexpected tail window: %+v", window)
+	window, _ := focusTimelineWindow(rows, 2)
+	if len(window) != 2 {
+		t.Fatalf("expected 2 rows, got %+v", window)
 	}
-	if hidden != 2 {
-		t.Fatalf("expected hidden=2, got %d", hidden)
+	if window[0].Status != "running" || window[1].Name != "delivery" {
+		t.Fatalf("expected the active row plus started delivery, got %+v", window)
 	}
 }
 
@@ -241,6 +260,14 @@ func TestFitUsesDisplayWidth(t *testing.T) {
 	if lipgloss.Width(got) > 5 {
 		t.Fatalf("fit exceeded width: got=%q width=%d", got, lipgloss.Width(got))
 	}
+	combined := fit("e\u0301界", 2)
+	if ansi.StringWidth(combined) > 2 {
+		t.Fatalf("combining and wide text exceeded width: %q", combined)
+	}
+	colored := fit("\x1b[31mabcdef\x1b[0m", 4)
+	if ansi.StringWidth(colored) > 4 {
+		t.Fatalf("control sequence exceeded display width: %q", colored)
+	}
 }
 
 func TestTUIViewNoisyStageTextStillFitsViewport(t *testing.T) {
@@ -261,6 +288,42 @@ func TestTUIViewNoisyStageTextStillFitsViewport(t *testing.T) {
 		if got := lipgloss.Width(line); got > model.width {
 			t.Fatalf("line %d width exceeds viewport: got=%d want<=%d line=%q", i+1, got, model.width, line)
 		}
+	}
+}
+
+func TestTUIViewShowsCurrentRoundOnSmallAndLargeViewports(t *testing.T) {
+	state := NewSharedProgressState()
+	reporter := NewTUIProgressReporter(state)
+	reporter.SetMaxRounds(5)
+	reporter.RunStarted("run-123", "owner/repo", "feature/resize", "pr", "/tmp/deepreview/runs/run-123")
+	r1 := 1
+	reporter.StageStarted("prepare", nil, "cloning managed repository")
+	reporter.StageFinished("prepare", nil, true, "ready")
+	reporter.StageStarted("independent review stage", &r1, "waiting on reviewer workers: 1/4 complete, 3 pending, 0 restarts")
+	model := newTUIModel(state, make(chan error), nil, 0, 0)
+
+	for _, size := range [][2]int{{120, 40}, {80, 16}, {52, 10}, {40, 24}} {
+		updated, cmd := model.Update(tea.WindowSizeMsg{Width: size[0], Height: size[1]})
+		if cmd == nil {
+			t.Fatalf("expected clear-screen command on resize to %dx%d", size[0], size[1])
+		}
+		model = updated.(tuiModel)
+		view := ansi.Strip(model.View())
+		if !strings.Contains(view, "round 1/5") && !strings.Contains(view, "round 1 /") {
+			t.Fatalf("%dx%d hid current round 1:\n%s", size[0], size[1], view)
+		}
+		if !strings.Contains(view, "independent review stage") {
+			t.Fatalf("%dx%d hid the active stage:\n%s", size[0], size[1], view)
+		}
+	}
+
+	narrow, _ := model.Update(tea.WindowSizeMsg{Width: 1, Height: 20})
+	if narrow.(tuiModel).View() != "" {
+		t.Fatalf("expected an empty view for a 1-column terminal")
+	}
+	tight, _ := model.Update(tea.WindowSizeMsg{Width: 12, Height: 8})
+	if !strings.Contains(ansi.Strip(tight.(tuiModel).View()), "round 1/5") {
+		t.Fatalf("12-column view hid round 1/5:\n%s", tight.(tuiModel).View())
 	}
 }
 
@@ -372,8 +435,11 @@ func TestTUIViewUsesSingleContextPanelLayout(t *testing.T) {
 	if !strings.Contains(view, "STAGE TIMELINE") {
 		t.Fatalf("expected stage timeline panel")
 	}
-	if !strings.Contains(view, "3/4 (75%)") {
-		t.Fatalf("expected inline progress summary in header")
+	if !strings.Contains(view, "reviewers 2/4") {
+		t.Fatalf("expected reviewer progress in header, got:\n%s", view)
+	}
+	if strings.Contains(view, "(75%)") || strings.Contains(view, "100%") {
+		t.Fatalf("percent complete is conditional and must stay hidden, got:\n%s", view)
 	}
 	if !strings.Contains(view, "ctrl+c to cancel") {
 		t.Fatalf("expected ctrl+c cancellation hint in header")
@@ -436,6 +502,9 @@ func TestTUICtrlCRequestsCancelWithoutImmediateQuit(t *testing.T) {
 	}
 	if !next.cancelRequested {
 		t.Fatalf("expected cancelRequested to remain true")
+	}
+	if !strings.Contains(next.View(), "CANCELING") {
+		t.Fatalf("expected CANCELING immediately after ctrl+c, got:\n%s", next.View())
 	}
 }
 
