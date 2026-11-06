@@ -2435,8 +2435,9 @@ func (o *Orchestrator) secretHygieneScanDiff(baseRef, headRef string) error {
 		if err != nil {
 			return privacyScanReadFailure(rel, "read added lines")
 		}
-		if len(addedLines) > 0 {
-			if err := privacyScanText(strings.Join(addedLines, "\n"), rel); err != nil {
+		addedText := strings.Join(addedLines, "\n")
+		if len(addedLines) > 0 && !strings.ContainsRune(addedText, 0) {
+			if err := privacyScanText(addedText, rel); err != nil {
 				return err
 			}
 			continue
@@ -2448,14 +2449,8 @@ func (o *Orchestrator) secretHygieneScanDiff(baseRef, headRef string) error {
 		if status == "D" {
 			continue
 		}
-		// Binary diffs do not expose textual added lines, so scan the candidate-side bytes directly.
-		isBinaryDiff, err := DiffIsBinaryBetweenRefs(o.managedRepoPath, o.config.GitBin, baseRef, headRef, rel)
-		if err != nil {
-			return privacyScanReadFailure(rel, "inspect binary diff status")
-		}
-		if !isBinaryDiff {
-			continue
-		}
+		// NUL-containing lines and changes without added lines use raw bytes.
+		// Compare with the base so preexisting binary fixtures remain permitted.
 		headContent, err := FileContentAtRef(o.managedRepoPath, o.config.GitBin, headRef, rel)
 		if err != nil {
 			return privacyScanReadFailure(rel, "read candidate file contents")

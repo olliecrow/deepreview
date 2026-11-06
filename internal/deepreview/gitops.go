@@ -879,14 +879,25 @@ func CommitAllChanges(repoPath, gitBin, message string, identity CommitIdentity)
 	return err
 }
 
+// publicationDiff fixes the output format and inspects raw blobs regardless of
+// attributes, external drivers, or user diff configuration.
+func publicationDiff(repoPath, gitBin string, args ...string) (string, error) {
+	command := []string{
+		"-c", "core.quotePath=false",
+		"diff", "--text", "--no-textconv", "--no-ext-diff",
+		"--no-color", "--no-renames", "--no-relative", "--word-diff=none",
+		"--ignore-submodules=none", "--output-indicator-new=+",
+		"--output-indicator-old=-", "--output-indicator-context= ",
+	}
+	return gitRawStdout(repoPath, gitBin, append(command, args...)...)
+}
+
 func ListChangedFiles(repoPath, gitBin, baseRef, headRef string) ([]string, error) {
-	out, err := gitRawStdout(
+	out, err := publicationDiff(
 		repoPath,
 		gitBin,
-		"diff",
 		"-z",
 		"--name-status",
-		"--find-renames=0",
 		baseRef+".."+headRef,
 	)
 	if err != nil {
@@ -932,13 +943,10 @@ func parseNulDiffNameStatus(raw string) ([]string, error) {
 }
 
 func ChangedFileStatusBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (string, error) {
-	out, err := Git(
+	out, err := publicationDiff(
 		repoPath,
 		gitBin,
-		true,
-		"diff",
 		"--name-status",
-		"--find-renames=0",
 		baseRef+".."+headRef,
 		"--",
 		relPath,
@@ -954,31 +962,6 @@ func ChangedFileStatusBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath st
 		return fields[0], nil
 	}
 	return "", nil
-}
-
-func DiffIsBinaryBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (bool, error) {
-	out, err := Git(
-		repoPath,
-		gitBin,
-		true,
-		"diff",
-		"--numstat",
-		"--find-renames=0",
-		baseRef+".."+headRef,
-		"--",
-		relPath,
-	)
-	if err != nil {
-		return false, err
-	}
-	for _, line := range strings.Split(out, "\n") {
-		fields := strings.Fields(strings.TrimSpace(line))
-		if len(fields) < 3 {
-			continue
-		}
-		return fields[0] == "-" && fields[1] == "-", nil
-	}
-	return false, nil
 }
 
 func FileContentAtRef(repoPath, gitBin, ref, relPath string) ([]byte, error) {
@@ -999,13 +982,9 @@ func FileContentAtRef(repoPath, gitBin, ref, relPath string) ([]byte, error) {
 }
 
 func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) ([]string, error) {
-	out, err := Git(
+	out, err := publicationDiff(
 		repoPath,
 		gitBin,
-		true,
-		"diff",
-		"--no-color",
-		"--no-ext-diff",
 		"--unified=0",
 		baseRef+".."+headRef,
 		"--",
@@ -1016,12 +995,15 @@ func AddedLinesBetweenRefs(repoPath, gitBin, baseRef, headRef, relPath string) (
 	}
 
 	var added []string
+	inHunk := false
 	for _, line := range strings.Split(out, "\n") {
 		switch {
-		case strings.HasPrefix(line, "+++ "):
-			continue
-		case strings.HasPrefix(line, "+"):
-			added = append(added, strings.TrimPrefix(line, "+"))
+		case strings.HasPrefix(line, "diff --git "):
+			inHunk = false
+		case strings.HasPrefix(line, "@@ "):
+			inHunk = true
+		case inHunk && strings.HasPrefix(line, "+"):
+			added = append(added, line[1:])
 		}
 	}
 	return added, nil

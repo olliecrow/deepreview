@@ -899,3 +899,74 @@ func TestDeliveryCommitIdentityIgnoresMailmap(t *testing.T) {
 		t.Fatalf("commit identity leaked into the error: %v", err)
 	}
 }
+
+func TestSecretHygieneScanPlusPrefix(t *testing.T) {
+	for _, suffix := range []string{"", "benign\n"} {
+		t.Run(fmt.Sprint(len(suffix)), func(t *testing.T) {
+			o, repo, base := newPrivacyScanOrchestrator(t)
+			payload := strings.Join([]string{"", "home", "privatefixture", "notes"}, "/")
+			if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte("++ "+payload+"\n"+suffix), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, repo, "add", "notes.txt")
+			runGitTest(t, repo, "commit", "-m", "add notes")
+			if err := o.secretHygieneScanBetween(base, "HEAD"); err == nil {
+				t.Fatal("scan accepted sensitive added content")
+			} else if strings.Contains(err.Error(), payload) {
+				t.Fatal("scan disclosed sensitive content")
+			}
+		})
+	}
+}
+
+func TestSecretHygieneScanRawDiff(t *testing.T) {
+	for _, mode := range []string{"textconv", "external", "binary", "indicators", "relative"} {
+		t.Run(mode, func(t *testing.T) {
+			o, repo, base := newPrivacyScanOrchestrator(t)
+			payload := strings.Join([]string{"", "home", "privatefixture", "notes"}, "/")
+			switch mode {
+			case "textconv", "external":
+				script := filepath.Join(t.TempDir(), "convert")
+				if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'harmless\\n'\n"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				key := "diff.strip.textconv"
+				if mode == "external" {
+					key = "diff.strip.command"
+				}
+				runGitTest(t, repo, "config", key, script)
+				if err := os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("notes.txt diff=strip\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			case "binary":
+				if err := os.WriteFile(filepath.Join(repo, ".gitattributes"), []byte("notes.txt -diff\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+				payload += "\x00"
+			case "indicators":
+				runGitTest(t, repo, "config", "diff.outputIndicatorNew", "!")
+				runGitTest(t, repo, "config", "color.ui", "always")
+			case "relative":
+				runGitTest(t, repo, "config", "diff.relative", "true")
+			}
+			if err := os.WriteFile(filepath.Join(repo, "notes.txt"), []byte(payload+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			runGitTest(t, repo, "add", ".")
+			runGitTest(t, repo, "commit", "-m", "add notes")
+			// Inspect each diff consumer as well as the publication gate.
+			lines, err := AddedLinesBetweenRefs(repo, "git", base, "HEAD", "notes.txt")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !strings.Contains(strings.Join(lines, "\n"), payload) {
+				t.Error("added lines omitted raw blob content")
+			}
+			if err := o.secretHygieneScanBetween(base, "HEAD"); err == nil {
+				t.Fatal("scan accepted sensitive raw content")
+			} else if strings.Contains(err.Error(), strings.TrimSuffix(payload, "\x00")) {
+				t.Fatal("scan disclosed sensitive content")
+			}
+		})
+	}
+}
