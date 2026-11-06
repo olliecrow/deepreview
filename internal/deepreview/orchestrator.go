@@ -2577,7 +2577,10 @@ func (o *Orchestrator) deliveryCommitIdentityScanBetween(baseRef, headRef string
 		o.config.GitBin,
 		"log",
 		"-z",
-		"--format=%aN%n%aE%n%cN%n%cE",
+		"--no-mailmap",
+		// Lowercase placeholders are the raw identities stored in the
+		// commits. The uppercase forms apply .mailmap, which can hide them.
+		"--format=%an%n%ae%n%cn%n%ce",
 		baseRef+".."+headRef,
 	)
 	if err != nil {

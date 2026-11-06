@@ -867,3 +867,35 @@ func buildSensitiveToken(prefix string) string {
 func testSecretAssignmentValue() string {
 	return strings.Repeat("a", 16)
 }
+
+func TestDeliveryCommitIdentityIgnoresMailmap(t *testing.T) {
+	o, repoPath, sourceSHA := newPrivacyScanOrchestrator(t)
+	repoParent := filepath.Dir(repoPath)
+	email := sensitiveEmailFixture()
+
+	runGitTest(t, repoParent, "-C", repoPath, "checkout", "-B", "candidate", sourceSHA)
+	runGitTest(
+		t,
+		repoParent,
+		"-C", repoPath,
+		"-c", "user.name=Test User",
+		"-c", "user.email="+email,
+		"commit", "--allow-empty", "-m", "raw identity",
+	)
+	mailmap := "Review User <review@example.com> Test User <" + email + ">\n"
+	if err := os.WriteFile(filepath.Join(repoPath, ".mailmap"), []byte(mailmap), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mapped := runGitTest(t, repoParent, "-C", repoPath, "log", "-1", "--format=%aE %cE")
+	if strings.Contains(mapped, email) {
+		t.Fatal("fixture mailmap did not map the identity")
+	}
+
+	err := o.deliveryCommitIdentityScan("candidate")
+	if err == nil || !strings.Contains(err.Error(), "not an approved public identity") {
+		t.Fatalf("expected the raw identity to fail despite .mailmap, got %v", err)
+	}
+	if strings.Contains(err.Error(), email) {
+		t.Fatalf("commit identity leaked into the error: %v", err)
+	}
+}
